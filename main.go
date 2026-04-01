@@ -37,7 +37,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"os"
 	"os/signal"
 	"syscall"
 	"time"
@@ -49,10 +48,10 @@ import (
 	"k8s.io/client-go/dynamic"
 	"k8s.io/client-go/dynamic/dynamicinformer"
 	"k8s.io/client-go/kubernetes"
-	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/cache"
-	"k8s.io/client-go/tools/clientcmd"
 	"k8s.io/klog/v2"
+
+	"github.com/cocoonstack/cocoon-operator/pkg/k8sutil"
 )
 
 // hibGVR is the GroupVersionResource for Hibernation CRDs.
@@ -78,7 +77,7 @@ type controller struct {
 func main() {
 	klog.InitFlags(nil)
 
-	config, err := buildConfig()
+	config, err := k8sutil.LoadConfig()
 	if err != nil {
 		klog.Fatalf("k8s config: %v", err)
 	}
@@ -329,18 +328,6 @@ func (c *controller) patchStatus(ctx context.Context, gvr schema.GroupVersionRes
 }
 
 // ---------- Helpers ----------
-
-func buildConfig() (*rest.Config, error) {
-	if kubeconfig := os.Getenv("KUBECONFIG"); kubeconfig != "" {
-		return clientcmd.BuildConfigFromFlags("", kubeconfig)
-	}
-	if home := os.Getenv("HOME"); home != "" {
-		if _, err := os.Stat(home + "/.kube/config"); err == nil {
-			return clientcmd.BuildConfigFromFlags("", home+"/.kube/config")
-		}
-	}
-	return rest.InClusterConfig()
-}
 
 // hasSnapshot checks if the cocoon-vm-snapshots ConfigMap has an entry for the VM name.
 func (c *controller) hasSnapshot(ctx context.Context, ns, vmName string) bool {
