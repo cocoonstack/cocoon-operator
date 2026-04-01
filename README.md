@@ -1,15 +1,24 @@
 # cocoon-operator
 
-Kubernetes operator that manages VM-backed pod lifecycles through two CRDs:
+Kubernetes operator that manages VM-backed pod lifecycles through two CRDs: **Hibernation** (suspend/wake a single VM pod) and **CocoonSet** (manage a group of related VM pods).
 
-- **Hibernation** -- suspend and wake a single VM-backed pod without deleting the pod object
-- **CocoonSet** -- manage a group of related VM pods (main agent, sub-agents forked from it, and optional toolbox VMs)
+## Overview
 
-## Why
+- **Hibernation controller** -- watches `Hibernation` CRDs and annotates pods with `cocoon.cis/hibernate=true` to trigger vk-cocoon snapshot/restore
+- **CocoonSet controller** -- watches `CocoonSet` CRDs, creates/deletes agent and toolbox pods, manages suspend/unsuspend, and reports aggregate status
+- **Pod watcher** -- detects pod changes owned by CocoonSets and triggers reconciliation
 
-Kubernetes controllers assume pods are replaceable. VM-backed workloads are not.
+Kubernetes controllers assume pods are replaceable. VM-backed workloads are not. This operator keeps stateful VM workflows inside native Kubernetes APIs: scale out from a known main VM, keep stable slot identities, hibernate without letting ReplicaSets recreate the pod, and expose aggregate state through CRD status.
 
-This operator keeps stateful VM workflows inside native Kubernetes APIs: scale out from a known main VM, keep stable slot identities, hibernate without letting ReplicaSets recreate the pod, and expose aggregate state through CRD status.
+A 30-second informer resync and 60-second periodic reconciliation catch status transitions that informer events may miss.
+
+## Architecture
+
+The operator runs a single binary with three informer loops:
+
+1. **Hibernation controller** -- annotates pods for vk-cocoon snapshot/restore
+2. **CocoonSet controller** -- manages agent and toolbox pod groups
+3. **Pod watcher** -- triggers reconciliation on pod changes
 
 ## Installation
 
@@ -19,7 +28,7 @@ This operator keeps stateful VM workflows inside native Kubernetes APIs: scale o
 - `kubectl` configured to talk to the cluster
 - [vk-cocoon](https://github.com/cocoonstack/vk-cocoon) virtual kubelet provider running on at least one node
 
-### Steps
+### Deploy
 
 1. Install the CRDs:
 
@@ -40,9 +49,11 @@ kubectl apply -f deploy/deploy.yaml
 kubectl get pods -l app=cocoon-operator
 ```
 
-### Building from source
+### Build from source
 
 ```bash
+git clone https://github.com/cocoonstack/cocoon-operator.git
+cd cocoon-operator
 make build          # produces ./cocoon-operator
 ```
 
@@ -51,6 +62,8 @@ Or with Docker:
 ```bash
 docker build -t cocoon-operator .
 ```
+
+## Usage
 
 ### Hibernate a pod
 
@@ -86,7 +99,15 @@ spec:
       mode: static
 ```
 
-## Build
+### Manifests
+
+| File | Description |
+|---|---|
+| `deploy/crd.yaml` | Hibernation CRD |
+| `deploy/cocoonset-crd.yaml` | CocoonSet CRD |
+| `deploy/deploy.yaml` | Operator Deployment + RBAC |
+
+## Development
 
 ```bash
 make build          # build binary
@@ -96,37 +117,15 @@ make fmt            # format code
 make help           # show all targets
 ```
 
-Or directly:
+## Related Projects
 
-```bash
-CGO_ENABLED=0 go build -o cocoon-operator .
-```
-
-## Architecture
-
-The operator runs a single binary with three informer loops:
-
-1. **Hibernation controller** -- watches `Hibernation` CRDs and annotates pods with `cocoon.cis/hibernate=true` to trigger vk-cocoon snapshot/restore
-2. **CocoonSet controller** -- watches `CocoonSet` CRDs, creates/deletes agent and toolbox pods, manages suspend/unsuspend, and reports aggregate status
-3. **Pod watcher** -- detects pod changes owned by CocoonSets and triggers reconciliation
-
-A 30-second informer resync and 60-second periodic reconciliation catch status transitions that informer events may miss.
-
-## Manifests
-
-| File | Description |
-|------|-------------|
-| `deploy/crd.yaml` | Hibernation CRD |
-| `deploy/cocoonset-crd.yaml` | CocoonSet CRD |
-| `deploy/deploy.yaml` | Operator Deployment + RBAC |
-
-## Related components
-
-- **vk-cocoon** -- virtual kubelet provider that performs the actual VM lifecycle
-- **epoch** -- snapshot storage backend for hibernated VMs
-- **glance** -- web UI that surfaces CocoonSet and Hibernation state
-- **cocoon-webhook** -- optional admission webhook for sticky scheduling
+| Project | Role |
+|---|---|
+| [vk-cocoon](https://github.com/cocoonstack/vk-cocoon) | Virtual kubelet provider that performs the actual VM lifecycle |
+| [epoch](https://github.com/cocoonstack/epoch) | Snapshot storage backend for hibernated VMs |
+| [glance](https://github.com/cocoonstack/glance) | Web UI that surfaces CocoonSet and Hibernation state |
+| [cocoon-webhook](https://github.com/cocoonstack/cocoon-webhook) | Admission webhook for sticky scheduling |
 
 ## License
 
-MIT
+[MIT](LICENSE)
