@@ -601,4 +601,3 @@ func lookupToolboxRuntimeHints(cs *unstructured.Unstructured, tbName string) map
 	}
 	return nil
 }
-
