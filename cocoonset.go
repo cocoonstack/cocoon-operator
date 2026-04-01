@@ -9,7 +9,6 @@ import (
 	"strconv"
 
 	corev1 "k8s.io/api/core/v1"
-	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
@@ -603,68 +602,3 @@ func lookupToolboxRuntimeHints(cs *unstructured.Unstructured, tbName string) map
 	return nil
 }
 
-func getStringValue(m map[string]any, key string) string {
-	if m == nil {
-		return ""
-	}
-	if v, ok := m[key].(string); ok {
-		return v
-	}
-	return ""
-}
-
-func getInt64Value(m map[string]any, key string) (int64, bool) {
-	if m == nil {
-		return 0, false
-	}
-	switch v := m[key].(type) {
-	case int64:
-		return v, true
-	case int:
-		return int64(v), true
-	case float64:
-		return int64(v), true
-	default:
-		return 0, false
-	}
-}
-
-// stringDefault extracts a string from an unstructured map, returning fallback if empty.
-func stringDefault(m map[string]any, key, fallback string) string {
-	if v, _ := m[key].(string); v != "" {
-		return v
-	}
-	return fallback
-}
-
-// toInt64 converts an unstructured numeric value to int64.
-func toInt64(v any) int64 {
-	switch n := v.(type) {
-	case int64:
-		return n
-	case float64:
-		return int64(n)
-	default:
-		return 0
-	}
-}
-
-// getSlice extracts a []any from a nested map.
-func getSlice(obj map[string]any, key string) []any {
-	if v, ok := obj[key]; ok {
-		if s, ok := v.([]any); ok {
-			return s
-		}
-	}
-	return nil
-}
-
-// mustParseQuantity parses a resource quantity string, returning a zero quantity on error.
-func mustParseQuantity(s string) resource.Quantity {
-	q, err := resource.ParseQuantity(s)
-	if err != nil {
-		klog.Warningf("invalid quantity %q: %v", s, err)
-		return resource.Quantity{}
-	}
-	return q
-}

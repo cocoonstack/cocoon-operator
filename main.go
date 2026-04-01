@@ -345,15 +345,6 @@ func buildConfig() (*rest.Config, error) {
 	return rest.InClusterConfig()
 }
 
-func getMap(obj map[string]any, key string) map[string]any {
-	if v, ok := obj[key]; ok {
-		if m, ok := v.(map[string]any); ok {
-			return m
-		}
-	}
-	return map[string]any{}
-}
-
 // hasSnapshot checks if the cocoon-vm-snapshots ConfigMap has an entry for the VM name.
 func (c *controller) hasSnapshot(ctx context.Context, ns, vmName string) bool {
 	cm, err := c.clientset.CoreV1().ConfigMaps(ns).Get(ctx, "cocoon-vm-snapshots", metav1.GetOptions{})
