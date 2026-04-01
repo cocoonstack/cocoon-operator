@@ -37,13 +37,11 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"os"
 	"os/signal"
 	"syscall"
 	"time"
 
 	"github.com/projecteru2/core/log"
-	coretypes "github.com/projecteru2/core/types"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
@@ -53,8 +51,9 @@ import (
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/tools/cache"
 
-	"github.com/cocoonstack/cocoon-operator/pkg/k8sutil"
-	"github.com/cocoonstack/cocoon-operator/pkg/version"
+	"github.com/cocoonstack/cocoon-operator/k8sutil"
+	"github.com/cocoonstack/cocoon-operator/logutil"
+	"github.com/cocoonstack/cocoon-operator/version"
 )
 
 // hibGVR is the GroupVersionResource for Hibernation CRDs.
@@ -86,13 +85,7 @@ type controller struct {
 func main() {
 	ctx := context.Background()
 
-	logLevel := os.Getenv("LOG_LEVEL")
-	if logLevel == "" {
-		logLevel = "info"
-	}
-	if err := log.SetupLog(ctx, &coretypes.ServerLogConfig{Level: logLevel}, ""); err != nil {
-		log.WithFunc("main").Fatalf(ctx, err, "setup log: %v", err)
-	}
+	logutil.Setup(ctx, "LOG_LEVEL")
 
 	logger := log.WithFunc("main")
 
