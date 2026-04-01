@@ -13,7 +13,7 @@ func TestBuildToolboxPodIgnoresStaticHintsForManagedWindows(t *testing.T) {
 	cs.SetName("demo")
 	cs.SetNamespace("dev")
 
-	tb := map[string]interface{}{
+	tb := map[string]any{
 		"name":       "windows",
 		"os":         "windows",
 		"mode":       "run",
@@ -46,7 +46,7 @@ func TestBuildToolboxPodKeepsStaticHintsForStaticMode(t *testing.T) {
 	cs.SetName("demo")
 	cs.SetNamespace("dev")
 
-	tb := map[string]interface{}{
+	tb := map[string]any{
 		"name":       "windows",
 		"os":         "windows",
 		"mode":       "static",
@@ -69,10 +69,10 @@ func TestBuildToolboxPodKeepsStaticHintsForStaticMode(t *testing.T) {
 }
 
 func TestBuildToolboxPodPrefersRuntimeStatusHintsForStaticMode(t *testing.T) {
-	cs := &unstructured.Unstructured{Object: map[string]interface{}{
-		"status": map[string]interface{}{
-			"toolboxes": []interface{}{
-				map[string]interface{}{
+	cs := &unstructured.Unstructured{Object: map[string]any{
+		"status": map[string]any{
+			"toolboxes": []any{
+				map[string]any{
 					"name":    "windows",
 					"ip":      "10.88.100.85",
 					"vmID":    "qemu-windows",
@@ -84,7 +84,7 @@ func TestBuildToolboxPodPrefersRuntimeStatusHintsForStaticMode(t *testing.T) {
 	cs.SetName("demo")
 	cs.SetNamespace("dev")
 
-	tb := map[string]interface{}{
+	tb := map[string]any{
 		"name":       "windows",
 		"os":         "windows",
 		"mode":       "static",
@@ -164,11 +164,11 @@ func TestBuildCocoonSetStatusIncludesToolboxVMID(t *testing.T) {
 	}
 
 	status := buildCocoonSetStatus("Running", kubePods, "demo", 1)
-	toolboxes, ok := status["toolboxes"].([]interface{})
+	toolboxes, ok := status["toolboxes"].([]any)
 	if !ok || len(toolboxes) != 1 {
 		t.Fatalf("unexpected toolboxes status: %#v", status["toolboxes"])
 	}
-	tb, ok := toolboxes[0].(map[string]interface{})
+	tb, ok := toolboxes[0].(map[string]any)
 	if !ok {
 		t.Fatalf("unexpected toolbox entry: %#v", toolboxes[0])
 	}
@@ -179,10 +179,10 @@ func TestBuildCocoonSetStatusIncludesToolboxVMID(t *testing.T) {
 
 func TestBuildAgentPodUsesConfiguredNodeName(t *testing.T) {
 	cs := &unstructured.Unstructured{
-		Object: map[string]interface{}{
-			"spec": map[string]interface{}{
+		Object: map[string]any{
+			"spec": map[string]any{
 				"nodeName": "cocoon-pool-233",
-				"agent": map[string]interface{}{
+				"agent": map[string]any{
 					"image": "https://registry.example.com/demo-linux-base",
 				},
 			},
@@ -199,8 +199,8 @@ func TestBuildAgentPodUsesConfiguredNodeName(t *testing.T) {
 
 func TestBuildToolboxPodUsesConfiguredNodeName(t *testing.T) {
 	cs := &unstructured.Unstructured{
-		Object: map[string]interface{}{
-			"spec": map[string]interface{}{
+		Object: map[string]any{
+			"spec": map[string]any{
 				"nodeName": "cocoon-pool-233",
 			},
 		},
@@ -208,7 +208,7 @@ func TestBuildToolboxPodUsesConfiguredNodeName(t *testing.T) {
 	cs.SetName("demo")
 	cs.SetNamespace("dev")
 
-	tb := map[string]interface{}{
+	tb := map[string]any{
 		"name":  "windows",
 		"os":    "windows",
 		"mode":  "run",

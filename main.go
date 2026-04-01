@@ -1,6 +1,6 @@
-// cocoon-operator — Hibernation controller for Cocoon VM pods.
+// cocoon-operator manages Hibernation and CocoonSet CRDs for Cocoon VM pods.
 //
-// Watches Hibernation CRDs and drives pod hibernate/wake by annotating pods
+// It watches Hibernation CRDs and drives pod hibernate/wake by annotating pods
 // with cocoon.cis/hibernate=true. vk-cocoon detects the annotation and
 // handles the actual VM snapshot/restore lifecycle.
 //
@@ -13,8 +13,9 @@
 //
 // Usage:
 //
-//	# Install CRD
+//	# Install CRDs
 //	kubectl apply -f deploy/crd.yaml
+//	kubectl apply -f deploy/cocoonset-crd.yaml
 //
 //	# Hibernate a pod
 //	kubectl apply -f - <<EOF
@@ -54,6 +55,7 @@ import (
 	"k8s.io/klog/v2"
 )
 
+// hibGVR is the GroupVersionResource for Hibernation CRDs.
 var hibGVR = schema.GroupVersionResource{
 	Group:    "cocoon.cis",
 	Version:  "v1alpha1",
@@ -64,6 +66,12 @@ const (
 	annHibernate = "cocoon.cis/hibernate"
 	annVMName    = "cocoon.cis/vm-name"
 )
+
+// controller holds the Kubernetes clients used by all reconcile loops.
+type controller struct {
+	clientset *kubernetes.Clientset
+	dynClient dynamic.Interface
+}
 
 func main() {
 	klog.InitFlags(nil)
@@ -90,27 +98,26 @@ func main() {
 		dynClient: dynClient,
 	}
 
-	// Watch Hibernation CRDs via dynamic informer.
 	factory := dynamicinformer.NewDynamicSharedInformerFactory(dynClient, 30*time.Second)
+
+	// Hibernation informer.
 	hibInformer := factory.ForResource(hibGVR).Informer()
-
 	hibInformer.AddEventHandler(cache.ResourceEventHandlerFuncs{
-		AddFunc:    func(obj interface{}) { ctrl.reconcile(ctx, obj) },
-		UpdateFunc: func(_, obj interface{}) { ctrl.reconcile(ctx, obj) },
+		AddFunc:    func(obj any) { ctrl.reconcile(ctx, obj) },
+		UpdateFunc: func(_, obj any) { ctrl.reconcile(ctx, obj) },
 	})
 
-	// Watch CocoonSet CRDs via dynamic informer.
+	// CocoonSet informer.
 	csInformer := factory.ForResource(csGVR).Informer()
-
 	csInformer.AddEventHandler(cache.ResourceEventHandlerFuncs{
-		AddFunc: func(obj interface{}) {
+		AddFunc: func(obj any) {
 			u, ok := obj.(*unstructured.Unstructured)
 			if !ok {
 				return
 			}
 			ctrl.reconcileCocoonSet(ctx, u.GetNamespace(), u.GetName())
 		},
-		UpdateFunc: func(_, obj interface{}) {
+		UpdateFunc: func(_, obj any) {
 			u, ok := obj.(*unstructured.Unstructured)
 			if !ok {
 				return
@@ -119,18 +126,13 @@ func main() {
 		},
 	})
 
-	// Watch Pods — if a pod's ownerRef points to a CocoonSet, reconcile that CocoonSet.
+	// Pod informer — if a pod's ownerRef points to a CocoonSet, reconcile it.
 	podInformer := factory.ForResource(schema.GroupVersionResource{
 		Group: "", Version: "v1", Resource: "pods",
 	}).Informer()
-
 	podInformer.AddEventHandler(cache.ResourceEventHandlerFuncs{
-		UpdateFunc: func(_, obj interface{}) {
-			ctrl.handlePodEvent(ctx, obj)
-		},
-		DeleteFunc: func(obj interface{}) {
-			ctrl.handlePodEvent(ctx, obj)
-		},
+		UpdateFunc: func(_, obj any) { ctrl.handlePodEvent(ctx, obj) },
+		DeleteFunc: func(obj any) { ctrl.handlePodEvent(ctx, obj) },
 	})
 
 	// Periodic re-sync to detect vk-cocoon status changes on pods.
@@ -156,14 +158,9 @@ func main() {
 	klog.Info("cocoon-operator shutting down")
 }
 
-// ---------- Controller ----------
+// ---------- Hibernation reconcile ----------
 
-type controller struct {
-	clientset *kubernetes.Clientset
-	dynClient dynamic.Interface
-}
-
-func (c *controller) reconcile(ctx context.Context, obj interface{}) {
+func (c *controller) reconcile(ctx context.Context, obj any) {
 	u, ok := obj.(*unstructured.Unstructured)
 	if !ok {
 		return
@@ -195,7 +192,7 @@ func (c *controller) reconcile(ctx context.Context, obj interface{}) {
 
 func (c *controller) reconcileHibernate(ctx context.Context, ns, hibName, podName, phase string) {
 	if phase == "Hibernated" {
-		return // done
+		return
 	}
 
 	pod, err := c.clientset.CoreV1().Pods(ns).Get(ctx, podName, metav1.GetOptions{})
@@ -206,16 +203,13 @@ func (c *controller) reconcileHibernate(ctx context.Context, ns, hibName, podNam
 
 	vmName := pod.Annotations[annVMName]
 
-	// Check if pod is already hibernated. We check the cocoon-vm-snapshots
-	// ConfigMap — if vk-cocoon saved a snapshot for this VM name, hibernation
-	// is complete. (Pod container status may not reflect hibernation due to VK
-	// framework limitations.)
+	// If vk-cocoon already saved a snapshot for this VM, hibernation is complete.
 	if vmName != "" && c.hasSnapshot(ctx, ns, vmName) {
 		c.updateStatus(ctx, ns, hibName, "Hibernated", "VM suspended to epoch", vmName, "")
 		return
 	}
 
-	// Pod is still running — annotate to trigger vk-cocoon hibernate.
+	// Annotate pod to trigger vk-cocoon hibernate.
 	if pod.Annotations[annHibernate] != "true" {
 		patch := fmt.Sprintf(`{"metadata":{"annotations":{"%s":"true"}}}`, annHibernate)
 		if _, err := c.clientset.CoreV1().Pods(ns).Patch(ctx, podName,
@@ -234,7 +228,7 @@ func (c *controller) reconcileHibernate(ctx context.Context, ns, hibName, podNam
 
 func (c *controller) reconcileWake(ctx context.Context, ns, hibName, podName, phase string) {
 	if phase == "Active" {
-		return // done
+		return
 	}
 
 	pod, err := c.clientset.CoreV1().Pods(ns).Get(ctx, podName, metav1.GetOptions{})
@@ -245,8 +239,7 @@ func (c *controller) reconcileWake(ctx context.Context, ns, hibName, podName, ph
 
 	vmName := pod.Annotations[annVMName]
 
-	// Check if pod is running. We check that the hibernate annotation is gone
-	// AND the VM snapshot has been consumed (cleared from ConfigMap).
+	// Pod is awake when the hibernate annotation is gone and the snapshot is consumed.
 	if pod.Annotations[annHibernate] != "true" && vmName != "" && !c.hasSnapshot(ctx, ns, vmName) {
 		c.updateStatus(ctx, ns, hibName, "Active", "VM restored and running", vmName, "")
 		return
@@ -269,8 +262,7 @@ func (c *controller) reconcileWake(ctx context.Context, ns, hibName, podName, ph
 	}
 }
 
-// resync checks all Hibernation CRDs for status transitions (e.g. vk-cocoon
-// finished hibernating/waking a VM since the last reconcile).
+// resync checks all Hibernation CRDs for status transitions.
 func (c *controller) resync(ctx context.Context, store cache.Store) {
 	for _, obj := range store.List() {
 		c.reconcile(ctx, obj)
@@ -278,10 +270,9 @@ func (c *controller) resync(ctx context.Context, store cache.Store) {
 }
 
 // handlePodEvent checks if a pod is owned by a CocoonSet and reconciles it.
-func (c *controller) handlePodEvent(ctx context.Context, obj interface{}) {
+func (c *controller) handlePodEvent(ctx context.Context, obj any) {
 	u, ok := obj.(*unstructured.Unstructured)
 	if !ok {
-		// Handle DeletedFinalStateUnknown (tombstone)
 		if d, ok := obj.(cache.DeletedFinalStateUnknown); ok {
 			u, ok = d.Obj.(*unstructured.Unstructured)
 			if !ok {
@@ -292,8 +283,7 @@ func (c *controller) handlePodEvent(ctx context.Context, obj interface{}) {
 		}
 	}
 
-	ownerRefs := u.GetOwnerReferences()
-	for _, ref := range ownerRefs {
+	for _, ref := range u.GetOwnerReferences() {
 		if ref.Kind == "CocoonSet" && ref.APIVersion == "cocoon.cis/v1alpha1" {
 			c.reconcileCocoonSet(ctx, u.GetNamespace(), ref.Name)
 			return
@@ -312,10 +302,10 @@ func (c *controller) resyncCocoonSets(ctx context.Context, store cache.Store) {
 	}
 }
 
-// ---------- Status update ----------
+// ---------- Hibernation status ----------
 
 func (c *controller) updateStatus(ctx context.Context, ns, name, phase, message, vmName, snapshotRef string) {
-	status := map[string]interface{}{
+	status := map[string]any{
 		"phase":              phase,
 		"message":            message,
 		"lastTransitionTime": time.Now().UTC().Format(time.RFC3339),
@@ -327,9 +317,7 @@ func (c *controller) updateStatus(ctx context.Context, ns, name, phase, message,
 		status["snapshotRef"] = snapshotRef
 	}
 
-	patch := map[string]interface{}{
-		"status": status,
-	}
+	patch := map[string]any{"status": status}
 	data, err := json.Marshal(patch)
 	if err != nil {
 		klog.Errorf("updateStatus %s/%s: marshal: %v", ns, name, err)
@@ -339,7 +327,7 @@ func (c *controller) updateStatus(ctx context.Context, ns, name, phase, message,
 	_, err = c.dynClient.Resource(hibGVR).Namespace(ns).Patch(ctx, name,
 		types.MergePatchType, data, metav1.PatchOptions{}, "status")
 	if err != nil {
-		klog.Errorf("updateStatus %s/%s → %s: %v", ns, name, phase, err)
+		klog.Errorf("updateStatus %s/%s -> %s: %v", ns, name, phase, err)
 	}
 }
 
@@ -357,13 +345,13 @@ func buildConfig() (*rest.Config, error) {
 	return rest.InClusterConfig()
 }
 
-func getMap(obj map[string]interface{}, key string) map[string]interface{} {
+func getMap(obj map[string]any, key string) map[string]any {
 	if v, ok := obj[key]; ok {
-		if m, ok := v.(map[string]interface{}); ok {
+		if m, ok := v.(map[string]any); ok {
 			return m
 		}
 	}
-	return map[string]interface{}{}
+	return map[string]any{}
 }
 
 // hasSnapshot checks if the cocoon-vm-snapshots ConfigMap has an entry for the VM name.

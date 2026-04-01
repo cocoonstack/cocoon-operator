@@ -1,10 +1,11 @@
 package main
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"fmt"
-	"sort"
+	"slices"
 	"strconv"
 
 	corev1 "k8s.io/api/core/v1"
@@ -16,6 +17,7 @@ import (
 	"k8s.io/klog/v2"
 )
 
+// csGVR is the GroupVersionResource for CocoonSet CRDs.
 var csGVR = schema.GroupVersionResource{
 	Group:    "cocoon.cis",
 	Version:  "v1alpha1",
@@ -39,9 +41,10 @@ const (
 	annVNCPort        = "cocoon.cis/vnc-port"
 )
 
+// ---------- CocoonSet reconcile ----------
+
 // reconcileCocoonSet handles CocoonSet events from the informer.
 func (c *controller) reconcileCocoonSet(ctx context.Context, ns, name string) error {
-	// 1. Get CocoonSet
 	cs, err := c.dynClient.Resource(csGVR).Namespace(ns).Get(ctx, name, metav1.GetOptions{})
 	if err != nil {
 		klog.Warningf("cocoonset %s/%s: get failed: %v", ns, name, err)
@@ -51,33 +54,22 @@ func (c *controller) reconcileCocoonSet(ctx context.Context, ns, name string) er
 	spec := getMap(cs.Object, "spec")
 	agentSpec := getMap(spec, "agent")
 	suspend, _ := spec["suspend"].(bool)
-
-	replicas := int64(0)
-	if r, ok := agentSpec["replicas"]; ok {
-		switch v := r.(type) {
-		case int64:
-			replicas = v
-		case float64:
-			replicas = int64(v)
-		}
-	}
-
+	replicas := toInt64(agentSpec["replicas"])
 	toolboxSpecs := getSlice(spec, "toolboxes")
 
-	// 2. List owned pods
+	// List owned pods.
 	ownedPods, err := c.listOwnedPods(ctx, ns, name)
 	if err != nil {
 		klog.Errorf("cocoonset %s/%s: list pods: %v", ns, name, err)
 		return err
 	}
 
-	// 3. Classify pods
-	agentPods := map[int]*corev1.Pod{}      // slot -> pod
-	toolboxPods := map[string]*corev1.Pod{} // toolbox name -> pod
+	// Classify pods by role.
+	agentPods := map[int]*corev1.Pod{}
+	toolboxPods := map[string]*corev1.Pod{}
 	for i := range ownedPods {
 		pod := &ownedPods[i]
-		role := pod.Labels[labelRole]
-		switch role {
+		switch pod.Labels[labelRole] {
 		case "main", "sub-agent":
 			if slotStr, ok := pod.Labels[labelSlot]; ok {
 				if slot, err := strconv.Atoi(slotStr); err == nil {
@@ -85,45 +77,34 @@ func (c *controller) reconcileCocoonSet(ctx context.Context, ns, name string) er
 				}
 			}
 		case "toolbox":
-			// Derive toolbox name from pod name: {cocoonset}-{toolboxName}
 			tbName := pod.Name[len(name)+1:]
 			toolboxPods[tbName] = pod
 		}
 	}
 
-	// 4. Handle suspend
+	desired := int(1 + replicas)
+
+	// Handle suspend: hibernate all pods.
 	if suspend {
 		for i := range ownedPods {
 			pod := &ownedPods[i]
 			if pod.Annotations[annHibernate] != "true" {
-				patch := fmt.Sprintf(`{"metadata":{"annotations":{"%s":"true"}}}`, annHibernate)
-				if _, err := c.clientset.CoreV1().Pods(ns).Patch(ctx, pod.Name,
-					types.MergePatchType, []byte(patch), metav1.PatchOptions{}); err != nil {
-					klog.Errorf("cocoonset %s/%s: suspend pod %s: %v", ns, name, pod.Name, err)
-				} else {
-					klog.Infof("cocoonset %s/%s: suspended pod %s", ns, name, pod.Name)
-				}
+				c.patchPodAnnotation(ctx, ns, name, pod.Name, annHibernate, "true", "suspended")
 			}
 		}
-		c.updateCocoonSetStatus(ctx, ns, name, buildCocoonSetStatus("Suspended", ownedPods, name, int(1+replicas)))
+		c.updateCocoonSetStatus(ctx, ns, name, buildCocoonSetStatus("Suspended", ownedPods, name, desired))
 		return nil
 	}
 
-	// Remove hibernate annotation if suspend=false
+	// Not suspended: remove hibernate annotation from all pods.
 	for i := range ownedPods {
 		pod := &ownedPods[i]
 		if pod.Annotations[annHibernate] == "true" {
-			patch := fmt.Sprintf(`{"metadata":{"annotations":{"%s":null}}}`, annHibernate)
-			if _, err := c.clientset.CoreV1().Pods(ns).Patch(ctx, pod.Name,
-				types.MergePatchType, []byte(patch), metav1.PatchOptions{}); err != nil {
-				klog.Errorf("cocoonset %s/%s: unsuspend pod %s: %v", ns, name, pod.Name, err)
-			} else {
-				klog.Infof("cocoonset %s/%s: unsuspended pod %s", ns, name, pod.Name)
-			}
+			c.patchPodAnnotationNull(ctx, ns, name, pod.Name, annHibernate, "unsuspended")
 		}
 	}
 
-	// 5. Ensure main agent (slot-0)
+	// Ensure main agent (slot-0).
 	mainPod, hasMain := agentPods[0]
 	if !hasMain {
 		pod := buildAgentPod(cs, 0, "")
@@ -132,20 +113,18 @@ func (c *controller) reconcileCocoonSet(ctx context.Context, ns, name string) er
 			return err
 		}
 		klog.Infof("cocoonset %s/%s: created main agent pod %s", ns, name, pod.Name)
-		c.updateCocoonSetStatus(ctx, ns, name, buildCocoonSetStatus("Scaling", ownedPods, name, int(1+replicas)))
-		return nil // requeue via resync
+		c.updateCocoonSetStatus(ctx, ns, name, buildCocoonSetStatus("Scaling", ownedPods, name, desired))
+		return nil
 	}
 
-	// Check if main is ready
 	if mainPod.Status.Phase != corev1.PodRunning {
 		klog.V(2).Infof("cocoonset %s/%s: main agent not ready (phase=%s), waiting", ns, name, mainPod.Status.Phase)
-		c.updateCocoonSetStatus(ctx, ns, name, buildCocoonSetStatus("Scaling", ownedPods, name, int(1+replicas)))
-		return nil // requeue via resync
+		c.updateCocoonSetStatus(ctx, ns, name, buildCocoonSetStatus("Scaling", ownedPods, name, desired))
+		return nil
 	}
 
-	// 6. Scale sub-agents (slot 1..replicas)
+	// Scale sub-agents (slot 1..replicas).
 	mainVMName := mainPod.Annotations[annVMName]
-
 	for slot := 1; slot <= int(replicas); slot++ {
 		if _, exists := agentPods[slot]; !exists {
 			pod := buildAgentPod(cs, slot, mainVMName)
@@ -157,14 +136,14 @@ func (c *controller) reconcileCocoonSet(ctx context.Context, ns, name string) er
 		}
 	}
 
-	// Scale down: delete excess sub-agents (highest slot first)
+	// Scale down: delete excess sub-agents (highest slot first).
 	var excessSlots []int
 	for slot := range agentPods {
 		if slot > int(replicas) {
 			excessSlots = append(excessSlots, slot)
 		}
 	}
-	sort.Sort(sort.Reverse(sort.IntSlice(excessSlots)))
+	slices.SortFunc(excessSlots, func(a, b int) int { return cmp.Compare(b, a) })
 	for _, slot := range excessSlots {
 		pod := agentPods[slot]
 		if err := c.clientset.CoreV1().Pods(ns).Delete(ctx, pod.Name, metav1.DeleteOptions{}); err != nil {
@@ -174,9 +153,9 @@ func (c *controller) reconcileCocoonSet(ctx context.Context, ns, name string) er
 		}
 	}
 
-	// 7. Ensure toolboxes
+	// Ensure toolboxes.
 	for _, tbRaw := range toolboxSpecs {
-		tb, ok := tbRaw.(map[string]interface{})
+		tb, ok := tbRaw.(map[string]any)
 		if !ok {
 			continue
 		}
@@ -194,7 +173,7 @@ func (c *controller) reconcileCocoonSet(ctx context.Context, ns, name string) er
 		}
 	}
 
-	// 8. Update status — re-list pods to get current state after possible creates/deletes
+	// Update status -- re-list pods to get current state after creates/deletes.
 	ownedPods, _ = c.listOwnedPods(ctx, ns, name)
 	phase := "Running"
 	readyCount := 0
@@ -203,13 +182,14 @@ func (c *controller) reconcileCocoonSet(ctx context.Context, ns, name string) er
 			readyCount++
 		}
 	}
-	desired := int(1 + replicas)
 	if readyCount < desired+len(toolboxSpecs) {
 		phase = "Scaling"
 	}
 	c.updateCocoonSetStatus(ctx, ns, name, buildCocoonSetStatus(phase, ownedPods, name, desired))
 	return nil
 }
+
+// ---------- Pod builders ----------
 
 // buildAgentPod creates a Pod for an agent slot.
 // If forkFrom is non-empty, it sets the fork-from annotation for sub-agents.
@@ -218,11 +198,8 @@ func buildAgentPod(cs *unstructured.Unstructured, slot int, forkFrom string) *co
 	ns := cs.GetNamespace()
 	spec := getMap(cs.Object, "spec")
 	agentSpec := getMap(spec, "agent")
-	targetNodeName := getTargetNodeName(spec)
-	snapshotPolicy, _ := spec["snapshotPolicy"].(string)
-	if snapshotPolicy == "" {
-		snapshotPolicy = "always"
-	}
+	nodeName := getTargetNodeName(spec)
+	snapshotPolicy := stringDefault(spec, "snapshotPolicy", "always")
 
 	image, _ := agentSpec["image"].(string)
 	storage, _ := agentSpec["storage"].(string)
@@ -231,14 +208,13 @@ func buildAgentPod(cs *unstructured.Unstructured, slot int, forkFrom string) *co
 	vmName := fmt.Sprintf("vk-%s-%s-%d", ns, name, slot)
 
 	role := "main"
-	mode := "clone"
 	if slot > 0 {
 		role = "sub-agent"
 	}
 
 	annotations := map[string]string{
 		annVMName:         vmName,
-		annMode:           mode,
+		annMode:           "clone",
 		annImage:          image,
 		annManaged:        "true",
 		annOS:             "linux",
@@ -258,95 +234,26 @@ func buildAgentPod(cs *unstructured.Unstructured, slot int, forkFrom string) *co
 		"app":          name,
 	}
 
-	uid := cs.GetUID()
-	apiVersion := "cocoon.cis/v1alpha1"
-	kind := "CocoonSet"
-	blockOwnerDeletion := true
-	isController := true
-
 	pod := &corev1.Pod{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:        podName,
-			Namespace:   ns,
-			Labels:      labels,
-			Annotations: annotations,
-			OwnerReferences: []metav1.OwnerReference{
-				{
-					APIVersion:         apiVersion,
-					Kind:               kind,
-					Name:               name,
-					UID:                uid,
-					Controller:         &isController,
-					BlockOwnerDeletion: &blockOwnerDeletion,
-				},
-			},
+			Name:            podName,
+			Namespace:       ns,
+			Labels:          labels,
+			Annotations:     annotations,
+			OwnerReferences: ownerRef(cs),
 		},
 		Spec: corev1.PodSpec{
-			NodeName: targetNodeName,
-			Tolerations: []corev1.Toleration{
-				{
-					Key:      "virtual-kubelet.io/provider",
-					Operator: corev1.TolerationOpExists,
-					Effect:   corev1.TaintEffectNoSchedule,
-				},
-			},
+			NodeName:    nodeName,
+			Tolerations: vkTolerations(),
 			Containers: []corev1.Container{
-				{
-					Name:  "vm",
-					Image: image,
-				},
+				{Name: "vm", Image: image},
 			},
 		},
 	}
 
-	// Copy resources to container
-	resources := getMap(agentSpec, "resources")
-	if cpu, ok := resources["cpu"].(string); ok {
-		if pod.Spec.Containers[0].Resources.Limits == nil {
-			pod.Spec.Containers[0].Resources.Limits = corev1.ResourceList{}
-		}
-		pod.Spec.Containers[0].Resources.Limits[corev1.ResourceCPU] = mustParseQuantity(cpu)
-	}
-	if mem, ok := resources["memory"].(string); ok {
-		if pod.Spec.Containers[0].Resources.Limits == nil {
-			pod.Spec.Containers[0].Resources.Limits = corev1.ResourceList{}
-		}
-		pod.Spec.Containers[0].Resources.Limits[corev1.ResourceMemory] = mustParseQuantity(mem)
-	}
+	applyResources(&pod.Spec.Containers[0], getMap(agentSpec, "resources"))
+	applyEnvFrom(&pod.Spec.Containers[0], agentSpec)
 
-	// Copy envFrom from spec.agent
-	if envFromRaw, ok := agentSpec["envFrom"]; ok {
-		if envFromSlice, ok := envFromRaw.([]interface{}); ok {
-			for _, item := range envFromSlice {
-				if m, ok := item.(map[string]interface{}); ok {
-					if cmRef := getMap(m, "configMapRef"); len(cmRef) > 0 {
-						cmName, _ := cmRef["name"].(string)
-						if cmName != "" {
-							pod.Spec.Containers[0].EnvFrom = append(pod.Spec.Containers[0].EnvFrom,
-								corev1.EnvFromSource{
-									ConfigMapRef: &corev1.ConfigMapEnvSource{
-										LocalObjectReference: corev1.LocalObjectReference{Name: cmName},
-									},
-								})
-						}
-					}
-					if secretRef := getMap(m, "secretRef"); len(secretRef) > 0 {
-						secretName, _ := secretRef["name"].(string)
-						if secretName != "" {
-							pod.Spec.Containers[0].EnvFrom = append(pod.Spec.Containers[0].EnvFrom,
-								corev1.EnvFromSource{
-									SecretRef: &corev1.SecretEnvSource{
-										LocalObjectReference: corev1.LocalObjectReference{Name: secretName},
-									},
-								})
-						}
-					}
-				}
-			}
-		}
-	}
-
-	// Copy serviceAccountName
 	if sa, ok := agentSpec["serviceAccountName"].(string); ok && sa != "" {
 		pod.Spec.ServiceAccountName = sa
 	}
@@ -355,26 +262,17 @@ func buildAgentPod(cs *unstructured.Unstructured, slot int, forkFrom string) *co
 }
 
 // buildToolboxPod creates a Pod for a toolbox entry.
-func buildToolboxPod(cs *unstructured.Unstructured, tb map[string]interface{}) *corev1.Pod {
+func buildToolboxPod(cs *unstructured.Unstructured, tb map[string]any) *corev1.Pod {
 	csName := cs.GetName()
 	ns := cs.GetNamespace()
 	spec := getMap(cs.Object, "spec")
-	targetNodeName := getTargetNodeName(spec)
-	snapshotPolicy, _ := spec["snapshotPolicy"].(string)
-	if snapshotPolicy == "" {
-		snapshotPolicy = "always"
-	}
+	nodeName := getTargetNodeName(spec)
+	snapshotPolicy := stringDefault(spec, "snapshotPolicy", "always")
 
 	tbName, _ := tb["name"].(string)
-	tbOS, _ := tb["os"].(string)
-	if tbOS == "" {
-		tbOS = "linux"
-	}
+	tbOS := stringDefault(tb, "os", "linux")
 	tbImage, _ := tb["image"].(string)
-	tbMode, _ := tb["mode"].(string)
-	if tbMode == "" {
-		tbMode = "run"
-	}
+	tbMode := stringDefault(tb, "mode", "run")
 	tbStorage, _ := tb["storage"].(string)
 	statusHints := lookupToolboxRuntimeHints(cs, tbName)
 
@@ -396,29 +294,7 @@ func buildToolboxPod(cs *unstructured.Unstructured, tb map[string]interface{}) *
 	}
 
 	if tbMode == "static" {
-		// Static toolbox: prefer the last runtime metadata persisted in status so
-		// pod recreation after controller/provider restart doesn't regress to a
-		// stale spec hint.
-		if ip := getStringValue(statusHints, "ip"); ip != "" {
-			annotations[annIP] = ip
-		} else if ip, ok := tb["staticIP"].(string); ok && ip != "" {
-			annotations[annIP] = ip
-		}
-		if vmID := getStringValue(statusHints, "vmID"); vmID != "" {
-			annotations[annVMID] = vmID
-		} else if vmID, ok := tb["staticVMID"].(string); ok && vmID != "" {
-			annotations[annVMID] = vmID
-		}
-		if vncPort, ok := getInt64Value(statusHints, "vncPort"); ok {
-			annotations[annVNCPort] = strconv.FormatInt(vncPort, 10)
-		} else if vncPort, ok := tb["vncPort"]; ok {
-			switch v := vncPort.(type) {
-			case int64:
-				annotations[annVNCPort] = strconv.FormatInt(v, 10)
-			case float64:
-				annotations[annVNCPort] = strconv.FormatInt(int64(v), 10)
-			}
-		}
+		applyStaticHints(annotations, tb, statusHints)
 	}
 
 	labels := map[string]string{
@@ -427,141 +303,33 @@ func buildToolboxPod(cs *unstructured.Unstructured, tb map[string]interface{}) *
 		"app":          csName,
 	}
 
-	uid := cs.GetUID()
-	apiVersion := "cocoon.cis/v1alpha1"
-	kind := "CocoonSet"
-	blockOwnerDeletion := true
-	isController := true
-
 	pod := &corev1.Pod{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:        podName,
-			Namespace:   ns,
-			Labels:      labels,
-			Annotations: annotations,
-			OwnerReferences: []metav1.OwnerReference{
-				{
-					APIVersion:         apiVersion,
-					Kind:               kind,
-					Name:               csName,
-					UID:                uid,
-					Controller:         &isController,
-					BlockOwnerDeletion: &blockOwnerDeletion,
-				},
-			},
+			Name:            podName,
+			Namespace:       ns,
+			Labels:          labels,
+			Annotations:     annotations,
+			OwnerReferences: ownerRef(cs),
 		},
 		Spec: corev1.PodSpec{
-			NodeName: targetNodeName,
-			Tolerations: []corev1.Toleration{
-				{
-					Key:      "virtual-kubelet.io/provider",
-					Operator: corev1.TolerationOpExists,
-					Effect:   corev1.TaintEffectNoSchedule,
-				},
-			},
+			NodeName:    nodeName,
+			Tolerations: vkTolerations(),
 			Containers: []corev1.Container{
-				{
-					Name:  "vm",
-					Image: tbImage,
-				},
+				{Name: "vm", Image: tbImage},
 			},
 		},
 	}
 
-	// Copy resources
-	resources := getMap(tb, "resources")
-	if cpu, ok := resources["cpu"].(string); ok {
-		if pod.Spec.Containers[0].Resources.Limits == nil {
-			pod.Spec.Containers[0].Resources.Limits = corev1.ResourceList{}
-		}
-		pod.Spec.Containers[0].Resources.Limits[corev1.ResourceCPU] = mustParseQuantity(cpu)
-	}
-	if mem, ok := resources["memory"].(string); ok {
-		if pod.Spec.Containers[0].Resources.Limits == nil {
-			pod.Spec.Containers[0].Resources.Limits = corev1.ResourceList{}
-		}
-		pod.Spec.Containers[0].Resources.Limits[corev1.ResourceMemory] = mustParseQuantity(mem)
-	}
+	applyResources(&pod.Spec.Containers[0], getMap(tb, "resources"))
 
 	return pod
 }
 
-func toolboxConnType(osType string, hasVNCPort bool) string {
-	switch {
-	case hasVNCPort:
-		return "vnc"
-	case osType == "android":
-		return "adb"
-	case osType == "windows":
-		return "rdp"
-	default:
-		return "ssh"
-	}
-}
-
-func getTargetNodeName(spec map[string]interface{}) string {
-	if nodeName, _ := spec["nodeName"].(string); nodeName != "" {
-		return nodeName
-	}
-	return "cocoon-pool"
-}
-
-func lookupToolboxRuntimeHints(cs *unstructured.Unstructured, tbName string) map[string]interface{} {
-	status := getMap(cs.Object, "status")
-	for _, raw := range getSlice(status, "toolboxes") {
-		m, ok := raw.(map[string]interface{})
-		if !ok {
-			continue
-		}
-		if name, _ := m["name"].(string); name == tbName {
-			return m
-		}
-	}
-	return nil
-}
-
-func getStringValue(m map[string]interface{}, key string) string {
-	if m == nil {
-		return ""
-	}
-	if v, ok := m[key].(string); ok {
-		return v
-	}
-	return ""
-}
-
-func getInt64Value(m map[string]interface{}, key string) (int64, bool) {
-	if m == nil {
-		return 0, false
-	}
-	switch v := m[key].(type) {
-	case int64:
-		return v, true
-	case int:
-		return int64(v), true
-	case float64:
-		return int64(v), true
-	default:
-		return 0, false
-	}
-}
-
-// listOwnedPods returns pods with the cocoon.cis/cocoonset label matching the given name.
-func (c *controller) listOwnedPods(ctx context.Context, ns, csName string) ([]corev1.Pod, error) {
-	pods, err := c.clientset.CoreV1().Pods(ns).List(ctx, metav1.ListOptions{
-		LabelSelector: fmt.Sprintf("%s=%s", labelCocoonSet, csName),
-	})
-	if err != nil {
-		return nil, err
-	}
-	return pods.Items, nil
-}
+// ---------- CocoonSet status ----------
 
 // updateCocoonSetStatus patches the status subresource of a CocoonSet.
-func (c *controller) updateCocoonSetStatus(ctx context.Context, ns, name string, status map[string]interface{}) error {
-	patch := map[string]interface{}{
-		"status": status,
-	}
+func (c *controller) updateCocoonSetStatus(ctx context.Context, ns, name string, status map[string]any) error {
+	patch := map[string]any{"status": status}
 	data, err := json.Marshal(patch)
 	if err != nil {
 		return err
@@ -576,9 +344,9 @@ func (c *controller) updateCocoonSetStatus(ctx context.Context, ns, name string,
 }
 
 // buildCocoonSetStatus builds a status map from current pod state.
-func buildCocoonSetStatus(phase string, pods []corev1.Pod, csName string, desiredAgents int) map[string]interface{} {
-	var agents []interface{}
-	var toolboxes []interface{}
+func buildCocoonSetStatus(phase string, pods []corev1.Pod, csName string, desiredAgents int) map[string]any {
+	var agents []any
+	var toolboxes []any
 	readyAgents := 0
 
 	for i := range pods {
@@ -599,7 +367,7 @@ func buildCocoonSetStatus(phase string, pods []corev1.Pod, csName string, desire
 			if pod.Status.Phase == corev1.PodRunning {
 				readyAgents++
 			}
-			agent := map[string]interface{}{
+			agent := map[string]any{
 				"slot":    int64(slot),
 				"role":    role,
 				"podName": pod.Name,
@@ -618,9 +386,10 @@ func buildCocoonSetStatus(phase string, pods []corev1.Pod, csName string, desire
 				agent["forkedFrom"] = forkFrom
 			}
 			agents = append(agents, agent)
+
 		case "toolbox":
 			tbName := pod.Name[len(csName)+1:]
-			tb := map[string]interface{}{
+			tb := map[string]any{
 				"name":    tbName,
 				"podName": pod.Name,
 				"vmName":  pod.Annotations[annVMName],
@@ -645,7 +414,7 @@ func buildCocoonSetStatus(phase string, pods []corev1.Pod, csName string, desire
 		}
 	}
 
-	status := map[string]interface{}{
+	status := map[string]any{
 		"phase":         phase,
 		"readyAgents":   int64(readyAgents),
 		"desiredAgents": int64(desiredAgents),
@@ -659,10 +428,231 @@ func buildCocoonSetStatus(phase string, pods []corev1.Pod, csName string, desire
 	return status
 }
 
-// getSlice extracts a []interface{} from a nested map.
-func getSlice(obj map[string]interface{}, key string) []interface{} {
+// ---------- Helpers ----------
+
+// patchPodAnnotation sets an annotation on a pod (used for suspend/unsuspend).
+func (c *controller) patchPodAnnotation(ctx context.Context, ns, csName, podName, key, value, verb string) {
+	patch := fmt.Sprintf(`{"metadata":{"annotations":{"%s":"%s"}}}`, key, value)
+	if _, err := c.clientset.CoreV1().Pods(ns).Patch(ctx, podName,
+		types.MergePatchType, []byte(patch), metav1.PatchOptions{}); err != nil {
+		klog.Errorf("cocoonset %s/%s: %s pod %s: %v", ns, csName, verb, podName, err)
+	} else {
+		klog.Infof("cocoonset %s/%s: %s pod %s", ns, csName, verb, podName)
+	}
+}
+
+// patchPodAnnotationNull removes an annotation from a pod.
+func (c *controller) patchPodAnnotationNull(ctx context.Context, ns, csName, podName, key, verb string) {
+	patch := fmt.Sprintf(`{"metadata":{"annotations":{"%s":null}}}`, key)
+	if _, err := c.clientset.CoreV1().Pods(ns).Patch(ctx, podName,
+		types.MergePatchType, []byte(patch), metav1.PatchOptions{}); err != nil {
+		klog.Errorf("cocoonset %s/%s: %s pod %s: %v", ns, csName, verb, podName, err)
+	} else {
+		klog.Infof("cocoonset %s/%s: %s pod %s", ns, csName, verb, podName)
+	}
+}
+
+// listOwnedPods returns pods with the cocoon.cis/cocoonset label matching the given name.
+func (c *controller) listOwnedPods(ctx context.Context, ns, csName string) ([]corev1.Pod, error) {
+	pods, err := c.clientset.CoreV1().Pods(ns).List(ctx, metav1.ListOptions{
+		LabelSelector: fmt.Sprintf("%s=%s", labelCocoonSet, csName),
+	})
+	if err != nil {
+		return nil, err
+	}
+	return pods.Items, nil
+}
+
+// ownerRef builds the standard OwnerReference slice for a CocoonSet-owned pod.
+func ownerRef(cs *unstructured.Unstructured) []metav1.OwnerReference {
+	blockOwnerDeletion := true
+	isController := true
+	return []metav1.OwnerReference{
+		{
+			APIVersion:         "cocoon.cis/v1alpha1",
+			Kind:               "CocoonSet",
+			Name:               cs.GetName(),
+			UID:                cs.GetUID(),
+			Controller:         &isController,
+			BlockOwnerDeletion: &blockOwnerDeletion,
+		},
+	}
+}
+
+// vkTolerations returns the standard virtual-kubelet toleration.
+func vkTolerations() []corev1.Toleration {
+	return []corev1.Toleration{
+		{
+			Key:      "virtual-kubelet.io/provider",
+			Operator: corev1.TolerationOpExists,
+			Effect:   corev1.TaintEffectNoSchedule,
+		},
+	}
+}
+
+// applyResources copies CPU/memory limits from an unstructured map to a container.
+func applyResources(container *corev1.Container, resources map[string]any) {
+	if cpu, ok := resources["cpu"].(string); ok {
+		if container.Resources.Limits == nil {
+			container.Resources.Limits = corev1.ResourceList{}
+		}
+		container.Resources.Limits[corev1.ResourceCPU] = mustParseQuantity(cpu)
+	}
+	if mem, ok := resources["memory"].(string); ok {
+		if container.Resources.Limits == nil {
+			container.Resources.Limits = corev1.ResourceList{}
+		}
+		container.Resources.Limits[corev1.ResourceMemory] = mustParseQuantity(mem)
+	}
+}
+
+// applyEnvFrom copies envFrom sources from an unstructured agent spec to a container.
+func applyEnvFrom(container *corev1.Container, agentSpec map[string]any) {
+	envFromRaw, ok := agentSpec["envFrom"]
+	if !ok {
+		return
+	}
+	envFromSlice, ok := envFromRaw.([]any)
+	if !ok {
+		return
+	}
+	for _, item := range envFromSlice {
+		m, ok := item.(map[string]any)
+		if !ok {
+			continue
+		}
+		if cmRef := getMap(m, "configMapRef"); len(cmRef) > 0 {
+			if cmName, _ := cmRef["name"].(string); cmName != "" {
+				container.EnvFrom = append(container.EnvFrom,
+					corev1.EnvFromSource{
+						ConfigMapRef: &corev1.ConfigMapEnvSource{
+							LocalObjectReference: corev1.LocalObjectReference{Name: cmName},
+						},
+					})
+			}
+		}
+		if secretRef := getMap(m, "secretRef"); len(secretRef) > 0 {
+			if secretName, _ := secretRef["name"].(string); secretName != "" {
+				container.EnvFrom = append(container.EnvFrom,
+					corev1.EnvFromSource{
+						SecretRef: &corev1.SecretEnvSource{
+							LocalObjectReference: corev1.LocalObjectReference{Name: secretName},
+						},
+					})
+			}
+		}
+	}
+}
+
+// applyStaticHints sets IP, VMID, and VNC port annotations for static toolboxes,
+// preferring runtime status hints over spec hints.
+func applyStaticHints(annotations map[string]string, tb, statusHints map[string]any) {
+	if ip := getStringValue(statusHints, "ip"); ip != "" {
+		annotations[annIP] = ip
+	} else if ip, ok := tb["staticIP"].(string); ok && ip != "" {
+		annotations[annIP] = ip
+	}
+	if vmID := getStringValue(statusHints, "vmID"); vmID != "" {
+		annotations[annVMID] = vmID
+	} else if vmID, ok := tb["staticVMID"].(string); ok && vmID != "" {
+		annotations[annVMID] = vmID
+	}
+	if vncPort, ok := getInt64Value(statusHints, "vncPort"); ok {
+		annotations[annVNCPort] = strconv.FormatInt(vncPort, 10)
+	} else if vncPort, ok := tb["vncPort"]; ok {
+		switch v := vncPort.(type) {
+		case int64:
+			annotations[annVNCPort] = strconv.FormatInt(v, 10)
+		case float64:
+			annotations[annVNCPort] = strconv.FormatInt(int64(v), 10)
+		}
+	}
+}
+
+func toolboxConnType(osType string, hasVNCPort bool) string {
+	switch {
+	case hasVNCPort:
+		return "vnc"
+	case osType == "android":
+		return "adb"
+	case osType == "windows":
+		return "rdp"
+	default:
+		return "ssh"
+	}
+}
+
+func getTargetNodeName(spec map[string]any) string {
+	if nodeName, _ := spec["nodeName"].(string); nodeName != "" {
+		return nodeName
+	}
+	return "cocoon-pool"
+}
+
+func lookupToolboxRuntimeHints(cs *unstructured.Unstructured, tbName string) map[string]any {
+	status := getMap(cs.Object, "status")
+	for _, raw := range getSlice(status, "toolboxes") {
+		m, ok := raw.(map[string]any)
+		if !ok {
+			continue
+		}
+		if name, _ := m["name"].(string); name == tbName {
+			return m
+		}
+	}
+	return nil
+}
+
+func getStringValue(m map[string]any, key string) string {
+	if m == nil {
+		return ""
+	}
+	if v, ok := m[key].(string); ok {
+		return v
+	}
+	return ""
+}
+
+func getInt64Value(m map[string]any, key string) (int64, bool) {
+	if m == nil {
+		return 0, false
+	}
+	switch v := m[key].(type) {
+	case int64:
+		return v, true
+	case int:
+		return int64(v), true
+	case float64:
+		return int64(v), true
+	default:
+		return 0, false
+	}
+}
+
+// stringDefault extracts a string from an unstructured map, returning fallback if empty.
+func stringDefault(m map[string]any, key, fallback string) string {
+	if v, _ := m[key].(string); v != "" {
+		return v
+	}
+	return fallback
+}
+
+// toInt64 converts an unstructured numeric value to int64.
+func toInt64(v any) int64 {
+	switch n := v.(type) {
+	case int64:
+		return n
+	case float64:
+		return int64(n)
+	default:
+		return 0
+	}
+}
+
+// getSlice extracts a []any from a nested map.
+func getSlice(obj map[string]any, key string) []any {
 	if v, ok := obj[key]; ok {
-		if s, ok := v.([]interface{}); ok {
+		if s, ok := v.([]any); ok {
 			return s
 		}
 	}
