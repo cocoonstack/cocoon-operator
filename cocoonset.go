@@ -51,12 +51,7 @@ func (c *controller) reconcileCocoonSet(ctx context.Context, ns, name string) er
 	spec := getMap(cs.Object, "spec")
 	agentSpec := getMap(spec, "agent")
 	suspend, _ := spec["suspend"].(bool)
-	snapshotPolicy, _ := spec["snapshotPolicy"].(string)
-	if snapshotPolicy == "" {
-		snapshotPolicy = "always"
-	}
 
-	image, _ := agentSpec["image"].(string)
 	replicas := int64(0)
 	if r, ok := agentSpec["replicas"]; ok {
 		switch v := r.(type) {
@@ -199,10 +194,7 @@ func (c *controller) reconcileCocoonSet(ctx context.Context, ns, name string) er
 		}
 	}
 
-	// 8. Update status
-	_ = image
-	_ = snapshotPolicy
-	// Re-list pods to get current state after possible creates/deletes
+	// 8. Update status — re-list pods to get current state after possible creates/deletes
 	ownedPods, _ = c.listOwnedPods(ctx, ns, name)
 	phase := "Running"
 	readyCount := 0

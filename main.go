@@ -330,9 +330,13 @@ func (c *controller) updateStatus(ctx context.Context, ns, name, phase, message,
 	patch := map[string]interface{}{
 		"status": status,
 	}
-	data, _ := json.Marshal(patch)
+	data, err := json.Marshal(patch)
+	if err != nil {
+		klog.Errorf("updateStatus %s/%s: marshal: %v", ns, name, err)
+		return
+	}
 
-	_, err := c.dynClient.Resource(hibGVR).Namespace(ns).Patch(ctx, name,
+	_, err = c.dynClient.Resource(hibGVR).Namespace(ns).Patch(ctx, name,
 		types.MergePatchType, data, metav1.PatchOptions{}, "status")
 	if err != nil {
 		klog.Errorf("updateStatus %s/%s → %s: %v", ns, name, phase, err)

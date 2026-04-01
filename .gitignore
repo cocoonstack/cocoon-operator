@@ -3,3 +3,4 @@ dist/
 *.out
 *.test
 coverage.out
+cocoon-operator
