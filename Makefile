@@ -67,11 +67,13 @@ coverage: test ## Generate and display coverage report
 
 # --- Code quality ---
 
-vet: ## Run go vet
-	go vet ./...
+vet: ## Run go vet (linux + darwin)
+	GOOS=linux go vet ./...
+	GOOS=darwin go vet ./...
 
-lint: golangci-lint ## Run golangci-lint
-	$(GOLANGCILINT) run
+lint: golangci-lint ## Run golangci-lint (linux + darwin)
+	GOOS=linux $(GOLANGCILINT) run
+	GOOS=darwin $(GOLANGCILINT) run
 
 fmt: gofumpt goimports ## Format code with gofumpt and goimports
 	$(GOFMT) -l -w .

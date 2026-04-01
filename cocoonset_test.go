@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"testing"
 
 	corev1 "k8s.io/api/core/v1"
@@ -23,7 +24,8 @@ func TestBuildToolboxPodIgnoresStaticHintsForManagedWindows(t *testing.T) {
 		"vncPort":    int64(5901),
 	}
 
-	pod := buildToolboxPod(cs, tb)
+	ctx := context.Background()
+	pod := buildToolboxPod(ctx, cs, tb)
 	if got := pod.Annotations[annMode]; got != "run" {
 		t.Fatalf("mode mismatch: got %q", got)
 	}
@@ -56,7 +58,8 @@ func TestBuildToolboxPodKeepsStaticHintsForStaticMode(t *testing.T) {
 		"vncPort":    int64(5901),
 	}
 
-	pod := buildToolboxPod(cs, tb)
+	ctx := context.Background()
+	pod := buildToolboxPod(ctx, cs, tb)
 	if got := pod.Annotations[annIP]; got != "10.88.100.68" {
 		t.Fatalf("static IP mismatch: got %q", got)
 	}
@@ -94,7 +97,8 @@ func TestBuildToolboxPodPrefersRuntimeStatusHintsForStaticMode(t *testing.T) {
 		"vncPort":    int64(5901),
 	}
 
-	pod := buildToolboxPod(cs, tb)
+	ctx := context.Background()
+	pod := buildToolboxPod(ctx, cs, tb)
 	if got := pod.Annotations[annIP]; got != "10.88.100.85" {
 		t.Fatalf("runtime status IP mismatch: got %q", got)
 	}
@@ -191,7 +195,8 @@ func TestBuildAgentPodUsesConfiguredNodeName(t *testing.T) {
 	cs.SetName("demo")
 	cs.SetNamespace("dev")
 
-	pod := buildAgentPod(cs, 0, "")
+	ctx := context.Background()
+	pod := buildAgentPod(ctx, cs, 0, "")
 	if got := pod.Spec.NodeName; got != "cocoon-pool-233" {
 		t.Fatalf("agent node name mismatch: got %q", got)
 	}
@@ -215,7 +220,8 @@ func TestBuildToolboxPodUsesConfiguredNodeName(t *testing.T) {
 		"image": "https://registry.example.com/win11-base",
 	}
 
-	pod := buildToolboxPod(cs, tb)
+	ctx := context.Background()
+	pod := buildToolboxPod(ctx, cs, tb)
 	if got := pod.Spec.NodeName; got != "cocoon-pool-233" {
 		t.Fatalf("toolbox node name mismatch: got %q", got)
 	}

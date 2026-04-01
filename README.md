@@ -110,7 +110,7 @@ The operator runs a single binary with three informer loops:
 2. **CocoonSet controller** -- watches `CocoonSet` CRDs, creates/deletes agent and toolbox pods, manages suspend/unsuspend, and reports aggregate status
 3. **Pod watcher** -- detects pod changes owned by CocoonSets and triggers reconciliation
 
-A periodic resync (15s) catches status transitions that informer events may miss.
+A 30-second informer resync and 60-second periodic reconciliation catch status transitions that informer events may miss.
 
 ## Manifests
 

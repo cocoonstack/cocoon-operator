@@ -37,10 +37,13 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"os"
 	"os/signal"
 	"syscall"
 	"time"
 
+	"github.com/projecteru2/core/log"
+	coretypes "github.com/projecteru2/core/types"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
@@ -49,9 +52,9 @@ import (
 	"k8s.io/client-go/dynamic/dynamicinformer"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/tools/cache"
-	"k8s.io/klog/v2"
 
 	"github.com/cocoonstack/cocoon-operator/pkg/k8sutil"
+	"github.com/cocoonstack/cocoon-operator/pkg/version"
 )
 
 // hibGVR is the GroupVersionResource for Hibernation CRDs.
@@ -66,6 +69,12 @@ const (
 	annVMName    = "cocoon.cis/vm-name"
 
 	valTrue = "true"
+
+	phaseHibernated  = "Hibernated"
+	phaseHibernating = "Hibernating"
+	phaseWaking      = "Waking"
+	phaseActive      = "Active"
+	phaseFailed      = "Failed"
 )
 
 // controller holds the Kubernetes clients used by all reconcile loops.
@@ -75,23 +84,33 @@ type controller struct {
 }
 
 func main() {
-	klog.InitFlags(nil)
+	ctx := context.Background()
+
+	logLevel := os.Getenv("LOG_LEVEL")
+	if logLevel == "" {
+		logLevel = "info"
+	}
+	if err := log.SetupLog(ctx, &coretypes.ServerLogConfig{Level: logLevel}, ""); err != nil {
+		log.WithFunc("main").Fatalf(ctx, err, "setup log: %v", err)
+	}
+
+	logger := log.WithFunc("main")
 
 	config, err := k8sutil.LoadConfig()
 	if err != nil {
-		klog.Fatalf("k8s config: %v", err)
+		logger.Fatalf(ctx, err, "k8s config: %v", err)
 	}
 
 	clientset, err := kubernetes.NewForConfig(config)
 	if err != nil {
-		klog.Fatalf("clientset: %v", err)
+		logger.Fatalf(ctx, err, "clientset: %v", err)
 	}
 	dynClient, err := dynamic.NewForConfig(config)
 	if err != nil {
-		klog.Fatalf("dynamic client: %v", err)
+		logger.Fatalf(ctx, err, "dynamic client: %v", err)
 	}
 
-	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	ctx, cancel := signal.NotifyContext(ctx, syscall.SIGINT, syscall.SIGTERM)
 	defer cancel()
 
 	ctrl := &controller{
@@ -109,26 +128,19 @@ func main() {
 	})
 
 	// CocoonSet informer.
+	handleCS := func(obj any) {
+		u, ok := obj.(*unstructured.Unstructured)
+		if !ok {
+			return
+		}
+		if err := ctrl.reconcileCocoonSet(ctx, u.GetNamespace(), u.GetName()); err != nil {
+			logger.Errorf(ctx, err, "cocoonset %s/%s: reconcile", u.GetNamespace(), u.GetName())
+		}
+	}
 	csInformer := factory.ForResource(csGVR).Informer()
 	_, _ = csInformer.AddEventHandler(cache.ResourceEventHandlerFuncs{ //nolint:errcheck // registration handle unused
-		AddFunc: func(obj any) {
-			u, ok := obj.(*unstructured.Unstructured)
-			if !ok {
-				return
-			}
-			if err := ctrl.reconcileCocoonSet(ctx, u.GetNamespace(), u.GetName()); err != nil {
-				klog.Errorf("cocoonset %s/%s: reconcile on add: %v", u.GetNamespace(), u.GetName(), err)
-			}
-		},
-		UpdateFunc: func(_, obj any) {
-			u, ok := obj.(*unstructured.Unstructured)
-			if !ok {
-				return
-			}
-			if err := ctrl.reconcileCocoonSet(ctx, u.GetNamespace(), u.GetName()); err != nil {
-				klog.Errorf("cocoonset %s/%s: reconcile on update: %v", u.GetNamespace(), u.GetName(), err)
-			}
-		},
+		AddFunc:    handleCS,
+		UpdateFunc: func(_, obj any) { handleCS(obj) },
 	})
 
 	// Pod informer — if a pod's ownerRef points to a CocoonSet, reconcile it.
@@ -157,10 +169,10 @@ func main() {
 
 	factory.Start(ctx.Done())
 	factory.WaitForCacheSync(ctx.Done())
-	klog.Info("cocoon-operator started")
+	logger.Infof(ctx, "cocoon-operator %s started (rev=%s built=%s)", version.VERSION, version.REVISION, version.BUILTAT)
 
 	<-ctx.Done()
-	klog.Info("cocoon-operator shutting down")
+	logger.Info(ctx, "cocoon-operator shutting down")
 }
 
 // ---------- Hibernation reconcile ----------
@@ -196,13 +208,13 @@ func (c *controller) reconcile(ctx context.Context, obj any) {
 }
 
 func (c *controller) reconcileHibernate(ctx context.Context, ns, hibName, podName, phase string) {
-	if phase == "Hibernated" {
+	if phase == phaseHibernated {
 		return
 	}
 
 	pod, err := c.clientset.CoreV1().Pods(ns).Get(ctx, podName, metav1.GetOptions{})
 	if err != nil {
-		c.updateStatus(ctx, ns, hibName, "Failed", fmt.Sprintf("pod not found: %v", err), "")
+		c.updateStatus(ctx, ns, hibName, phaseFailed, fmt.Sprintf("pod not found: %v", err), "")
 		return
 	}
 
@@ -210,7 +222,7 @@ func (c *controller) reconcileHibernate(ctx context.Context, ns, hibName, podNam
 
 	// If vk-cocoon already saved a snapshot for this VM, hibernation is complete.
 	if vmName != "" && c.hasSnapshot(ctx, ns, vmName) {
-		c.updateStatus(ctx, ns, hibName, "Hibernated", "VM suspended to epoch", vmName)
+		c.updateStatus(ctx, ns, hibName, phaseHibernated, "VM suspended to epoch", vmName)
 		return
 	}
 
@@ -219,19 +231,19 @@ func (c *controller) reconcileHibernate(ctx context.Context, ns, hibName, podNam
 		c.patchPodAnnotation(ctx, ns, hibName, podName, annHibernate, valTrue, "hibernate")
 	}
 
-	if phase != "Hibernating" {
-		c.updateStatus(ctx, ns, hibName, "Hibernating", "Waiting for vk-cocoon to snapshot VM", vmName)
+	if phase != phaseHibernating {
+		c.updateStatus(ctx, ns, hibName, phaseHibernating, "Waiting for vk-cocoon to snapshot VM", vmName)
 	}
 }
 
 func (c *controller) reconcileWake(ctx context.Context, ns, hibName, podName, phase string) {
-	if phase == "Active" {
+	if phase == phaseActive {
 		return
 	}
 
 	pod, err := c.clientset.CoreV1().Pods(ns).Get(ctx, podName, metav1.GetOptions{})
 	if err != nil {
-		c.updateStatus(ctx, ns, hibName, "Failed", fmt.Sprintf("pod not found: %v", err), "")
+		c.updateStatus(ctx, ns, hibName, phaseFailed, fmt.Sprintf("pod not found: %v", err), "")
 		return
 	}
 
@@ -239,17 +251,17 @@ func (c *controller) reconcileWake(ctx context.Context, ns, hibName, podName, ph
 
 	// Pod is awake when the hibernate annotation is gone and the snapshot is consumed.
 	if pod.Annotations[annHibernate] != valTrue && vmName != "" && !c.hasSnapshot(ctx, ns, vmName) {
-		c.updateStatus(ctx, ns, hibName, "Active", "VM restored and running", vmName)
+		c.updateStatus(ctx, ns, hibName, phaseActive, "VM restored and running", vmName)
 		return
 	}
 
 	// Remove hibernate annotation to trigger vk-cocoon wake.
 	if pod.Annotations[annHibernate] == valTrue {
-		c.patchPodAnnotationNull(ctx, ns, hibName, podName, annHibernate, "wake")
+		c.patchPodAnnotation(ctx, ns, hibName, podName, annHibernate, "", "wake")
 	}
 
-	if phase != "Waking" {
-		c.updateStatus(ctx, ns, hibName, "Waking", "Waiting for vk-cocoon to restore VM", vmName)
+	if phase != phaseWaking {
+		c.updateStatus(ctx, ns, hibName, phaseWaking, "Waiting for vk-cocoon to restore VM", vmName)
 	}
 }
 
@@ -275,9 +287,9 @@ func (c *controller) handlePodEvent(ctx context.Context, obj any) {
 	}
 
 	for _, ref := range u.GetOwnerReferences() {
-		if ref.Kind == "CocoonSet" && ref.APIVersion == "cocoon.cis/v1alpha1" {
+		if ref.Kind == kindCocoonSet && ref.APIVersion == apiVersion {
 			if err := c.reconcileCocoonSet(ctx, u.GetNamespace(), ref.Name); err != nil {
-				klog.Errorf("cocoonset %s/%s: reconcile on pod event: %v", u.GetNamespace(), ref.Name, err)
+				log.WithFunc("controller.handlePodEvent").Errorf(ctx, err, "cocoonset %s/%s: reconcile on pod event", u.GetNamespace(), ref.Name)
 			}
 			return
 		}
@@ -292,7 +304,7 @@ func (c *controller) resyncCocoonSets(ctx context.Context, store cache.Store) {
 			continue
 		}
 		if err := c.reconcileCocoonSet(ctx, u.GetNamespace(), u.GetName()); err != nil {
-			klog.Errorf("cocoonset %s/%s: reconcile on resync: %v", u.GetNamespace(), u.GetName(), err)
+			log.WithFunc("controller.resyncCocoonSets").Errorf(ctx, err, "cocoonset %s/%s: reconcile on resync", u.GetNamespace(), u.GetName())
 		}
 	}
 }
@@ -310,7 +322,7 @@ func (c *controller) updateStatus(ctx context.Context, ns, name, phase, message,
 	}
 
 	if err := c.patchStatus(ctx, hibGVR, ns, name, status); err != nil {
-		klog.Errorf("updateStatus %s/%s -> %s: %v", ns, name, phase, err)
+		log.WithFunc("controller.updateStatus").Errorf(ctx, err, "update status %s/%s -> %s", ns, name, phase)
 	}
 }
 

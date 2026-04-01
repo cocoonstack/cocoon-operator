@@ -7,12 +7,12 @@ import (
 	"slices"
 	"strconv"
 
+	"github.com/projecteru2/core/log"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
-	"k8s.io/klog/v2"
 )
 
 // csGVR is the GroupVersionResource for CocoonSet CRDs.
@@ -38,9 +38,16 @@ const (
 	annVMID           = "cocoon.cis/vm-id"
 	annVNCPort        = "cocoon.cis/vnc-port"
 
+	apiVersion    = "cocoon.cis/v1alpha1"
+	kindCocoonSet = "CocoonSet"
+
 	roleMain     = "main"
 	roleSubAgent = "sub-agent"
 	roleToolbox  = "toolbox"
+
+	phaseSuspended = "Suspended"
+	phaseScaling   = "Scaling"
+	phaseRunning   = "Running"
 )
 
 // ---------- CocoonSet reconcile ----------
@@ -57,6 +64,7 @@ func classifyPods(pods []corev1.Pod, csName string) classifiedPods {
 		agents:    map[int]*corev1.Pod{},
 		toolboxes: map[string]*corev1.Pod{},
 	}
+	prefix := len(csName) + 1
 	for i := range pods {
 		pod := &pods[i]
 		switch pod.Labels[labelRole] {
@@ -67,8 +75,10 @@ func classifyPods(pods []corev1.Pod, csName string) classifiedPods {
 				}
 			}
 		case roleToolbox:
-			tbName := pod.Name[len(csName)+1:]
-			cp.toolboxes[tbName] = pod
+			if prefix > len(pod.Name) {
+				continue
+			}
+			cp.toolboxes[pod.Name[prefix:]] = pod
 		}
 	}
 	return cp
@@ -76,9 +86,11 @@ func classifyPods(pods []corev1.Pod, csName string) classifiedPods {
 
 // reconcileCocoonSet handles CocoonSet events from the informer.
 func (c *controller) reconcileCocoonSet(ctx context.Context, ns, name string) error {
+	logger := log.WithFunc("controller.reconcileCocoonSet")
+
 	cs, err := c.dynClient.Resource(csGVR).Namespace(ns).Get(ctx, name, metav1.GetOptions{})
 	if err != nil {
-		klog.Warningf("cocoonset %s/%s: get failed: %v", ns, name, err)
+		logger.Errorf(ctx, err, "get failed %s/%s", ns, name)
 		return err
 	}
 
@@ -91,7 +103,7 @@ func (c *controller) reconcileCocoonSet(ctx context.Context, ns, name string) er
 	// List owned pods.
 	ownedPods, err := c.listOwnedPods(ctx, ns, name)
 	if err != nil {
-		klog.Errorf("cocoonset %s/%s: list pods: %v", ns, name, err)
+		logger.Errorf(ctx, err, "list pods %s/%s", ns, name)
 		return err
 	}
 
@@ -106,8 +118,8 @@ func (c *controller) reconcileCocoonSet(ctx context.Context, ns, name string) er
 				c.patchPodAnnotation(ctx, ns, name, pod.Name, annHibernate, valTrue, "suspended")
 			}
 		}
-		if err := c.updateCocoonSetStatus(ctx, ns, name, buildCocoonSetStatus("Suspended", ownedPods, name, desired)); err != nil {
-			klog.Errorf("cocoonset %s/%s: update suspended status: %v", ns, name, err)
+		if err := c.updateCocoonSetStatus(ctx, ns, name, buildCocoonSetStatus(phaseSuspended, ownedPods, name, desired)); err != nil {
+			logger.Errorf(ctx, err, "update suspended status %s/%s", ns, name)
 		}
 		return nil
 	}
@@ -116,29 +128,29 @@ func (c *controller) reconcileCocoonSet(ctx context.Context, ns, name string) er
 	for i := range ownedPods {
 		pod := &ownedPods[i]
 		if pod.Annotations[annHibernate] == valTrue {
-			c.patchPodAnnotationNull(ctx, ns, name, pod.Name, annHibernate, "unsuspended")
+			c.patchPodAnnotation(ctx, ns, name, pod.Name, annHibernate, "", "unsuspended")
 		}
 	}
 
 	// Ensure main agent (slot-0).
 	mainPod, hasMain := cp.agents[0]
 	if !hasMain {
-		pod := buildAgentPod(cs, 0, "")
+		pod := buildAgentPod(ctx, cs, 0, "")
 		if _, err := c.clientset.CoreV1().Pods(ns).Create(ctx, pod, metav1.CreateOptions{}); err != nil {
-			klog.Errorf("cocoonset %s/%s: create main agent: %v", ns, name, err)
+			logger.Errorf(ctx, err, "create main agent %s/%s", ns, name)
 			return err
 		}
-		klog.Infof("cocoonset %s/%s: created main agent pod %s", ns, name, pod.Name)
-		if err := c.updateCocoonSetStatus(ctx, ns, name, buildCocoonSetStatus("Scaling", ownedPods, name, desired)); err != nil {
-			klog.Errorf("cocoonset %s/%s: update scaling status: %v", ns, name, err)
+		logger.Infof(ctx, "created main agent pod %s/%s %s", ns, name, pod.Name)
+		if err := c.updateCocoonSetStatus(ctx, ns, name, buildCocoonSetStatus(phaseScaling, ownedPods, name, desired)); err != nil {
+			logger.Errorf(ctx, err, "update scaling status %s/%s", ns, name)
 		}
 		return nil
 	}
 
 	if mainPod.Status.Phase != corev1.PodRunning {
-		klog.V(2).Infof("cocoonset %s/%s: main agent not ready (phase=%s), waiting", ns, name, mainPod.Status.Phase)
-		if err := c.updateCocoonSetStatus(ctx, ns, name, buildCocoonSetStatus("Scaling", ownedPods, name, desired)); err != nil {
-			klog.Errorf("cocoonset %s/%s: update scaling status: %v", ns, name, err)
+		logger.Debugf(ctx, "main agent not ready %s/%s phase=%s", ns, name, mainPod.Status.Phase)
+		if err := c.updateCocoonSetStatus(ctx, ns, name, buildCocoonSetStatus(phaseScaling, ownedPods, name, desired)); err != nil {
+			logger.Errorf(ctx, err, "update scaling status %s/%s", ns, name)
 		}
 		return nil
 	}
@@ -149,7 +161,7 @@ func (c *controller) reconcileCocoonSet(ctx context.Context, ns, name string) er
 
 	// Update status -- re-list pods to get current state after creates/deletes.
 	ownedPods, _ = c.listOwnedPods(ctx, ns, name)
-	phase := "Running"
+	phase := phaseRunning
 	readyCount := 0
 	for i := range ownedPods {
 		if ownedPods[i].Status.Phase == corev1.PodRunning {
@@ -157,26 +169,27 @@ func (c *controller) reconcileCocoonSet(ctx context.Context, ns, name string) er
 		}
 	}
 	if readyCount < desired+len(toolboxSpecs) {
-		phase = "Scaling"
+		phase = phaseScaling
 	}
 	if err := c.updateCocoonSetStatus(ctx, ns, name, buildCocoonSetStatus(phase, ownedPods, name, desired)); err != nil {
-		klog.Errorf("cocoonset %s/%s: update %s status: %v", ns, name, phase, err)
+		logger.Errorf(ctx, err, "update %s status %s/%s", phase, ns, name)
 	}
 	return nil
 }
 
 // scaleSubAgents creates missing sub-agents and deletes excess ones.
 func (c *controller) scaleSubAgents(ctx context.Context, cs *unstructured.Unstructured, ns, name string, agentPods map[int]*corev1.Pod, replicas int64) {
+	logger := log.WithFunc("controller.scaleSubAgents")
 	mainVMName := agentPods[0].Annotations[annVMName]
 
 	// Scale up: create missing sub-agents.
 	for slot := 1; slot <= int(replicas); slot++ {
 		if _, exists := agentPods[slot]; !exists {
-			pod := buildAgentPod(cs, slot, mainVMName)
+			pod := buildAgentPod(ctx, cs, slot, mainVMName)
 			if _, err := c.clientset.CoreV1().Pods(ns).Create(ctx, pod, metav1.CreateOptions{}); err != nil {
-				klog.Errorf("cocoonset %s/%s: create sub-agent slot %d: %v", ns, name, slot, err)
+				logger.Errorf(ctx, err, "create sub-agent %s/%s slot %d", ns, name, slot)
 			} else {
-				klog.Infof("cocoonset %s/%s: created sub-agent pod %s (fork from %s)", ns, name, pod.Name, mainVMName)
+				logger.Infof(ctx, "created sub-agent pod %s/%s %s fork from %s", ns, name, pod.Name, mainVMName)
 			}
 		}
 	}
@@ -192,15 +205,16 @@ func (c *controller) scaleSubAgents(ctx context.Context, cs *unstructured.Unstru
 	for _, slot := range excessSlots {
 		pod := agentPods[slot]
 		if err := c.clientset.CoreV1().Pods(ns).Delete(ctx, pod.Name, metav1.DeleteOptions{}); err != nil {
-			klog.Errorf("cocoonset %s/%s: delete excess slot %d: %v", ns, name, slot, err)
+			logger.Errorf(ctx, err, "delete excess slot %s/%s %d", ns, name, slot)
 		} else {
-			klog.Infof("cocoonset %s/%s: deleted excess sub-agent pod %s (slot %d)", ns, name, pod.Name, slot)
+			logger.Infof(ctx, "deleted excess sub-agent pod %s/%s %s slot %d", ns, name, pod.Name, slot)
 		}
 	}
 }
 
 // ensureToolboxes creates missing toolbox pods.
 func (c *controller) ensureToolboxes(ctx context.Context, cs *unstructured.Unstructured, ns, name string, toolboxPods map[string]*corev1.Pod, toolboxSpecs []any) {
+	logger := log.WithFunc("controller.ensureToolboxes")
 	for _, tbRaw := range toolboxSpecs {
 		tb, ok := tbRaw.(map[string]any)
 		if !ok {
@@ -211,11 +225,11 @@ func (c *controller) ensureToolboxes(ctx context.Context, cs *unstructured.Unstr
 			continue
 		}
 		if _, exists := toolboxPods[tbName]; !exists {
-			pod := buildToolboxPod(cs, tb)
+			pod := buildToolboxPod(ctx, cs, tb)
 			if _, err := c.clientset.CoreV1().Pods(ns).Create(ctx, pod, metav1.CreateOptions{}); err != nil {
-				klog.Errorf("cocoonset %s/%s: create toolbox %s: %v", ns, name, tbName, err)
+				logger.Errorf(ctx, err, "create toolbox %s/%s %s", ns, name, tbName)
 			} else {
-				klog.Infof("cocoonset %s/%s: created toolbox pod %s", ns, name, pod.Name)
+				logger.Infof(ctx, "created toolbox pod %s/%s %s", ns, name, pod.Name)
 			}
 		}
 	}
@@ -225,7 +239,7 @@ func (c *controller) ensureToolboxes(ctx context.Context, cs *unstructured.Unstr
 
 // buildAgentPod creates a Pod for an agent slot.
 // If forkFrom is non-empty, it sets the fork-from annotation for sub-agents.
-func buildAgentPod(cs *unstructured.Unstructured, slot int, forkFrom string) *corev1.Pod {
+func buildAgentPod(ctx context.Context, cs *unstructured.Unstructured, slot int, forkFrom string) *corev1.Pod {
 	name := cs.GetName()
 	ns := cs.GetNamespace()
 	spec := getMap(cs.Object, "spec")
@@ -283,7 +297,7 @@ func buildAgentPod(cs *unstructured.Unstructured, slot int, forkFrom string) *co
 		},
 	}
 
-	applyResources(&pod.Spec.Containers[0], getMap(agentSpec, "resources"))
+	applyResources(ctx, &pod.Spec.Containers[0], getMap(agentSpec, "resources"))
 	applyEnvFrom(&pod.Spec.Containers[0], agentSpec)
 
 	if sa, ok := agentSpec["serviceAccountName"].(string); ok && sa != "" {
@@ -294,7 +308,7 @@ func buildAgentPod(cs *unstructured.Unstructured, slot int, forkFrom string) *co
 }
 
 // buildToolboxPod creates a Pod for a toolbox entry.
-func buildToolboxPod(cs *unstructured.Unstructured, tb map[string]any) *corev1.Pod {
+func buildToolboxPod(ctx context.Context, cs *unstructured.Unstructured, tb map[string]any) *corev1.Pod {
 	csName := cs.GetName()
 	ns := cs.GetNamespace()
 	spec := getMap(cs.Object, "spec")
@@ -352,7 +366,7 @@ func buildToolboxPod(cs *unstructured.Unstructured, tb map[string]any) *corev1.P
 		},
 	}
 
-	applyResources(&pod.Spec.Containers[0], getMap(tb, "resources"))
+	applyResources(ctx, &pod.Spec.Containers[0], getMap(tb, "resources"))
 
 	return pod
 }
@@ -361,11 +375,15 @@ func buildToolboxPod(cs *unstructured.Unstructured, tb map[string]any) *corev1.P
 
 // updateCocoonSetStatus patches the status subresource of a CocoonSet.
 func (c *controller) updateCocoonSetStatus(ctx context.Context, ns, name string, status map[string]any) error {
-	if err := c.patchStatus(ctx, csGVR, ns, name, status); err != nil {
-		klog.Errorf("cocoonset %s/%s: update status: %v", ns, name, err)
-		return err
+	return c.patchStatus(ctx, csGVR, ns, name, status)
+}
+
+// podIP returns the pod's IP, preferring PodIP over the annotation fallback.
+func podIP(pod *corev1.Pod) string {
+	if ip := pod.Status.PodIP; ip != "" {
+		return ip
 	}
-	return nil
+	return pod.Annotations[annIP]
 }
 
 // buildCocoonSetStatus builds a status map from current pod state.
@@ -373,6 +391,7 @@ func buildCocoonSetStatus(phase string, pods []corev1.Pod, csName string, desire
 	var agents []any
 	var toolboxes []any
 	readyAgents := 0
+	prefix := len(csName) + 1
 
 	for i := range pods {
 		pod := &pods[i]
@@ -402,9 +421,7 @@ func buildCocoonSetStatus(phase string, pods []corev1.Pod, csName string, desire
 			if vmID, ok := pod.Annotations[annVMID]; ok {
 				agent["vmID"] = vmID
 			}
-			if ip := pod.Status.PodIP; ip != "" {
-				agent["ip"] = ip
-			} else if ip, ok := pod.Annotations[annIP]; ok {
+			if ip := podIP(pod); ip != "" {
 				agent["ip"] = ip
 			}
 			if forkFrom, ok := pod.Annotations[annForkFrom]; ok && forkFrom != "" {
@@ -413,16 +430,17 @@ func buildCocoonSetStatus(phase string, pods []corev1.Pod, csName string, desire
 			agents = append(agents, agent)
 
 		case roleToolbox:
-			tbName := pod.Name[len(csName)+1:]
+			if prefix > len(pod.Name) {
+				continue
+			}
+			tbName := pod.Name[prefix:]
 			tb := map[string]any{
 				"name":    tbName,
 				"podName": pod.Name,
 				"vmName":  pod.Annotations[annVMName],
 				"phase":   podPhase,
 			}
-			if ip := pod.Status.PodIP; ip != "" {
-				tb["ip"] = ip
-			} else if ip, ok := pod.Annotations[annIP]; ok {
+			if ip := podIP(pod); ip != "" {
 				tb["ip"] = ip
 			}
 			if vmID, ok := pod.Annotations[annVMID]; ok && vmID != "" {
@@ -455,25 +473,21 @@ func buildCocoonSetStatus(phase string, pods []corev1.Pod, csName string, desire
 
 // ---------- Helpers ----------
 
-// patchPodAnnotation sets an annotation on a pod (used for suspend/unsuspend).
-func (c *controller) patchPodAnnotation(ctx context.Context, ns, csName, podName, key, value, verb string) {
-	patch := fmt.Sprintf(`{"metadata":{"annotations":{"%s":"%s"}}}`, key, value)
-	if _, err := c.clientset.CoreV1().Pods(ns).Patch(ctx, podName,
-		types.MergePatchType, []byte(patch), metav1.PatchOptions{}); err != nil {
-		klog.Errorf("cocoonset %s/%s: %s pod %s: %v", ns, csName, verb, podName, err)
+// patchPodAnnotation sets or removes an annotation on a pod.
+// Pass a non-empty value to set, or an empty string to remove the annotation.
+func (c *controller) patchPodAnnotation(ctx context.Context, ns, csName, podName, key, value, verb string) { //nolint:unparam // key is parameterized for reuse across annotation types
+	logger := log.WithFunc("controller.patchPodAnnotation")
+	var patch string
+	if value != "" {
+		patch = fmt.Sprintf(`{"metadata":{"annotations":{"%s":"%s"}}}`, key, value)
 	} else {
-		klog.Infof("cocoonset %s/%s: %s pod %s", ns, csName, verb, podName)
+		patch = fmt.Sprintf(`{"metadata":{"annotations":{"%s":null}}}`, key)
 	}
-}
-
-// patchPodAnnotationNull removes an annotation from a pod.
-func (c *controller) patchPodAnnotationNull(ctx context.Context, ns, csName, podName, key, verb string) {
-	patch := fmt.Sprintf(`{"metadata":{"annotations":{"%s":null}}}`, key)
 	if _, err := c.clientset.CoreV1().Pods(ns).Patch(ctx, podName,
 		types.MergePatchType, []byte(patch), metav1.PatchOptions{}); err != nil {
-		klog.Errorf("cocoonset %s/%s: %s pod %s: %v", ns, csName, verb, podName, err)
+		logger.Errorf(ctx, err, "cocoonset %s/%s: %s pod %s", ns, csName, verb, podName)
 	} else {
-		klog.Infof("cocoonset %s/%s: %s pod %s", ns, csName, verb, podName)
+		logger.Infof(ctx, "cocoonset %s/%s: %s pod %s", ns, csName, verb, podName)
 	}
 }
 
@@ -494,8 +508,8 @@ func ownerRef(cs *unstructured.Unstructured) []metav1.OwnerReference {
 	isController := true
 	return []metav1.OwnerReference{
 		{
-			APIVersion:         "cocoon.cis/v1alpha1",
-			Kind:               "CocoonSet",
+			APIVersion:         apiVersion,
+			Kind:               kindCocoonSet,
 			Name:               cs.GetName(),
 			UID:                cs.GetUID(),
 			Controller:         &isController,
@@ -516,18 +530,18 @@ func vkTolerations() []corev1.Toleration {
 }
 
 // applyResources copies CPU/memory limits from an unstructured map to a container.
-func applyResources(container *corev1.Container, resources map[string]any) {
+func applyResources(ctx context.Context, container *corev1.Container, resources map[string]any) {
 	if cpu, ok := resources["cpu"].(string); ok {
 		if container.Resources.Limits == nil {
 			container.Resources.Limits = corev1.ResourceList{}
 		}
-		container.Resources.Limits[corev1.ResourceCPU] = mustParseQuantity(cpu)
+		container.Resources.Limits[corev1.ResourceCPU] = mustParseQuantity(ctx, cpu)
 	}
 	if mem, ok := resources["memory"].(string); ok {
 		if container.Resources.Limits == nil {
 			container.Resources.Limits = corev1.ResourceList{}
 		}
-		container.Resources.Limits[corev1.ResourceMemory] = mustParseQuantity(mem)
+		container.Resources.Limits[corev1.ResourceMemory] = mustParseQuantity(ctx, mem)
 	}
 }
 

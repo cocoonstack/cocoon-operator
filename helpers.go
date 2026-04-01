@@ -1,8 +1,10 @@
 package main
 
 import (
+	"context"
+
+	"github.com/projecteru2/core/log"
 	"k8s.io/apimachinery/pkg/api/resource"
-	"k8s.io/klog/v2"
 )
 
 // getMap extracts a map[string]any from a nested unstructured map.
@@ -60,10 +62,10 @@ func toInt64(v any) int64 {
 }
 
 // mustParseQuantity parses a resource quantity string, returning a zero quantity on error.
-func mustParseQuantity(s string) resource.Quantity {
+func mustParseQuantity(ctx context.Context, s string) resource.Quantity {
 	q, err := resource.ParseQuantity(s)
 	if err != nil {
-		klog.Warningf("invalid quantity %q: %v", s, err)
+		log.WithFunc("mustParseQuantity").Warnf(ctx, "invalid quantity %q: %v", s, err)
 		return resource.Quantity{}
 	}
 	return q
