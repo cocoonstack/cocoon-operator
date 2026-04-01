@@ -38,9 +38,42 @@ const (
 	annIP             = "cocoon.cis/ip"
 	annVMID           = "cocoon.cis/vm-id"
 	annVNCPort        = "cocoon.cis/vnc-port"
+
+	roleMain     = "main"
+	roleSubAgent = "sub-agent"
+	roleToolbox  = "toolbox"
 )
 
 // ---------- CocoonSet reconcile ----------
+
+// classifiedPods holds agent and toolbox pods classified by role.
+type classifiedPods struct {
+	agents    map[int]*corev1.Pod
+	toolboxes map[string]*corev1.Pod
+}
+
+// classifyPods groups owned pods into agent pods (by slot) and toolbox pods (by name).
+func classifyPods(pods []corev1.Pod, csName string) classifiedPods {
+	cp := classifiedPods{
+		agents:    map[int]*corev1.Pod{},
+		toolboxes: map[string]*corev1.Pod{},
+	}
+	for i := range pods {
+		pod := &pods[i]
+		switch pod.Labels[labelRole] {
+		case roleMain, roleSubAgent:
+			if slotStr, ok := pod.Labels[labelSlot]; ok {
+				if slot, err := strconv.Atoi(slotStr); err == nil {
+					cp.agents[slot] = pod
+				}
+			}
+		case roleToolbox:
+			tbName := pod.Name[len(csName)+1:]
+			cp.toolboxes[tbName] = pod
+		}
+	}
+	return cp
+}
 
 // reconcileCocoonSet handles CocoonSet events from the informer.
 func (c *controller) reconcileCocoonSet(ctx context.Context, ns, name string) error {
@@ -63,48 +96,33 @@ func (c *controller) reconcileCocoonSet(ctx context.Context, ns, name string) er
 		return err
 	}
 
-	// Classify pods by role.
-	agentPods := map[int]*corev1.Pod{}
-	toolboxPods := map[string]*corev1.Pod{}
-	for i := range ownedPods {
-		pod := &ownedPods[i]
-		switch pod.Labels[labelRole] {
-		case "main", "sub-agent":
-			if slotStr, ok := pod.Labels[labelSlot]; ok {
-				if slot, err := strconv.Atoi(slotStr); err == nil {
-					agentPods[slot] = pod
-				}
-			}
-		case "toolbox":
-			tbName := pod.Name[len(name)+1:]
-			toolboxPods[tbName] = pod
-		}
-	}
-
+	cp := classifyPods(ownedPods, name)
 	desired := int(1 + replicas)
 
 	// Handle suspend: hibernate all pods.
 	if suspend {
 		for i := range ownedPods {
 			pod := &ownedPods[i]
-			if pod.Annotations[annHibernate] != "true" {
-				c.patchPodAnnotation(ctx, ns, name, pod.Name, annHibernate, "true", "suspended")
+			if pod.Annotations[annHibernate] != valTrue {
+				c.patchPodAnnotation(ctx, ns, name, pod.Name, annHibernate, valTrue, "suspended")
 			}
 		}
-		c.updateCocoonSetStatus(ctx, ns, name, buildCocoonSetStatus("Suspended", ownedPods, name, desired))
+		if err := c.updateCocoonSetStatus(ctx, ns, name, buildCocoonSetStatus("Suspended", ownedPods, name, desired)); err != nil {
+			klog.Errorf("cocoonset %s/%s: update suspended status: %v", ns, name, err)
+		}
 		return nil
 	}
 
 	// Not suspended: remove hibernate annotation from all pods.
 	for i := range ownedPods {
 		pod := &ownedPods[i]
-		if pod.Annotations[annHibernate] == "true" {
+		if pod.Annotations[annHibernate] == valTrue {
 			c.patchPodAnnotationNull(ctx, ns, name, pod.Name, annHibernate, "unsuspended")
 		}
 	}
 
 	// Ensure main agent (slot-0).
-	mainPod, hasMain := agentPods[0]
+	mainPod, hasMain := cp.agents[0]
 	if !hasMain {
 		pod := buildAgentPod(cs, 0, "")
 		if _, err := c.clientset.CoreV1().Pods(ns).Create(ctx, pod, metav1.CreateOptions{}); err != nil {
@@ -112,18 +130,47 @@ func (c *controller) reconcileCocoonSet(ctx context.Context, ns, name string) er
 			return err
 		}
 		klog.Infof("cocoonset %s/%s: created main agent pod %s", ns, name, pod.Name)
-		c.updateCocoonSetStatus(ctx, ns, name, buildCocoonSetStatus("Scaling", ownedPods, name, desired))
+		if err := c.updateCocoonSetStatus(ctx, ns, name, buildCocoonSetStatus("Scaling", ownedPods, name, desired)); err != nil {
+			klog.Errorf("cocoonset %s/%s: update scaling status: %v", ns, name, err)
+		}
 		return nil
 	}
 
 	if mainPod.Status.Phase != corev1.PodRunning {
 		klog.V(2).Infof("cocoonset %s/%s: main agent not ready (phase=%s), waiting", ns, name, mainPod.Status.Phase)
-		c.updateCocoonSetStatus(ctx, ns, name, buildCocoonSetStatus("Scaling", ownedPods, name, desired))
+		if err := c.updateCocoonSetStatus(ctx, ns, name, buildCocoonSetStatus("Scaling", ownedPods, name, desired)); err != nil {
+			klog.Errorf("cocoonset %s/%s: update scaling status: %v", ns, name, err)
+		}
 		return nil
 	}
 
-	// Scale sub-agents (slot 1..replicas).
-	mainVMName := mainPod.Annotations[annVMName]
+	// Scale sub-agents and toolboxes.
+	c.scaleSubAgents(ctx, cs, ns, name, cp.agents, replicas)
+	c.ensureToolboxes(ctx, cs, ns, name, cp.toolboxes, toolboxSpecs)
+
+	// Update status -- re-list pods to get current state after creates/deletes.
+	ownedPods, _ = c.listOwnedPods(ctx, ns, name)
+	phase := "Running"
+	readyCount := 0
+	for i := range ownedPods {
+		if ownedPods[i].Status.Phase == corev1.PodRunning {
+			readyCount++
+		}
+	}
+	if readyCount < desired+len(toolboxSpecs) {
+		phase = "Scaling"
+	}
+	if err := c.updateCocoonSetStatus(ctx, ns, name, buildCocoonSetStatus(phase, ownedPods, name, desired)); err != nil {
+		klog.Errorf("cocoonset %s/%s: update %s status: %v", ns, name, phase, err)
+	}
+	return nil
+}
+
+// scaleSubAgents creates missing sub-agents and deletes excess ones.
+func (c *controller) scaleSubAgents(ctx context.Context, cs *unstructured.Unstructured, ns, name string, agentPods map[int]*corev1.Pod, replicas int64) {
+	mainVMName := agentPods[0].Annotations[annVMName]
+
+	// Scale up: create missing sub-agents.
 	for slot := 1; slot <= int(replicas); slot++ {
 		if _, exists := agentPods[slot]; !exists {
 			pod := buildAgentPod(cs, slot, mainVMName)
@@ -151,8 +198,10 @@ func (c *controller) reconcileCocoonSet(ctx context.Context, ns, name string) er
 			klog.Infof("cocoonset %s/%s: deleted excess sub-agent pod %s (slot %d)", ns, name, pod.Name, slot)
 		}
 	}
+}
 
-	// Ensure toolboxes.
+// ensureToolboxes creates missing toolbox pods.
+func (c *controller) ensureToolboxes(ctx context.Context, cs *unstructured.Unstructured, ns, name string, toolboxPods map[string]*corev1.Pod, toolboxSpecs []any) {
 	for _, tbRaw := range toolboxSpecs {
 		tb, ok := tbRaw.(map[string]any)
 		if !ok {
@@ -171,21 +220,6 @@ func (c *controller) reconcileCocoonSet(ctx context.Context, ns, name string) er
 			}
 		}
 	}
-
-	// Update status -- re-list pods to get current state after creates/deletes.
-	ownedPods, _ = c.listOwnedPods(ctx, ns, name)
-	phase := "Running"
-	readyCount := 0
-	for i := range ownedPods {
-		if ownedPods[i].Status.Phase == corev1.PodRunning {
-			readyCount++
-		}
-	}
-	if readyCount < desired+len(toolboxSpecs) {
-		phase = "Scaling"
-	}
-	c.updateCocoonSetStatus(ctx, ns, name, buildCocoonSetStatus(phase, ownedPods, name, desired))
-	return nil
 }
 
 // ---------- Pod builders ----------
@@ -206,16 +240,16 @@ func buildAgentPod(cs *unstructured.Unstructured, slot int, forkFrom string) *co
 	podName := fmt.Sprintf("%s-%d", name, slot)
 	vmName := fmt.Sprintf("vk-%s-%s-%d", ns, name, slot)
 
-	role := "main"
+	role := roleMain
 	if slot > 0 {
-		role = "sub-agent"
+		role = roleSubAgent
 	}
 
 	annotations := map[string]string{
 		annVMName:         vmName,
 		annMode:           "clone",
 		annImage:          image,
-		annManaged:        "true",
+		annManaged:        valTrue,
 		annOS:             "linux",
 		annSnapshotPolicy: snapshotPolicy,
 	}
@@ -281,7 +315,7 @@ func buildToolboxPod(cs *unstructured.Unstructured, tb map[string]any) *corev1.P
 	annotations := map[string]string{
 		annVMName:         vmName,
 		annMode:           tbMode,
-		annManaged:        "true",
+		annManaged:        valTrue,
 		annOS:             tbOS,
 		annSnapshotPolicy: snapshotPolicy,
 	}
@@ -298,7 +332,7 @@ func buildToolboxPod(cs *unstructured.Unstructured, tb map[string]any) *corev1.P
 
 	labels := map[string]string{
 		labelCocoonSet: csName,
-		labelRole:      "toolbox",
+		labelRole:      roleToolbox,
 		"app":          csName,
 	}
 
@@ -358,7 +392,7 @@ func buildCocoonSetStatus(phase string, pods []corev1.Pod, csName string, desire
 		}
 
 		switch role {
-		case "main", "sub-agent":
+		case roleMain, roleSubAgent:
 			slot := 0
 			if s, ok := pod.Labels[labelSlot]; ok {
 				slot, _ = strconv.Atoi(s)
@@ -386,7 +420,7 @@ func buildCocoonSetStatus(phase string, pods []corev1.Pod, csName string, desire
 			}
 			agents = append(agents, agent)
 
-		case "toolbox":
+		case roleToolbox:
 			tbName := pod.Name[len(csName)+1:]
 			tb := map[string]any{
 				"name":    tbName,
