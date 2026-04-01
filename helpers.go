@@ -25,32 +25,16 @@ func getSlice(obj map[string]any, key string) []any {
 	return nil
 }
 
-// getStringValue returns a string from a map, or "" if missing or nil.
-func getStringValue(m map[string]any, key string) string {
-	if m == nil {
-		return ""
-	}
-	if v, ok := m[key].(string); ok {
-		return v
-	}
-	return ""
-}
-
-// getInt64Value returns an int64 from a map, handling int/int64/float64 representations.
+// getInt64Value returns an int64 from a map, delegating to toInt64.
 func getInt64Value(m map[string]any, key string) (int64, bool) {
 	if m == nil {
 		return 0, false
 	}
-	switch v := m[key].(type) {
-	case int64:
-		return v, true
-	case int:
-		return int64(v), true
-	case float64:
-		return int64(v), true
-	default:
+	v, ok := m[key]
+	if !ok {
 		return 0, false
 	}
+	return toInt64(v), true
 }
 
 // stringDefault extracts a string from an unstructured map, returning fallback if empty.
@@ -66,6 +50,8 @@ func toInt64(v any) int64 {
 	switch n := v.(type) {
 	case int64:
 		return n
+	case int:
+		return int64(n)
 	case float64:
 		return int64(n)
 	default:

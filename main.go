@@ -143,7 +143,7 @@ func main() {
 
 	// Periodic re-sync to detect vk-cocoon status changes on pods.
 	go func() {
-		ticker := time.NewTicker(15 * time.Second)
+		ticker := time.NewTicker(60 * time.Second)
 		defer ticker.Stop()
 		for {
 			select {
@@ -217,14 +217,7 @@ func (c *controller) reconcileHibernate(ctx context.Context, ns, hibName, podNam
 
 	// Annotate pod to trigger vk-cocoon hibernate.
 	if pod.Annotations[annHibernate] != valTrue {
-		patch := fmt.Sprintf(`{"metadata":{"annotations":{"%s":"%s"}}}`, annHibernate, valTrue)
-		if _, err := c.clientset.CoreV1().Pods(ns).Patch(ctx, podName,
-			types.MergePatchType, []byte(patch), metav1.PatchOptions{}); err != nil {
-			klog.Errorf("hibernate %s/%s: patch pod: %v", ns, podName, err)
-			c.updateStatus(ctx, ns, hibName, "Failed", fmt.Sprintf("patch failed: %v", err), vmName)
-			return
-		}
-		klog.Infof("hibernate %s/%s: annotated pod, waiting for vk-cocoon", ns, podName)
+		c.patchPodAnnotation(ctx, ns, hibName, podName, annHibernate, valTrue, "hibernate")
 	}
 
 	if phase != "Hibernating" {
@@ -253,14 +246,7 @@ func (c *controller) reconcileWake(ctx context.Context, ns, hibName, podName, ph
 
 	// Remove hibernate annotation to trigger vk-cocoon wake.
 	if pod.Annotations[annHibernate] == valTrue {
-		patch := fmt.Sprintf(`{"metadata":{"annotations":{"%s":null}}}`, annHibernate)
-		if _, err := c.clientset.CoreV1().Pods(ns).Patch(ctx, podName,
-			types.MergePatchType, []byte(patch), metav1.PatchOptions{}); err != nil {
-			klog.Errorf("wake %s/%s: patch pod: %v", ns, podName, err)
-			c.updateStatus(ctx, ns, hibName, "Failed", fmt.Sprintf("patch failed: %v", err), vmName)
-			return
-		}
-		klog.Infof("wake %s/%s: removed hibernate annotation, waiting for vk-cocoon", ns, podName)
+		c.patchPodAnnotationNull(ctx, ns, hibName, podName, annHibernate, "wake")
 	}
 
 	if phase != "Waking" {
@@ -324,18 +310,22 @@ func (c *controller) updateStatus(ctx context.Context, ns, name, phase, message,
 		status["vmName"] = vmName
 	}
 
+	if err := c.patchStatus(ctx, hibGVR, ns, name, status); err != nil {
+		klog.Errorf("updateStatus %s/%s -> %s: %v", ns, name, phase, err)
+	}
+}
+
+// patchStatus patches the status subresource of any CRD.
+func (c *controller) patchStatus(ctx context.Context, gvr schema.GroupVersionResource, ns, name string, status any) error {
 	patch := map[string]any{"status": status}
 	data, err := json.Marshal(patch)
 	if err != nil {
-		klog.Errorf("updateStatus %s/%s: marshal: %v", ns, name, err)
-		return
+		return fmt.Errorf("marshal: %w", err)
 	}
 
-	_, err = c.dynClient.Resource(hibGVR).Namespace(ns).Patch(ctx, name,
+	_, err = c.dynClient.Resource(gvr).Namespace(ns).Patch(ctx, name,
 		types.MergePatchType, data, metav1.PatchOptions{}, "status")
-	if err != nil {
-		klog.Errorf("updateStatus %s/%s -> %s: %v", ns, name, phase, err)
-	}
+	return err
 }
 
 // ---------- Helpers ----------

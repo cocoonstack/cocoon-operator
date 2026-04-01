@@ -3,7 +3,6 @@ package main
 import (
 	"cmp"
 	"context"
-	"encoding/json"
 	"fmt"
 	"slices"
 	"strconv"
@@ -362,18 +361,11 @@ func buildToolboxPod(cs *unstructured.Unstructured, tb map[string]any) *corev1.P
 
 // updateCocoonSetStatus patches the status subresource of a CocoonSet.
 func (c *controller) updateCocoonSetStatus(ctx context.Context, ns, name string, status map[string]any) error {
-	patch := map[string]any{"status": status}
-	data, err := json.Marshal(patch)
-	if err != nil {
+	if err := c.patchStatus(ctx, csGVR, ns, name, status); err != nil {
+		klog.Errorf("cocoonset %s/%s: update status: %v", ns, name, err)
 		return err
 	}
-
-	_, err = c.dynClient.Resource(csGVR).Namespace(ns).Patch(ctx, name,
-		types.MergePatchType, data, metav1.PatchOptions{}, "status")
-	if err != nil {
-		klog.Errorf("cocoonset %s/%s: update status: %v", ns, name, err)
-	}
-	return err
+	return nil
 }
 
 // buildCocoonSetStatus builds a status map from current pod state.
@@ -580,12 +572,12 @@ func applyEnvFrom(container *corev1.Container, agentSpec map[string]any) {
 // applyStaticHints sets IP, VMID, and VNC port annotations for static toolboxes,
 // preferring runtime status hints over spec hints.
 func applyStaticHints(annotations map[string]string, tb, statusHints map[string]any) {
-	if ip := getStringValue(statusHints, "ip"); ip != "" {
+	if ip := stringDefault(statusHints, "ip", ""); ip != "" {
 		annotations[annIP] = ip
 	} else if ip, ok := tb["staticIP"].(string); ok && ip != "" {
 		annotations[annIP] = ip
 	}
-	if vmID := getStringValue(statusHints, "vmID"); vmID != "" {
+	if vmID := stringDefault(statusHints, "vmID", ""); vmID != "" {
 		annotations[annVMID] = vmID
 	} else if vmID, ok := tb["staticVMID"].(string); ok && vmID != "" {
 		annotations[annVMID] = vmID
