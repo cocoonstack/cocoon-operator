@@ -91,16 +91,16 @@ func main() {
 
 	config, err := k8sutil.LoadConfig()
 	if err != nil {
-		logger.Fatalf(ctx, err, "k8s config")
+		logger.Fatalf(ctx, err, "k8s config: %v", err)
 	}
 
 	clientset, err := kubernetes.NewForConfig(config)
 	if err != nil {
-		logger.Fatalf(ctx, err, "clientset")
+		logger.Fatalf(ctx, err, "clientset: %v", err)
 	}
 	dynClient, err := dynamic.NewForConfig(config)
 	if err != nil {
-		logger.Fatalf(ctx, err, "dynamic client")
+		logger.Fatalf(ctx, err, "dynamic client: %v", err)
 	}
 
 	ctx, cancel := signal.NotifyContext(ctx, syscall.SIGINT, syscall.SIGTERM)

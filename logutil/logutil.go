@@ -17,6 +17,6 @@ func Setup(ctx context.Context, envVar string) {
 		level = "info"
 	}
 	if err := log.SetupLog(ctx, &types.ServerLogConfig{Level: level}, ""); err != nil {
-		log.WithFunc("logutil.Setup").Fatalf(ctx, err, "setup log")
+		log.WithFunc("logutil.Setup").Fatalf(ctx, err, "setup log: %v", err)
 	}
 }
