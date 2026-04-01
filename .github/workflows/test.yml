@@ -23,8 +23,11 @@ jobs:
       - name: Download dependencies
         run: go mod download
 
-      - name: Vet
-        run: go vet ./...
+      - name: Vet (linux)
+        run: GOOS=linux go vet ./...
+
+      - name: Vet (darwin)
+        run: GOOS=darwin go vet ./...
 
       - name: Test with coverage
         run: go test -race -timeout 120s -count=1 -cover -coverprofile=coverage.out ./...

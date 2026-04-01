@@ -125,9 +125,11 @@ func TestToolboxConnType(t *testing.T) {
 	}
 
 	for _, tt := range tests {
-		if got := toolboxConnType(tt.osType, tt.hasVNCPort); got != tt.want {
-			t.Fatalf("%s: got %q want %q", tt.name, got, tt.want)
-		}
+		t.Run(tt.name, func(t *testing.T) {
+			if got := toolboxConnType(tt.osType, tt.hasVNCPort); got != tt.want {
+				t.Errorf("got %q, want %q", got, tt.want)
+			}
+		})
 	}
 }
 

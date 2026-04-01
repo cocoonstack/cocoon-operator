@@ -10,9 +10,9 @@ builds:
     env:
       - CGO_ENABLED=0
     ldflags:
-      - -X github.com/cocoonstack/cocoon-operator/version.REVISION={{.Commit}}
-      - -X github.com/cocoonstack/cocoon-operator/version.VERSION={{.Env.VERSION}}
-      - -X github.com/cocoonstack/cocoon-operator/version.BUILTAT={{.Date}}
+      - -X github.com/cocoonstack/cocoon-operator/pkg/version.REVISION={{.Commit}}
+      - -X github.com/cocoonstack/cocoon-operator/pkg/version.VERSION={{.Env.VERSION}}
+      - -X github.com/cocoonstack/cocoon-operator/pkg/version.BUILTAT={{.Date}}
     goos:
       - linux
     goarch:
@@ -25,9 +25,9 @@ builds:
       - CGO_ENABLED=0
     ldflags:
       - -s
-      - -X github.com/cocoonstack/cocoon-operator/version.REVISION={{.Commit}}
-      - -X github.com/cocoonstack/cocoon-operator/version.VERSION={{.Env.VERSION}}
-      - -X github.com/cocoonstack/cocoon-operator/version.BUILTAT={{.Date}}
+      - -X github.com/cocoonstack/cocoon-operator/pkg/version.REVISION={{.Commit}}
+      - -X github.com/cocoonstack/cocoon-operator/pkg/version.VERSION={{.Env.VERSION}}
+      - -X github.com/cocoonstack/cocoon-operator/pkg/version.BUILTAT={{.Date}}
     goos:
       - linux
     goarch:
