@@ -1,30 +1,41 @@
 # cocoon-operator
 
-`cocoon-operator` adds higher-level Kubernetes workflows on top of `vk-cocoon`.
+Kubernetes operator that manages VM-backed pod lifecycles through two CRDs:
 
-It provides two CRDs:
+- **Hibernation** -- suspend and wake a single VM-backed pod without deleting the pod object
+- **CocoonSet** -- manage a group of related VM pods (main agent, sub-agents forked from it, and optional toolbox VMs)
 
-- `Hibernation`: suspend and wake a single VM-backed pod without deleting the pod object
-- `CocoonSet`: manage a small group of related VM-backed pods, including a main VM, sub-VMs, and optional toolboxes
+## Why
 
-## Why It Exists
+Kubernetes controllers assume pods are replaceable. VM-backed workloads are not.
 
-Kubernetes controllers assume pods are replaceable. VM-backed workloads often are not.
+This operator keeps stateful VM workflows inside native Kubernetes APIs: scale out from a known main VM, keep stable slot identities, hibernate without letting ReplicaSets recreate the pod, and expose aggregate state through CRD status.
 
-This operator keeps stateful VM workflows inside native Kubernetes APIs:
+## Quick start
 
-- scale out from a known main VM
-- keep stable slot identities
-- hibernate without letting ReplicaSets recreate the pod
-- expose aggregate state through CRDs
+```bash
+# Install CRDs
+kubectl apply -f deploy/crd.yaml
+kubectl apply -f deploy/cocoonset-crd.yaml
 
-## Included Manifests
+# Deploy the operator
+kubectl apply -f deploy/deploy.yaml
+```
 
-- [deploy/crd.yaml](./deploy/crd.yaml): `Hibernation` CRD
-- [deploy/cocoonset-crd.yaml](./deploy/cocoonset-crd.yaml): `CocoonSet` CRD
-- [deploy/deploy.yaml](./deploy/deploy.yaml): controller deployment
+### Hibernate a pod
 
-## Example
+```yaml
+apiVersion: cocoon.cis/v1alpha1
+kind: Hibernation
+metadata:
+  name: hibernate-bot-1
+  namespace: prod
+spec:
+  podName: sre-agent-xxx
+  action: hibernate
+```
+
+### Manage a VM group
 
 ```yaml
 apiVersion: cocoon.cis/v1alpha1
@@ -38,14 +49,53 @@ spec:
     resources:
       cpu: "2"
       memory: "4Gi"
+  toolboxes:
+    - name: windows
+      os: windows
+      image: windows-server-2022
+      mode: static
 ```
 
-## Related Components
+## Build
 
-- `vk-cocoon` performs the actual VM lifecycle
-- `epoch` stores hibernated snapshots
-- `glance` surfaces `CocoonSet` and `Hibernation` state in the UI
-- `cocoon-webhook` is optional and improves sticky scheduling
+```bash
+make build          # build binary
+make test           # run tests
+make lint           # run golangci-lint
+make fmt            # format code
+make help           # show all targets
+```
+
+Or directly:
+
+```bash
+CGO_ENABLED=0 go build -o cocoon-operator .
+```
+
+## Architecture
+
+The operator runs a single binary with three informer loops:
+
+1. **Hibernation controller** -- watches `Hibernation` CRDs and annotates pods with `cocoon.cis/hibernate=true` to trigger vk-cocoon snapshot/restore
+2. **CocoonSet controller** -- watches `CocoonSet` CRDs, creates/deletes agent and toolbox pods, manages suspend/unsuspend, and reports aggregate status
+3. **Pod watcher** -- detects pod changes owned by CocoonSets and triggers reconciliation
+
+A periodic resync (15s) catches status transitions that informer events may miss.
+
+## Manifests
+
+| File | Description |
+|------|-------------|
+| `deploy/crd.yaml` | Hibernation CRD |
+| `deploy/cocoonset-crd.yaml` | CocoonSet CRD |
+| `deploy/deploy.yaml` | Operator Deployment + RBAC |
+
+## Related components
+
+- **vk-cocoon** -- virtual kubelet provider that performs the actual VM lifecycle
+- **epoch** -- snapshot storage backend for hibernated VMs
+- **glance** -- web UI that surfaces CocoonSet and Hibernation state
+- **cocoon-webhook** -- optional admission webhook for sticky scheduling
 
 ## License
 
