@@ -11,15 +11,45 @@ Kubernetes controllers assume pods are replaceable. VM-backed workloads are not.
 
 This operator keeps stateful VM workflows inside native Kubernetes APIs: scale out from a known main VM, keep stable slot identities, hibernate without letting ReplicaSets recreate the pod, and expose aggregate state through CRD status.
 
-## Quick start
+## Installation
+
+### Prerequisites
+
+- Kubernetes cluster (v1.26+)
+- `kubectl` configured to talk to the cluster
+- [vk-cocoon](https://github.com/cocoonstack/vk-cocoon) virtual kubelet provider running on at least one node
+
+### Steps
+
+1. Install the CRDs:
 
 ```bash
-# Install CRDs
 kubectl apply -f deploy/crd.yaml
 kubectl apply -f deploy/cocoonset-crd.yaml
+```
 
-# Deploy the operator
+2. Deploy the operator (includes RBAC and Deployment):
+
+```bash
 kubectl apply -f deploy/deploy.yaml
+```
+
+3. Verify the operator is running:
+
+```bash
+kubectl get pods -l app=cocoon-operator
+```
+
+### Building from source
+
+```bash
+make build          # produces ./cocoon-operator
+```
+
+Or with Docker:
+
+```bash
+docker build -t cocoon-operator .
 ```
 
 ### Hibernate a pod
