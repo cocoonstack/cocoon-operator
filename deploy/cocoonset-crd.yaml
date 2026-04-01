@@ -1,0 +1,178 @@
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: cocoonsets.cocoon.cis
+spec:
+  group: cocoon.cis
+  names:
+    kind: CocoonSet
+    listKind: CocoonSetList
+    plural: cocoonsets
+    singular: cocoonset
+    shortNames: [cs]
+  scope: Namespaced
+  versions:
+    - name: v1alpha1
+      served: true
+      storage: true
+      schema:
+        openAPIV3Schema:
+          type: object
+          properties:
+            spec:
+              type: object
+              properties:
+                agent:
+                  type: object
+                  required: [image]
+                  properties:
+                    image:
+                      type: string
+                      description: Epoch URL or snapshot name for the agent VM image.
+                    replicas:
+                      type: integer
+                      minimum: 0
+                      default: 0
+                      description: Number of sub-agents to fork from main (0 = main only).
+                    resources:
+                      type: object
+                      properties:
+                        cpu:
+                          type: string
+                        memory:
+                          type: string
+                    storage:
+                      type: string
+                      description: Disk size for the agent VM (e.g. "100G").
+                    envFrom:
+                      type: array
+                      items:
+                        type: object
+                        x-kubernetes-preserve-unknown-fields: true
+                      description: EnvFrom sources passed through to pod spec.
+                    serviceAccountName:
+                      type: string
+                      description: ServiceAccount for agent pods.
+                suspend:
+                  type: boolean
+                  default: false
+                  description: If true, hibernate all VMs in this CocoonSet.
+                nodeName:
+                  type: string
+                  description: Target virtual node name for all pods in this CocoonSet (for example "cocoon-pool-233").
+                snapshotPolicy:
+                  type: string
+                  enum: [always, main-only, never]
+                  default: always
+                  description: When to snapshot VMs on delete.
+                toolboxes:
+                  type: array
+                  items:
+                    type: object
+                    required: [name]
+                    properties:
+                      name:
+                        type: string
+                        description: Unique name for this toolbox within the CocoonSet.
+                      os:
+                        type: string
+                        default: linux
+                        description: "OS type: linux, android, windows."
+                      image:
+                        type: string
+                        description: Image for the toolbox VM.
+                      mode:
+                        type: string
+                        enum: [run, clone, static]
+                        default: run
+                        description: "VM lifecycle mode: run (fresh image boot), clone (from snapshot), static (pre-existing external VM)."
+                      staticIP:
+                        type: string
+                        description: Pre-assigned IP for static toolbox. Ignored unless mode=static.
+                      staticVMID:
+                        type: string
+                        description: Pre-existing VM ID for static toolbox. Ignored unless mode=static.
+                      vncPort:
+                        type: integer
+                        description: Host VNC port for static/QEMU toolbox. Ignored unless mode=static.
+                      resources:
+                        type: object
+                        properties:
+                          cpu:
+                            type: string
+                          memory:
+                            type: string
+                      storage:
+                        type: string
+                        description: Disk size for the toolbox VM.
+            status:
+              type: object
+              properties:
+                phase:
+                  type: string
+                  description: "Aggregate phase: Running, Scaling, Suspended, Failed."
+                readyAgents:
+                  type: integer
+                  description: Number of agent pods in Running phase.
+                desiredAgents:
+                  type: integer
+                  description: Total desired agent count (1 main + replicas).
+                agents:
+                  type: array
+                  items:
+                    type: object
+                    properties:
+                      slot:
+                        type: integer
+                      role:
+                        type: string
+                      podName:
+                        type: string
+                      vmName:
+                        type: string
+                      vmID:
+                        type: string
+                      ip:
+                        type: string
+                      phase:
+                        type: string
+                      snapshotRef:
+                        type: string
+                      forkedFrom:
+                        type: string
+                toolboxes:
+                  type: array
+                  items:
+                    type: object
+                    properties:
+                      name:
+                        type: string
+                      podName:
+                        type: string
+                      vmName:
+                        type: string
+                      vmID:
+                        type: string
+                      ip:
+                        type: string
+                      phase:
+                        type: string
+                      connType:
+                        type: string
+                      vncPort:
+                        type: integer
+      subresources:
+        status: {}
+      additionalPrinterColumns:
+        - name: Phase
+          type: string
+          jsonPath: .status.phase
+        - name: Ready
+          type: integer
+          jsonPath: .status.readyAgents
+        - name: Desired
+          type: integer
+          jsonPath: .status.desiredAgents
+        - name: Age
+          type: date
+          jsonPath: .metadata.creationTimestamp
