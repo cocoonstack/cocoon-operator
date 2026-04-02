@@ -20,10 +20,11 @@ jobs:
         with:
           go-version-file: 'go.mod'
 
-      - name: golangci-lint
-        uses: golangci/golangci-lint-action@v8
-        with:
-          version: v2.9.0
+      - name: Download dependencies
+        run: go mod download
 
-      - name: Check formatting (gofumpt + goimports)
-        run: golangci-lint fmt --diff
+      - name: Lint
+        run: make lint
+
+      - name: Check formatting
+        run: make fmt-check

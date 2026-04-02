@@ -1,6 +1,8 @@
 .PHONY: all build test lint vet fmt fmt-check deps clean coverage cloc help
 
 REPO_PATH := github.com/cocoonstack/cocoon-operator
+BINARY_NAME := cocoon-operator
+GOIMPORTS_LOCAL_PREFIXES := $(REPO_PATH)
 REVISION := $(shell git rev-parse HEAD || echo unknown)
 BUILTAT := $(shell date +%Y-%m-%dT%H:%M:%S)
 VERSION := $(shell git describe --tags $(shell git rev-list --tags --max-count=1) 2>/dev/null || echo dev)
@@ -9,7 +11,14 @@ GO_LDFLAGS ?= -X $(REPO_PATH)/version.REVISION=$(REVISION) \
               -X $(REPO_PATH)/version.VERSION=$(VERSION)
 
 ifneq ($(KEEP_SYMBOL), 1)
-	GO_LDFLAGS += -s
+GO_LDFLAGS += -s
+endif
+
+BUILD_OUT ?= $(BINARY_NAME)
+ifneq ($(GOOS),)
+ifneq ($(GOARCH),)
+BUILD_OUT := $(BINARY_NAME)-$(GOOS)-$(GOARCH)
+endif
 endif
 
 ## Location to install dependencies to
@@ -53,7 +62,7 @@ deps: ## Tidy Go modules
 # --- Build ---
 
 build: ## Build cocoon-operator binary
-	CGO_ENABLED=0 go build -ldflags "$(GO_LDFLAGS)" -o cocoon-operator .
+	CGO_ENABLED=0 go build -ldflags "$(GO_LDFLAGS)" -o $(BUILD_OUT) .
 
 # --- Testing ---
 
@@ -67,17 +76,15 @@ coverage: test ## Generate and display coverage report
 
 # --- Code quality ---
 
-vet: ## Run go vet (linux + darwin)
-	GOOS=linux go vet ./...
-	GOOS=darwin go vet ./...
+vet: ## Run go vet
+	go vet ./...
 
-lint: golangci-lint ## Run golangci-lint (linux + darwin)
-	GOOS=linux $(GOLANGCILINT) run
-	GOOS=darwin $(GOLANGCILINT) run
+lint: golangci-lint ## Run golangci-lint
+	$(GOLANGCILINT) run ./...
 
 fmt: gofumpt goimports ## Format code with gofumpt and goimports
 	$(GOFMT) -l -w .
-	$(GOIMPORTS) -l -w --local 'github.com/cocoonstack/cocoon-operator' .
+	$(GOIMPORTS) -l -w --local '$(GOIMPORTS_LOCAL_PREFIXES)' .
 
 fmt-check: gofumpt goimports ## Check formatting (fails if files need formatting)
 	@test -z "$$($(GOFMT) -l .)" || { echo "Files need formatting (gofumpt):"; $(GOFMT) -l .; exit 1; }
@@ -86,7 +93,7 @@ fmt-check: gofumpt goimports ## Check formatting (fails if files need formatting
 # --- Maintenance ---
 
 clean: ## Remove build artifacts, coverage files, and test cache
-	rm -f cocoon-operator
+	rm -f $(BINARY_NAME) $(BINARY_NAME)-linux-* $(BINARY_NAME)-darwin-*
 	rm -rf bin/ dist/
 	rm -f coverage.out coverage.html coverage.txt
 	go clean -testcache
