@@ -11,9 +11,9 @@ import (
 
 type hibernation struct {
 	metav1.TypeMeta   `json:",inline"`
-	metav1.ObjectMeta `json:"metadata,omitempty"`
-	Spec              hibernationSpec   `json:"spec,omitempty"`
-	Status            hibernationStatus `json:"status,omitempty"`
+	metav1.ObjectMeta `json:"metadata"`
+	Spec              hibernationSpec   `json:"spec"`
+	Status            hibernationStatus `json:"status"`
 }
 
 type hibernationSpec struct {
@@ -30,16 +30,16 @@ type hibernationStatus struct {
 
 type cocoonSet struct {
 	metav1.TypeMeta   `json:",inline"`
-	metav1.ObjectMeta `json:"metadata,omitempty"`
-	Spec              cocoonSetSpec   `json:"spec,omitempty"`
-	Status            cocoonSetStatus `json:"status,omitempty"`
+	metav1.ObjectMeta `json:"metadata"`
+	Spec              cocoonSetSpec   `json:"spec"`
+	Status            cocoonSetStatus `json:"status"`
 }
 
 type cocoonSetSpec struct {
 	Suspend        bool                `json:"suspend,omitempty"`
 	SnapshotPolicy string              `json:"snapshotPolicy,omitempty"`
 	NodeName       string              `json:"nodeName,omitempty"`
-	Agent          cocoonSetAgentSpec  `json:"agent,omitempty"`
+	Agent          cocoonSetAgentSpec  `json:"agent"`
 	Toolboxes      []cocoonToolboxSpec `json:"toolboxes,omitempty"`
 }
 
@@ -48,7 +48,7 @@ type cocoonSetAgentSpec struct {
 	Image              string              `json:"image,omitempty"`
 	Storage            string              `json:"storage,omitempty"`
 	ServiceAccountName string              `json:"serviceAccountName,omitempty"`
-	Resources          resourceHints       `json:"resources,omitempty"`
+	Resources          resourceHints       `json:"resources"`
 	EnvFrom            []envFromSourceSpec `json:"envFrom,omitempty"`
 }
 
@@ -61,7 +61,7 @@ type cocoonToolboxSpec struct {
 	StaticIP   string        `json:"staticIP,omitempty"`
 	StaticVMID string        `json:"staticVMID,omitempty"`
 	VNCPort    int64         `json:"vncPort,omitempty"`
-	Resources  resourceHints `json:"resources,omitempty"`
+	Resources  resourceHints `json:"resources"`
 }
 
 type resourceHints struct {

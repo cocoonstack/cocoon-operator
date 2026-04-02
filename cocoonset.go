@@ -8,12 +8,13 @@ import (
 	"slices"
 	"strconv"
 
-	"github.com/cocoonstack/cocoon-operator/cocoonmeta"
 	"github.com/projecteru2/core/log"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
+
+	"github.com/cocoonstack/cocoon-operator/cocoonmeta"
 )
 
 // csGVR is the GroupVersionResource for CocoonSet CRDs.
@@ -549,12 +550,4 @@ func applyStaticHints(annotations map[string]string, tb cocoonToolboxSpec, statu
 
 func toolboxConnType(osType string, hasVNCPort bool) string {
 	return cocoonmeta.ConnectionType(osType, hasVNCPort)
-}
-
-func getTargetNodeName(spec cocoonSetSpec) string {
-	return spec.targetNodeName()
-}
-
-func lookupToolboxRuntimeHints(cs *cocoonSet, tbName string) *cocoonSetToolboxStatus {
-	return cs.Status.toolboxRuntimeHints(tbName)
 }
