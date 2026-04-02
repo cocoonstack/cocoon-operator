@@ -250,7 +250,7 @@ func newManagedPod(cs *cocoonSet, podName, role, image, nodeName string, annotat
 		Spec: corev1.PodSpec{
 			NodeName:                      nodeName,
 			Tolerations:                   vkTolerations(),
-			TerminationGracePeriodSeconds: new(int64), // 0 — VM is already destroyed by provider.DeletePod
+			TerminationGracePeriodSeconds: int64Ptr(1), // minimal — VM is destroyed by provider.DeletePod; >0 needed so VK calls DeletePod instead of fast-path
 			Containers:                    []corev1.Container{{Name: "vm", Image: image}},
 		},
 	}
@@ -555,3 +555,5 @@ func applyStaticHints(annotations map[string]string, tb cocoonToolboxSpec, statu
 func toolboxConnType(osType string, hasVNCPort bool) string {
 	return meta.ConnectionType(osType, hasVNCPort)
 }
+
+func int64Ptr(v int64) *int64 { return &v }
