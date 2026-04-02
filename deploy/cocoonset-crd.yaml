@@ -29,6 +29,19 @@ spec:
                     image:
                       type: string
                       description: Epoch URL or snapshot name for the agent VM image.
+                    mode:
+                      type: string
+                      enum: [run, clone]
+                      default: clone
+                      description: "VM lifecycle mode: run (fresh image boot), clone (from snapshot). Default: clone."
+                    os:
+                      type: string
+                      enum: [linux, windows]
+                      default: linux
+                      description: "OS type: linux or windows. Default: linux."
+                    network:
+                      type: string
+                      description: "CNI conflist name (e.g. dnsmasq-dhcp). Empty = cocoon default."
                     replicas:
                       type: integer
                       minimum: 0

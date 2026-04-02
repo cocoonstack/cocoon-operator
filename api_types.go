@@ -44,10 +44,21 @@ type cocoonSetSpec struct {
 type cocoonSetAgentSpec struct {
 	Replicas           int64               `json:"replicas,omitempty"`
 	Image              string              `json:"image,omitempty"`
+	Mode               string              `json:"mode,omitempty"`
+	OS                 string              `json:"os,omitempty"`
+	Network            string              `json:"network,omitempty"`
 	Storage            string              `json:"storage,omitempty"`
 	ServiceAccountName string              `json:"serviceAccountName,omitempty"`
 	Resources          resourceHints       `json:"resources"`
 	EnvFrom            []envFromSourceSpec `json:"envFrom,omitempty"`
+}
+
+func (a cocoonSetAgentSpec) osType() string {
+	return cmp.Or(a.OS, "linux")
+}
+
+func (a cocoonSetAgentSpec) modeType() string {
+	return cmp.Or(a.Mode, "clone")
 }
 
 type cocoonToolboxSpec struct {

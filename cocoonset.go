@@ -276,12 +276,13 @@ func buildAgentPod(ctx context.Context, cs *cocoonSet, slot int, forkFrom string
 	}
 
 	annotations := managedPodAnnotations(vmName, map[string]string{
-		meta.AnnotationMode:           "clone",
+		meta.AnnotationMode:           agentSpec.modeType(),
 		meta.AnnotationImage:          image,
 		meta.AnnotationManaged:        valTrue,
-		meta.AnnotationOS:             "linux",
+		meta.AnnotationOS:             agentSpec.osType(),
 		meta.AnnotationStorage:        storage,
 		meta.AnnotationSnapshotPolicy: snapshotPolicy,
+		"cocoon.cis/network":          agentSpec.Network,
 	})
 	if forkFrom != "" && slot > 0 {
 		annotations[meta.AnnotationForkFrom] = forkFrom
@@ -289,6 +290,14 @@ func buildAgentPod(ctx context.Context, cs *cocoonSet, slot int, forkFrom string
 
 	pod := newManagedPod(cs, podName, role, image, nodeName, annotations)
 	pod.Labels[meta.LabelSlot] = strconv.Itoa(slot)
+
+	if agentSpec.osType() == "windows" {
+		pod.Spec.Containers[0].Ports = []corev1.ContainerPort{{
+			Name:          "rdp",
+			ContainerPort: 3389,
+			Protocol:      corev1.ProtocolTCP,
+		}}
+	}
 
 	applyResources(ctx, &pod.Spec.Containers[0], agentSpec.Resources)
 	applyEnvFrom(&pod.Spec.Containers[0], agentSpec.EnvFrom)
