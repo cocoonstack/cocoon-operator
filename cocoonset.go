@@ -102,8 +102,8 @@ func (c *controller) reconcileCocoonSet(ctx context.Context, ns, name string) er
 				c.patchPodAnnotation(ctx, ns, name, pod.Name, meta.AnnotationHibernate, valTrue, "suspended")
 			}
 		}
-		if err := c.updateCocoonSetStatus(ctx, ns, name, buildCocoonSetStatus(phaseSuspended, ownedPods, name, desired)); err != nil {
-			logger.Errorf(ctx, err, "update suspended status %s/%s", ns, name)
+		if statusErr := c.updateCocoonSetStatus(ctx, ns, name, buildCocoonSetStatus(phaseSuspended, ownedPods, name, desired)); statusErr != nil {
+			logger.Errorf(ctx, statusErr, "update suspended status %s/%s", ns, name)
 		}
 		return nil
 	}
@@ -114,6 +114,26 @@ func (c *controller) reconcileCocoonSet(ctx context.Context, ns, name string) er
 		if pod.Annotations[meta.AnnotationHibernate] == valTrue {
 			c.patchPodAnnotation(ctx, ns, name, pod.Name, meta.AnnotationHibernate, "", "unsuspended")
 		}
+	}
+
+	// Delete terminal pods (Succeeded/Failed) so they can be recreated.
+	hasTerminal := false
+	for i := range ownedPods {
+		pod := &ownedPods[i]
+		if pod.Status.Phase == corev1.PodSucceeded || pod.Status.Phase == corev1.PodFailed {
+			logger.Infof(ctx, "deleting terminal pod %s/%s phase=%s", ns, pod.Name, pod.Status.Phase)
+			if delErr := c.clientset.CoreV1().Pods(ns).Delete(ctx, pod.Name, metav1.DeleteOptions{}); delErr != nil {
+				logger.Warnf(ctx, "delete terminal pod %s/%s: %v", ns, pod.Name, delErr)
+			}
+			hasTerminal = true
+		}
+	}
+	if hasTerminal {
+		// Re-classify after deleting terminal pods.
+		if ownedPods, err = c.listOwnedPods(ctx, ns, name); err != nil {
+			return err
+		}
+		cp = classifyPods(ownedPods, name)
 	}
 
 	// Ensure main agent (slot-0).
