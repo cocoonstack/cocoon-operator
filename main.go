@@ -321,8 +321,7 @@ func (c *controller) updateStatus(ctx context.Context, ns, name, phase, message,
 
 // patchStatus patches the status subresource of any CRD.
 func (c *controller) patchStatus(ctx context.Context, gvr schema.GroupVersionResource, ns, name string, status any) error {
-	patch := map[string]any{"status": status}
-	data, err := json.Marshal(patch)
+	data, err := json.Marshal(map[string]any{"status": status})
 	if err != nil {
 		return fmt.Errorf("marshal: %w", err)
 	}

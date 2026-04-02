@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"reflect"
 	"testing"
 
 	corev1 "k8s.io/api/core/v1"
@@ -226,5 +227,71 @@ func TestBuildToolboxPodUsesConfiguredNodeName(t *testing.T) {
 	pod := buildToolboxPod(ctx, cs, tb)
 	if got := pod.Spec.NodeName; got != "cocoon-pool-233" {
 		t.Fatalf("toolbox node name mismatch: got %q", got)
+	}
+}
+
+func TestManagedPodAnnotationsSkipsEmptyValues(t *testing.T) {
+	got := managedPodAnnotations("vk-dev-demo-0", map[string]string{
+		annMode:    "clone",
+		annImage:   "",
+		annStorage: "10G",
+	})
+
+	want := map[string]string{
+		annVMName:  "vk-dev-demo-0",
+		annMode:    "clone",
+		annStorage: "10G",
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("managedPodAnnotations mismatch:\nwant: %#v\ngot:  %#v", want, got)
+	}
+}
+
+func TestNewManagedPodSharesCommonSkeleton(t *testing.T) {
+	cs := &unstructured.Unstructured{}
+	cs.SetName("demo")
+	cs.SetNamespace("dev")
+	cs.SetUID("12345")
+
+	annotations := managedPodAnnotations("vk-dev-demo-0", map[string]string{
+		annMode: "clone",
+	})
+	pod := newManagedPod(cs, "demo-0", roleMain, "demo-image", "cocoon-pool-233", annotations)
+
+	if got := pod.Namespace; got != "dev" {
+		t.Fatalf("namespace mismatch: got %q", got)
+	}
+	if got := pod.Spec.NodeName; got != "cocoon-pool-233" {
+		t.Fatalf("node name mismatch: got %q", got)
+	}
+	if got := pod.Labels[labelCocoonSet]; got != "demo" {
+		t.Fatalf("cocoonset label mismatch: got %q", got)
+	}
+	if got := pod.Labels[labelRole]; got != roleMain {
+		t.Fatalf("role label mismatch: got %q", got)
+	}
+	if got := pod.Labels["app"]; got != "demo" {
+		t.Fatalf("app label mismatch: got %q", got)
+	}
+	if got := pod.Annotations[annVMName]; got != "vk-dev-demo-0" {
+		t.Fatalf("vm name annotation mismatch: got %q", got)
+	}
+	if got := pod.Spec.Containers; len(got) != 1 || got[0].Name != "vm" || got[0].Image != "demo-image" {
+		t.Fatalf("container skeleton mismatch: %#v", got)
+	}
+	if got := pod.Spec.Tolerations; len(got) != 1 || got[0].Key != "virtual-kubelet.io/provider" {
+		t.Fatalf("tolerations mismatch: %#v", got)
+	}
+	if len(pod.OwnerReferences) != 1 || pod.OwnerReferences[0].Kind != kindCocoonSet || pod.OwnerReferences[0].Name != "demo" {
+		t.Fatalf("owner references mismatch: %#v", pod.OwnerReferences)
+	}
+}
+
+func TestAnnotationPatchValue(t *testing.T) {
+	if got := annotationPatchValue("value"); got != "value" {
+		t.Fatalf("expected value, got %#v", got)
+	}
+	if got := annotationPatchValue(""); got != nil {
+		t.Fatalf("expected nil for empty value, got %#v", got)
 	}
 }

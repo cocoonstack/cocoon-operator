@@ -3,6 +3,7 @@ package main
 import (
 	"cmp"
 	"context"
+	"encoding/json"
 	"fmt"
 	"slices"
 	"strconv"
@@ -237,6 +238,44 @@ func (c *controller) ensureToolboxes(ctx context.Context, cs *unstructured.Unstr
 
 // ---------- Pod builders ----------
 
+func managedPodAnnotations(vmName string, values map[string]string) map[string]string {
+	annotations := map[string]string{
+		annVMName: vmName,
+	}
+	for key, value := range values {
+		if value == "" {
+			continue
+		}
+		annotations[key] = value
+	}
+	return annotations
+}
+
+func managedPodLabels(csName, role string) map[string]string {
+	return map[string]string{
+		labelCocoonSet: csName,
+		labelRole:      role,
+		"app":          csName,
+	}
+}
+
+func newManagedPod(cs *unstructured.Unstructured, podName, role, image, nodeName string, annotations map[string]string) *corev1.Pod {
+	return &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:            podName,
+			Namespace:       cs.GetNamespace(),
+			Labels:          managedPodLabels(cs.GetName(), role),
+			Annotations:     annotations,
+			OwnerReferences: ownerRef(cs),
+		},
+		Spec: corev1.PodSpec{
+			NodeName:    nodeName,
+			Tolerations: vkTolerations(),
+			Containers:  []corev1.Container{{Name: "vm", Image: image}},
+		},
+	}
+}
+
 // buildAgentPod creates a Pod for an agent slot.
 // If forkFrom is non-empty, it sets the fork-from annotation for sub-agents.
 func buildAgentPod(ctx context.Context, cs *unstructured.Unstructured, slot int, forkFrom string) *corev1.Pod {
@@ -258,44 +297,20 @@ func buildAgentPod(ctx context.Context, cs *unstructured.Unstructured, slot int,
 		role = roleSubAgent
 	}
 
-	annotations := map[string]string{
-		annVMName:         vmName,
+	annotations := managedPodAnnotations(vmName, map[string]string{
 		annMode:           "clone",
 		annImage:          image,
 		annManaged:        valTrue,
 		annOS:             "linux",
+		annStorage:        storage,
 		annSnapshotPolicy: snapshotPolicy,
-	}
-	if storage != "" {
-		annotations[annStorage] = storage
-	}
+	})
 	if forkFrom != "" && slot > 0 {
 		annotations[annForkFrom] = forkFrom
 	}
 
-	labels := map[string]string{
-		labelCocoonSet: name,
-		labelRole:      role,
-		labelSlot:      strconv.Itoa(slot),
-		"app":          name,
-	}
-
-	pod := &corev1.Pod{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:            podName,
-			Namespace:       ns,
-			Labels:          labels,
-			Annotations:     annotations,
-			OwnerReferences: ownerRef(cs),
-		},
-		Spec: corev1.PodSpec{
-			NodeName:    nodeName,
-			Tolerations: vkTolerations(),
-			Containers: []corev1.Container{
-				{Name: "vm", Image: image},
-			},
-		},
-	}
+	pod := newManagedPod(cs, podName, role, image, nodeName, annotations)
+	pod.Labels[labelSlot] = strconv.Itoa(slot)
 
 	applyResources(ctx, &pod.Spec.Containers[0], getMap(agentSpec, "resources"))
 	applyEnvFrom(&pod.Spec.Containers[0], agentSpec)
@@ -325,46 +340,20 @@ func buildToolboxPod(ctx context.Context, cs *unstructured.Unstructured, tb map[
 	podName := fmt.Sprintf("%s-%s", csName, tbName)
 	vmName := fmt.Sprintf("vk-%s-%s", ns, tbName)
 
-	annotations := map[string]string{
-		annVMName:         vmName,
+	annotations := managedPodAnnotations(vmName, map[string]string{
 		annMode:           tbMode,
 		annManaged:        valTrue,
 		annOS:             tbOS,
+		annImage:          tbImage,
+		annStorage:        tbStorage,
 		annSnapshotPolicy: snapshotPolicy,
-	}
-	if tbImage != "" {
-		annotations[annImage] = tbImage
-	}
-	if tbStorage != "" {
-		annotations[annStorage] = tbStorage
-	}
+	})
 
 	if tbMode == "static" {
 		applyStaticHints(annotations, tb, statusHints)
 	}
 
-	labels := map[string]string{
-		labelCocoonSet: csName,
-		labelRole:      roleToolbox,
-		"app":          csName,
-	}
-
-	pod := &corev1.Pod{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:            podName,
-			Namespace:       ns,
-			Labels:          labels,
-			Annotations:     annotations,
-			OwnerReferences: ownerRef(cs),
-		},
-		Spec: corev1.PodSpec{
-			NodeName:    nodeName,
-			Tolerations: vkTolerations(),
-			Containers: []corev1.Container{
-				{Name: "vm", Image: tbImage},
-			},
-		},
-	}
+	pod := newManagedPod(cs, podName, roleToolbox, tbImage, nodeName, annotations)
 
 	applyResources(ctx, &pod.Spec.Containers[0], getMap(tb, "resources"))
 
@@ -477,18 +466,30 @@ func buildCocoonSetStatus(phase string, pods []corev1.Pod, csName string, desire
 // Pass a non-empty value to set, or an empty string to remove the annotation.
 func (c *controller) patchPodAnnotation(ctx context.Context, ns, csName, podName, key, value, verb string) { //nolint:unparam // key is parameterized for reuse across annotation types
 	logger := log.WithFunc("controller.patchPodAnnotation")
-	var patch string
-	if value != "" {
-		patch = fmt.Sprintf(`{"metadata":{"annotations":{"%s":"%s"}}}`, key, value)
-	} else {
-		patch = fmt.Sprintf(`{"metadata":{"annotations":{"%s":null}}}`, key)
+	patch, err := json.Marshal(map[string]any{
+		"metadata": map[string]any{
+			"annotations": map[string]any{
+				key: annotationPatchValue(value),
+			},
+		},
+	})
+	if err != nil {
+		logger.Errorf(ctx, err, "cocoonset %s/%s: marshal patch for pod %s", ns, csName, podName)
+		return
 	}
 	if _, err := c.clientset.CoreV1().Pods(ns).Patch(ctx, podName,
-		types.MergePatchType, []byte(patch), metav1.PatchOptions{}); err != nil {
+		types.MergePatchType, patch, metav1.PatchOptions{}); err != nil {
 		logger.Errorf(ctx, err, "cocoonset %s/%s: %s pod %s", ns, csName, verb, podName)
 	} else {
 		logger.Infof(ctx, "cocoonset %s/%s: %s pod %s", ns, csName, verb, podName)
 	}
+}
+
+func annotationPatchValue(value string) any {
+	if value == "" {
+		return nil
+	}
+	return value
 }
 
 // listOwnedPods returns pods with the cocoon.cis/cocoonset label matching the given name.
