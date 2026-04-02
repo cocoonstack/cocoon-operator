@@ -34,6 +34,27 @@ func TestInferRoleFromVMName(t *testing.T) {
 	}
 }
 
+func TestConnectionType(t *testing.T) {
+	cases := []struct {
+		name       string
+		osType     string
+		hasVNCPort bool
+		want       string
+	}{
+		{name: "vnc wins", osType: "windows", hasVNCPort: true, want: "vnc"},
+		{name: "windows", osType: "windows", want: "rdp"},
+		{name: "android", osType: "android", want: "adb"},
+		{name: "default", osType: "linux", want: "ssh"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := ConnectionType(tc.osType, tc.hasVNCPort); got != tc.want {
+				t.Fatalf("connection type mismatch: got %q want %q", got, tc.want)
+			}
+		})
+	}
+}
+
 func TestDeploymentNameFromOwnerRefs(t *testing.T) {
 	ownerRefs := []metav1.OwnerReference{
 		{Kind: "ReplicaSet", Name: "demo-7b7c9d9d5f"},

@@ -95,3 +95,16 @@ func InferRoleFromVMName(vmName string) string {
 	}
 	return RoleSubAgent
 }
+
+func ConnectionType(osType string, hasVNCPort bool) string {
+	switch {
+	case hasVNCPort:
+		return "vnc"
+	case osType == "android":
+		return "adb"
+	case osType == "windows":
+		return "rdp"
+	default:
+		return "ssh"
+	}
+}

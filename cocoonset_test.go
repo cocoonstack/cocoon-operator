@@ -8,22 +8,21 @@ import (
 	"github.com/cocoonstack/cocoon-operator/cocoonmeta"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 )
 
 func TestBuildToolboxPodIgnoresStaticHintsForManagedWindows(t *testing.T) {
-	cs := &unstructured.Unstructured{}
-	cs.SetName("demo")
-	cs.SetNamespace("dev")
+	cs := &cocoonSet{
+		ObjectMeta: metav1.ObjectMeta{Name: "demo", Namespace: "dev"},
+	}
 
-	tb := map[string]any{
-		"name":       "windows",
-		"os":         "windows",
-		"mode":       "run",
-		"image":      "win1125h2",
-		"staticIP":   "10.88.100.68",
-		"staticVMID": "qemu-windows",
-		"vncPort":    int64(5901),
+	tb := cocoonToolboxSpec{
+		Name:       "windows",
+		OS:         "windows",
+		Mode:       "run",
+		Image:      "win1125h2",
+		StaticIP:   "10.88.100.68",
+		StaticVMID: "qemu-windows",
+		VNCPort:    5901,
 	}
 
 	ctx := context.Background()
@@ -46,18 +45,18 @@ func TestBuildToolboxPodIgnoresStaticHintsForManagedWindows(t *testing.T) {
 }
 
 func TestBuildToolboxPodKeepsStaticHintsForStaticMode(t *testing.T) {
-	cs := &unstructured.Unstructured{}
-	cs.SetName("demo")
-	cs.SetNamespace("dev")
+	cs := &cocoonSet{
+		ObjectMeta: metav1.ObjectMeta{Name: "demo", Namespace: "dev"},
+	}
 
-	tb := map[string]any{
-		"name":       "windows",
-		"os":         "windows",
-		"mode":       "static",
-		"image":      "windows-server-2022",
-		"staticIP":   "10.88.100.68",
-		"staticVMID": "qemu-windows",
-		"vncPort":    int64(5901),
+	tb := cocoonToolboxSpec{
+		Name:       "windows",
+		OS:         "windows",
+		Mode:       "static",
+		Image:      "windows-server-2022",
+		StaticIP:   "10.88.100.68",
+		StaticVMID: "qemu-windows",
+		VNCPort:    5901,
 	}
 
 	ctx := context.Background()
@@ -74,29 +73,26 @@ func TestBuildToolboxPodKeepsStaticHintsForStaticMode(t *testing.T) {
 }
 
 func TestBuildToolboxPodPrefersRuntimeStatusHintsForStaticMode(t *testing.T) {
-	cs := &unstructured.Unstructured{Object: map[string]any{
-		"status": map[string]any{
-			"toolboxes": []any{
-				map[string]any{
-					"name":    "windows",
-					"ip":      "10.88.100.85",
-					"vmID":    "qemu-windows",
-					"vncPort": int64(5902),
-				},
-			},
+	cs := &cocoonSet{
+		ObjectMeta: metav1.ObjectMeta{Name: "demo", Namespace: "dev"},
+		Status: cocoonSetStatus{
+			Toolboxes: []cocoonSetToolboxStatus{{
+				Name:    "windows",
+				IP:      "10.88.100.85",
+				VMID:    "qemu-windows",
+				VNCPort: 5902,
+			}},
 		},
-	}}
-	cs.SetName("demo")
-	cs.SetNamespace("dev")
+	}
 
-	tb := map[string]any{
-		"name":       "windows",
-		"os":         "windows",
-		"mode":       "static",
-		"image":      "windows-server-2022",
-		"staticIP":   "10.88.100.68",
-		"staticVMID": "wrong-vmid",
-		"vncPort":    int64(5901),
+	tb := cocoonToolboxSpec{
+		Name:       "windows",
+		OS:         "windows",
+		Mode:       "static",
+		Image:      "windows-server-2022",
+		StaticIP:   "10.88.100.68",
+		StaticVMID: "wrong-vmid",
+		VNCPort:    5901,
 	}
 
 	ctx := context.Background()
@@ -172,32 +168,24 @@ func TestBuildCocoonSetStatusIncludesToolboxVMID(t *testing.T) {
 	}
 
 	status := buildCocoonSetStatus("Running", kubePods, "demo", 1)
-	toolboxes, ok := status["toolboxes"].([]any)
-	if !ok || len(toolboxes) != 1 {
-		t.Fatalf("unexpected toolboxes status: %#v", status["toolboxes"])
+	if len(status.Toolboxes) != 1 {
+		t.Fatalf("unexpected toolboxes status: %#v", status.Toolboxes)
 	}
-	tb, ok := toolboxes[0].(map[string]any)
-	if !ok {
-		t.Fatalf("unexpected toolbox entry: %#v", toolboxes[0])
-	}
-	if got := tb["vmID"]; got != "qemu-windows" {
+	if got := status.Toolboxes[0].VMID; got != "qemu-windows" {
 		t.Fatalf("toolbox vmID mismatch: got %#v", got)
 	}
 }
 
 func TestBuildAgentPodUsesConfiguredNodeName(t *testing.T) {
-	cs := &unstructured.Unstructured{
-		Object: map[string]any{
-			"spec": map[string]any{
-				"nodeName": "cocoon-pool-233",
-				"agent": map[string]any{
-					"image": "https://registry.example.com/demo-linux-base",
-				},
+	cs := &cocoonSet{
+		ObjectMeta: metav1.ObjectMeta{Name: "demo", Namespace: "dev"},
+		Spec: cocoonSetSpec{
+			NodeName: "cocoon-pool-233",
+			Agent: cocoonSetAgentSpec{
+				Image: "https://registry.example.com/demo-linux-base",
 			},
 		},
 	}
-	cs.SetName("demo")
-	cs.SetNamespace("dev")
 
 	ctx := context.Background()
 	pod := buildAgentPod(ctx, cs, 0, "")
@@ -207,21 +195,18 @@ func TestBuildAgentPodUsesConfiguredNodeName(t *testing.T) {
 }
 
 func TestBuildToolboxPodUsesConfiguredNodeName(t *testing.T) {
-	cs := &unstructured.Unstructured{
-		Object: map[string]any{
-			"spec": map[string]any{
-				"nodeName": "cocoon-pool-233",
-			},
+	cs := &cocoonSet{
+		ObjectMeta: metav1.ObjectMeta{Name: "demo", Namespace: "dev"},
+		Spec: cocoonSetSpec{
+			NodeName: "cocoon-pool-233",
 		},
 	}
-	cs.SetName("demo")
-	cs.SetNamespace("dev")
 
-	tb := map[string]any{
-		"name":  "windows",
-		"os":    "windows",
-		"mode":  "run",
-		"image": "https://registry.example.com/win11-base",
+	tb := cocoonToolboxSpec{
+		Name:  "windows",
+		OS:    "windows",
+		Mode:  "run",
+		Image: "https://registry.example.com/win11-base",
 	}
 
 	ctx := context.Background()
@@ -249,10 +234,9 @@ func TestManagedPodAnnotationsSkipsEmptyValues(t *testing.T) {
 }
 
 func TestNewManagedPodSharesCommonSkeleton(t *testing.T) {
-	cs := &unstructured.Unstructured{}
-	cs.SetName("demo")
-	cs.SetNamespace("dev")
-	cs.SetUID("12345")
+	cs := &cocoonSet{
+		ObjectMeta: metav1.ObjectMeta{Name: "demo", Namespace: "dev", UID: "12345"},
+	}
 
 	annotations := managedPodAnnotations("vk-dev-demo-0", map[string]string{
 		cocoonmeta.AnnotationMode: "clone",
@@ -280,7 +264,7 @@ func TestNewManagedPodSharesCommonSkeleton(t *testing.T) {
 	if got := pod.Spec.Containers; len(got) != 1 || got[0].Name != "vm" || got[0].Image != "demo-image" {
 		t.Fatalf("container skeleton mismatch: %#v", got)
 	}
-	if got := pod.Spec.Tolerations; len(got) != 1 || got[0].Key != "virtual-kubelet.io/provider" {
+	if got := pod.Spec.Tolerations; len(got) != 1 || got[0].Key != cocoonmeta.TolerationKey {
 		t.Fatalf("tolerations mismatch: %#v", got)
 	}
 	if len(pod.OwnerReferences) != 1 || pod.OwnerReferences[0].Kind != cocoonmeta.KindCocoonSet || pod.OwnerReferences[0].Name != "demo" {

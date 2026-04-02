@@ -174,14 +174,17 @@ func (c *controller) reconcile(ctx context.Context, obj any) {
 		return
 	}
 
-	ns := u.GetNamespace()
-	name := u.GetName()
-	spec := getMap(u.Object, "spec")
-	status := getMap(u.Object, "status")
+	hib, err := decodeUnstructured[hibernation](u)
+	if err != nil {
+		log.WithFunc("controller.reconcile").Errorf(ctx, err, "decode hibernation %s/%s", u.GetNamespace(), u.GetName())
+		return
+	}
 
-	podName, _ := spec["podName"].(string)
-	action, _ := spec["action"].(string)
-	phase, _ := status["phase"].(string)
+	ns := hib.Namespace
+	name := hib.Name
+	podName := hib.Spec.PodName
+	action := hib.Spec.Action
+	phase := hib.Status.Phase
 
 	if podName == "" {
 		return
@@ -303,13 +306,13 @@ func (c *controller) resyncCocoonSets(ctx context.Context, store cache.Store) {
 // ---------- Hibernation status ----------
 
 func (c *controller) updateStatus(ctx context.Context, ns, name, phase, message, vmName string) {
-	status := map[string]any{
-		"phase":              phase,
-		"message":            message,
-		"lastTransitionTime": time.Now().UTC().Format(time.RFC3339),
+	status := hibernationStatus{
+		Phase:              phase,
+		Message:            message,
+		LastTransitionTime: time.Now().UTC().Format(time.RFC3339),
 	}
 	if vmName != "" {
-		status["vmName"] = vmName
+		status.VMName = vmName
 	}
 
 	if err := c.patchStatus(ctx, hibGVR, ns, name, status); err != nil {
