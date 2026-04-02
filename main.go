@@ -41,6 +41,8 @@ import (
 	"syscall"
 	"time"
 
+	commonk8s "github.com/cocoonstack/cocoon-common/k8s"
+	commonlog "github.com/cocoonstack/cocoon-common/log"
 	"github.com/projecteru2/core/log"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
@@ -51,9 +53,8 @@ import (
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/tools/cache"
 
-	"github.com/cocoonstack/cocoon-operator/cocoonmeta"
-	"github.com/cocoonstack/cocoon-operator/k8sutil"
-	"github.com/cocoonstack/cocoon-operator/logutil"
+	"github.com/cocoonstack/cocoon-common/meta"
+
 	"github.com/cocoonstack/cocoon-operator/version"
 )
 
@@ -83,11 +84,11 @@ type controller struct {
 func main() {
 	ctx := context.Background()
 
-	logutil.Setup(ctx, "LOG_LEVEL")
+	commonlog.Setup(ctx, "LOG_LEVEL")
 
 	logger := log.WithFunc("main")
 
-	config, err := k8sutil.LoadConfig()
+	config, err := commonk8s.LoadConfig()
 	if err != nil {
 		logger.Fatalf(ctx, err, "k8s config: %v", err)
 	}
@@ -212,7 +213,7 @@ func (c *controller) reconcileHibernate(ctx context.Context, ns, hibName, podNam
 		return
 	}
 
-	vmName := pod.Annotations[cocoonmeta.AnnotationVMName]
+	vmName := pod.Annotations[meta.AnnotationVMName]
 
 	// If vk-cocoon already saved a snapshot for this VM, hibernation is complete.
 	if vmName != "" && c.hasSnapshot(ctx, ns, vmName) {
@@ -221,8 +222,8 @@ func (c *controller) reconcileHibernate(ctx context.Context, ns, hibName, podNam
 	}
 
 	// Annotate pod to trigger vk-cocoon hibernate.
-	if pod.Annotations[cocoonmeta.AnnotationHibernate] != valTrue {
-		c.patchPodAnnotation(ctx, ns, hibName, podName, cocoonmeta.AnnotationHibernate, valTrue, "hibernate")
+	if pod.Annotations[meta.AnnotationHibernate] != valTrue {
+		c.patchPodAnnotation(ctx, ns, hibName, podName, meta.AnnotationHibernate, valTrue, "hibernate")
 	}
 
 	if phase != phaseHibernating {
@@ -241,17 +242,17 @@ func (c *controller) reconcileWake(ctx context.Context, ns, hibName, podName, ph
 		return
 	}
 
-	vmName := pod.Annotations[cocoonmeta.AnnotationVMName]
+	vmName := pod.Annotations[meta.AnnotationVMName]
 
 	// Pod is awake when the hibernate annotation is gone and the snapshot is consumed.
-	if pod.Annotations[cocoonmeta.AnnotationHibernate] != valTrue && vmName != "" && !c.hasSnapshot(ctx, ns, vmName) {
+	if pod.Annotations[meta.AnnotationHibernate] != valTrue && vmName != "" && !c.hasSnapshot(ctx, ns, vmName) {
 		c.updateStatus(ctx, ns, hibName, phaseActive, "VM restored and running", vmName)
 		return
 	}
 
 	// Remove hibernate annotation to trigger vk-cocoon wake.
-	if pod.Annotations[cocoonmeta.AnnotationHibernate] == valTrue {
-		c.patchPodAnnotation(ctx, ns, hibName, podName, cocoonmeta.AnnotationHibernate, "", "wake")
+	if pod.Annotations[meta.AnnotationHibernate] == valTrue {
+		c.patchPodAnnotation(ctx, ns, hibName, podName, meta.AnnotationHibernate, "", "wake")
 	}
 
 	if phase != phaseWaking {
@@ -281,7 +282,7 @@ func (c *controller) handlePodEvent(ctx context.Context, obj any) {
 	}
 
 	for _, ref := range u.GetOwnerReferences() {
-		if ref.Kind == cocoonmeta.KindCocoonSet && ref.APIVersion == cocoonmeta.APIVersion {
+		if ref.Kind == meta.KindCocoonSet && ref.APIVersion == meta.APIVersion {
 			if err := c.reconcileCocoonSet(ctx, u.GetNamespace(), ref.Name); err != nil {
 				log.WithFunc("controller.handlePodEvent").Errorf(ctx, err, "cocoonset %s/%s: reconcile on pod event", u.GetNamespace(), ref.Name)
 			}
