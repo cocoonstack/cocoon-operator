@@ -3,11 +3,11 @@ package main
 import (
 	"cmp"
 	"context"
-	"encoding/json"
 	"fmt"
 	"slices"
 	"strconv"
 
+	commonk8s "github.com/cocoonstack/cocoon-common/k8s"
 	"github.com/projecteru2/core/log"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -74,7 +74,7 @@ func (c *controller) reconcileCocoonSet(ctx context.Context, ns, name string) er
 		return err
 	}
 
-	cs, err := decodeUnstructured[cocoonSet](rawCS)
+	cs, err := commonk8s.DecodeUnstructured[cocoonSet](rawCS)
 	if err != nil {
 		logger.Errorf(ctx, err, "decode failed %s/%s", ns, name)
 		return err
@@ -443,13 +443,7 @@ func buildCocoonSetStatus(phase string, pods []corev1.Pod, csName string, desire
 // Pass a non-empty value to set, or an empty string to remove the annotation.
 func (c *controller) patchPodAnnotation(ctx context.Context, ns, csName, podName, key, value, verb string) { //nolint:unparam // key is parameterized for reuse across annotation types
 	logger := log.WithFunc("controller.patchPodAnnotation")
-	patch, err := json.Marshal(map[string]any{
-		"metadata": map[string]any{
-			"annotations": map[string]any{
-				key: annotationPatchValue(value),
-			},
-		},
-	})
+	patch, err := commonk8s.MetadataAnnotationsMergePatch(map[string]any{key: annotationPatchValue(value)})
 	if err != nil {
 		logger.Errorf(ctx, err, "cocoonset %s/%s: marshal patch for pod %s", ns, csName, podName)
 		return

@@ -1,12 +1,10 @@
 package main
 
 import (
-	"fmt"
+	"cmp"
 
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
-	"k8s.io/apimachinery/pkg/runtime"
 )
 
 type hibernation struct {
@@ -108,40 +106,20 @@ type cocoonSetToolboxStatus struct {
 	VNCPort  int64  `json:"vncPort,omitempty"`
 }
 
-func decodeUnstructured[T any](u *unstructured.Unstructured) (*T, error) {
-	var out T
-	if err := runtime.DefaultUnstructuredConverter.FromUnstructured(u.Object, &out); err != nil {
-		return nil, fmt.Errorf("decode %T: %w", out, err)
-	}
-	return &out, nil
-}
-
 func (s cocoonSetSpec) targetNodeName() string {
-	if s.NodeName != "" {
-		return s.NodeName
-	}
-	return "cocoon-pool"
+	return cmp.Or(s.NodeName, "cocoon-pool")
 }
 
 func (s cocoonSetSpec) snapshotPolicy() string {
-	if s.SnapshotPolicy != "" {
-		return s.SnapshotPolicy
-	}
-	return "always"
+	return cmp.Or(s.SnapshotPolicy, "always")
 }
 
 func (t cocoonToolboxSpec) osType() string {
-	if t.OS != "" {
-		return t.OS
-	}
-	return "linux"
+	return cmp.Or(t.OS, "linux")
 }
 
 func (t cocoonToolboxSpec) mode() string {
-	if t.Mode != "" {
-		return t.Mode
-	}
-	return "run"
+	return cmp.Or(t.Mode, "run")
 }
 
 func (s cocoonSetStatus) toolboxRuntimeHints(name string) *cocoonSetToolboxStatus {

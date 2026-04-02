@@ -35,7 +35,6 @@ package main
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"os/signal"
 	"syscall"
@@ -175,7 +174,7 @@ func (c *controller) reconcile(ctx context.Context, obj any) {
 		return
 	}
 
-	hib, err := decodeUnstructured[hibernation](u)
+	hib, err := commonk8s.DecodeUnstructured[hibernation](u)
 	if err != nil {
 		log.WithFunc("controller.reconcile").Errorf(ctx, err, "decode hibernation %s/%s", u.GetNamespace(), u.GetName())
 		return
@@ -323,7 +322,7 @@ func (c *controller) updateStatus(ctx context.Context, ns, name, phase, message,
 
 // patchStatus patches the status subresource of any CRD.
 func (c *controller) patchStatus(ctx context.Context, gvr schema.GroupVersionResource, ns, name string, status any) error {
-	data, err := json.Marshal(map[string]any{"status": status})
+	data, err := commonk8s.StatusMergePatch(status)
 	if err != nil {
 		return fmt.Errorf("marshal: %w", err)
 	}
