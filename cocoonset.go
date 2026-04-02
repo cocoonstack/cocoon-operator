@@ -248,9 +248,10 @@ func newManagedPod(cs *cocoonSet, podName, role, image, nodeName string, annotat
 			OwnerReferences: ownerRef(cs),
 		},
 		Spec: corev1.PodSpec{
-			NodeName:    nodeName,
-			Tolerations: vkTolerations(),
-			Containers:  []corev1.Container{{Name: "vm", Image: image}},
+			NodeName:                      nodeName,
+			Tolerations:                   vkTolerations(),
+			TerminationGracePeriodSeconds: new(int64), // 0 — VM is already destroyed by provider.DeletePod
+			Containers:                    []corev1.Container{{Name: "vm", Image: image}},
 		},
 	}
 }
