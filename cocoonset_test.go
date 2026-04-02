@@ -5,6 +5,7 @@ import (
 	"reflect"
 	"testing"
 
+	"github.com/cocoonstack/cocoon-operator/cocoonmeta"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
@@ -27,16 +28,16 @@ func TestBuildToolboxPodIgnoresStaticHintsForManagedWindows(t *testing.T) {
 
 	ctx := context.Background()
 	pod := buildToolboxPod(ctx, cs, tb)
-	if got := pod.Annotations[annMode]; got != "run" {
+	if got := pod.Annotations[cocoonmeta.AnnotationMode]; got != "run" {
 		t.Fatalf("mode mismatch: got %q", got)
 	}
-	if _, ok := pod.Annotations[annIP]; ok {
+	if _, ok := pod.Annotations[cocoonmeta.AnnotationIP]; ok {
 		t.Fatalf("unexpected static IP annotation for managed toolbox")
 	}
-	if _, ok := pod.Annotations[annVMID]; ok {
+	if _, ok := pod.Annotations[cocoonmeta.AnnotationVMID]; ok {
 		t.Fatalf("unexpected static VMID annotation for managed toolbox")
 	}
-	if _, ok := pod.Annotations[annVNCPort]; ok {
+	if _, ok := pod.Annotations[cocoonmeta.AnnotationVNCPort]; ok {
 		t.Fatalf("unexpected VNC annotation for managed toolbox")
 	}
 	if got := pod.Spec.NodeName; got != "cocoon-pool" {
@@ -61,13 +62,13 @@ func TestBuildToolboxPodKeepsStaticHintsForStaticMode(t *testing.T) {
 
 	ctx := context.Background()
 	pod := buildToolboxPod(ctx, cs, tb)
-	if got := pod.Annotations[annIP]; got != "10.88.100.68" {
+	if got := pod.Annotations[cocoonmeta.AnnotationIP]; got != "10.88.100.68" {
 		t.Fatalf("static IP mismatch: got %q", got)
 	}
-	if got := pod.Annotations[annVMID]; got != "qemu-windows" {
+	if got := pod.Annotations[cocoonmeta.AnnotationVMID]; got != "qemu-windows" {
 		t.Fatalf("static VMID mismatch: got %q", got)
 	}
-	if got := pod.Annotations[annVNCPort]; got != "5901" {
+	if got := pod.Annotations[cocoonmeta.AnnotationVNCPort]; got != "5901" {
 		t.Fatalf("VNC port mismatch: got %q", got)
 	}
 }
@@ -100,13 +101,13 @@ func TestBuildToolboxPodPrefersRuntimeStatusHintsForStaticMode(t *testing.T) {
 
 	ctx := context.Background()
 	pod := buildToolboxPod(ctx, cs, tb)
-	if got := pod.Annotations[annIP]; got != "10.88.100.85" {
+	if got := pod.Annotations[cocoonmeta.AnnotationIP]; got != "10.88.100.85" {
 		t.Fatalf("runtime status IP mismatch: got %q", got)
 	}
-	if got := pod.Annotations[annVMID]; got != "qemu-windows" {
+	if got := pod.Annotations[cocoonmeta.AnnotationVMID]; got != "qemu-windows" {
 		t.Fatalf("runtime status VMID mismatch: got %q", got)
 	}
-	if got := pod.Annotations[annVNCPort]; got != "5902" {
+	if got := pod.Annotations[cocoonmeta.AnnotationVNCPort]; got != "5902" {
 		t.Fatalf("runtime status VNC port mismatch: got %q", got)
 	}
 }
@@ -153,14 +154,14 @@ func TestBuildCocoonSetStatusIncludesToolboxVMID(t *testing.T) {
 			ObjectMeta: metav1.ObjectMeta{
 				Name: p["name"],
 				Labels: map[string]string{
-					labelRole: p["role"],
+					cocoonmeta.LabelRole: p["role"],
 				},
 				Annotations: map[string]string{
-					annVMName:  p["vmName"],
-					annVMID:    p["vmID"],
-					annIP:      p["ip"],
-					annOS:      p["os"],
-					annVNCPort: p["vnc"],
+					cocoonmeta.AnnotationVMName:  p["vmName"],
+					cocoonmeta.AnnotationVMID:    p["vmID"],
+					cocoonmeta.AnnotationIP:      p["ip"],
+					cocoonmeta.AnnotationOS:      p["os"],
+					cocoonmeta.AnnotationVNCPort: p["vnc"],
 				},
 			},
 			Status: corev1.PodStatus{
@@ -232,15 +233,15 @@ func TestBuildToolboxPodUsesConfiguredNodeName(t *testing.T) {
 
 func TestManagedPodAnnotationsSkipsEmptyValues(t *testing.T) {
 	got := managedPodAnnotations("vk-dev-demo-0", map[string]string{
-		annMode:    "clone",
-		annImage:   "",
-		annStorage: "10G",
+		cocoonmeta.AnnotationMode:    "clone",
+		cocoonmeta.AnnotationImage:   "",
+		cocoonmeta.AnnotationStorage: "10G",
 	})
 
 	want := map[string]string{
-		annVMName:  "vk-dev-demo-0",
-		annMode:    "clone",
-		annStorage: "10G",
+		cocoonmeta.AnnotationVMName:  "vk-dev-demo-0",
+		cocoonmeta.AnnotationMode:    "clone",
+		cocoonmeta.AnnotationStorage: "10G",
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("managedPodAnnotations mismatch:\nwant: %#v\ngot:  %#v", want, got)
@@ -254,9 +255,9 @@ func TestNewManagedPodSharesCommonSkeleton(t *testing.T) {
 	cs.SetUID("12345")
 
 	annotations := managedPodAnnotations("vk-dev-demo-0", map[string]string{
-		annMode: "clone",
+		cocoonmeta.AnnotationMode: "clone",
 	})
-	pod := newManagedPod(cs, "demo-0", roleMain, "demo-image", "cocoon-pool-233", annotations)
+	pod := newManagedPod(cs, "demo-0", cocoonmeta.RoleMain, "demo-image", "cocoon-pool-233", annotations)
 
 	if got := pod.Namespace; got != "dev" {
 		t.Fatalf("namespace mismatch: got %q", got)
@@ -264,16 +265,16 @@ func TestNewManagedPodSharesCommonSkeleton(t *testing.T) {
 	if got := pod.Spec.NodeName; got != "cocoon-pool-233" {
 		t.Fatalf("node name mismatch: got %q", got)
 	}
-	if got := pod.Labels[labelCocoonSet]; got != "demo" {
+	if got := pod.Labels[cocoonmeta.LabelCocoonSet]; got != "demo" {
 		t.Fatalf("cocoonset label mismatch: got %q", got)
 	}
-	if got := pod.Labels[labelRole]; got != roleMain {
+	if got := pod.Labels[cocoonmeta.LabelRole]; got != cocoonmeta.RoleMain {
 		t.Fatalf("role label mismatch: got %q", got)
 	}
 	if got := pod.Labels["app"]; got != "demo" {
 		t.Fatalf("app label mismatch: got %q", got)
 	}
-	if got := pod.Annotations[annVMName]; got != "vk-dev-demo-0" {
+	if got := pod.Annotations[cocoonmeta.AnnotationVMName]; got != "vk-dev-demo-0" {
 		t.Fatalf("vm name annotation mismatch: got %q", got)
 	}
 	if got := pod.Spec.Containers; len(got) != 1 || got[0].Name != "vm" || got[0].Image != "demo-image" {
@@ -282,7 +283,7 @@ func TestNewManagedPodSharesCommonSkeleton(t *testing.T) {
 	if got := pod.Spec.Tolerations; len(got) != 1 || got[0].Key != "virtual-kubelet.io/provider" {
 		t.Fatalf("tolerations mismatch: %#v", got)
 	}
-	if len(pod.OwnerReferences) != 1 || pod.OwnerReferences[0].Kind != kindCocoonSet || pod.OwnerReferences[0].Name != "demo" {
+	if len(pod.OwnerReferences) != 1 || pod.OwnerReferences[0].Kind != cocoonmeta.KindCocoonSet || pod.OwnerReferences[0].Name != "demo" {
 		t.Fatalf("owner references mismatch: %#v", pod.OwnerReferences)
 	}
 }

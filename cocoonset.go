@@ -8,6 +8,7 @@ import (
 	"slices"
 	"strconv"
 
+	"github.com/cocoonstack/cocoon-operator/cocoonmeta"
 	"github.com/projecteru2/core/log"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -24,28 +25,6 @@ var csGVR = schema.GroupVersionResource{
 }
 
 const (
-	labelCocoonSet = "cocoon.cis/cocoonset"
-	labelRole      = "cocoon.cis/role"
-	labelSlot      = "cocoon.cis/slot"
-
-	annMode           = "cocoon.cis/mode"
-	annImage          = "cocoon.cis/image"
-	annStorage        = "cocoon.cis/storage"
-	annManaged        = "cocoon.cis/managed"
-	annOS             = "cocoon.cis/os"
-	annForkFrom       = "cocoon.cis/fork-from"
-	annSnapshotPolicy = "cocoon.cis/snapshot-policy"
-	annIP             = "cocoon.cis/ip"
-	annVMID           = "cocoon.cis/vm-id"
-	annVNCPort        = "cocoon.cis/vnc-port"
-
-	apiVersion    = "cocoon.cis/v1alpha1"
-	kindCocoonSet = "CocoonSet"
-
-	roleMain     = "main"
-	roleSubAgent = "sub-agent"
-	roleToolbox  = "toolbox"
-
 	phaseSuspended = "Suspended"
 	phaseScaling   = "Scaling"
 	phaseRunning   = "Running"
@@ -68,14 +47,14 @@ func classifyPods(pods []corev1.Pod, csName string) classifiedPods {
 	prefix := len(csName) + 1
 	for i := range pods {
 		pod := &pods[i]
-		switch pod.Labels[labelRole] {
-		case roleMain, roleSubAgent:
-			if slotStr, ok := pod.Labels[labelSlot]; ok {
+		switch pod.Labels[cocoonmeta.LabelRole] {
+		case cocoonmeta.RoleMain, cocoonmeta.RoleSubAgent:
+			if slotStr, ok := pod.Labels[cocoonmeta.LabelSlot]; ok {
 				if slot, err := strconv.Atoi(slotStr); err == nil {
 					cp.agents[slot] = pod
 				}
 			}
-		case roleToolbox:
+		case cocoonmeta.RoleToolbox:
 			if prefix > len(pod.Name) {
 				continue
 			}
@@ -115,8 +94,8 @@ func (c *controller) reconcileCocoonSet(ctx context.Context, ns, name string) er
 	if suspend {
 		for i := range ownedPods {
 			pod := &ownedPods[i]
-			if pod.Annotations[annHibernate] != valTrue {
-				c.patchPodAnnotation(ctx, ns, name, pod.Name, annHibernate, valTrue, "suspended")
+			if pod.Annotations[cocoonmeta.AnnotationHibernate] != valTrue {
+				c.patchPodAnnotation(ctx, ns, name, pod.Name, cocoonmeta.AnnotationHibernate, valTrue, "suspended")
 			}
 		}
 		if err := c.updateCocoonSetStatus(ctx, ns, name, buildCocoonSetStatus(phaseSuspended, ownedPods, name, desired)); err != nil {
@@ -128,8 +107,8 @@ func (c *controller) reconcileCocoonSet(ctx context.Context, ns, name string) er
 	// Not suspended: remove hibernate annotation from all pods.
 	for i := range ownedPods {
 		pod := &ownedPods[i]
-		if pod.Annotations[annHibernate] == valTrue {
-			c.patchPodAnnotation(ctx, ns, name, pod.Name, annHibernate, "", "unsuspended")
+		if pod.Annotations[cocoonmeta.AnnotationHibernate] == valTrue {
+			c.patchPodAnnotation(ctx, ns, name, pod.Name, cocoonmeta.AnnotationHibernate, "", "unsuspended")
 		}
 	}
 
@@ -181,7 +160,7 @@ func (c *controller) reconcileCocoonSet(ctx context.Context, ns, name string) er
 // scaleSubAgents creates missing sub-agents and deletes excess ones.
 func (c *controller) scaleSubAgents(ctx context.Context, cs *unstructured.Unstructured, ns, name string, agentPods map[int]*corev1.Pod, replicas int64) {
 	logger := log.WithFunc("controller.scaleSubAgents")
-	mainVMName := agentPods[0].Annotations[annVMName]
+	mainVMName := agentPods[0].Annotations[cocoonmeta.AnnotationVMName]
 
 	// Scale up: create missing sub-agents.
 	for slot := 1; slot <= int(replicas); slot++ {
@@ -240,7 +219,7 @@ func (c *controller) ensureToolboxes(ctx context.Context, cs *unstructured.Unstr
 
 func managedPodAnnotations(vmName string, values map[string]string) map[string]string {
 	annotations := map[string]string{
-		annVMName: vmName,
+		cocoonmeta.AnnotationVMName: vmName,
 	}
 	for key, value := range values {
 		if value == "" {
@@ -253,9 +232,9 @@ func managedPodAnnotations(vmName string, values map[string]string) map[string]s
 
 func managedPodLabels(csName, role string) map[string]string {
 	return map[string]string{
-		labelCocoonSet: csName,
-		labelRole:      role,
-		"app":          csName,
+		cocoonmeta.LabelCocoonSet: csName,
+		cocoonmeta.LabelRole:      role,
+		"app":                     csName,
 	}
 }
 
@@ -290,27 +269,27 @@ func buildAgentPod(ctx context.Context, cs *unstructured.Unstructured, slot int,
 	storage, _ := agentSpec["storage"].(string)
 
 	podName := fmt.Sprintf("%s-%d", name, slot)
-	vmName := fmt.Sprintf("vk-%s-%s-%d", ns, name, slot)
+	vmName := cocoonmeta.VMNameForDeployment(ns, name, slot)
 
-	role := roleMain
+	role := cocoonmeta.RoleMain
 	if slot > 0 {
-		role = roleSubAgent
+		role = cocoonmeta.RoleSubAgent
 	}
 
 	annotations := managedPodAnnotations(vmName, map[string]string{
-		annMode:           "clone",
-		annImage:          image,
-		annManaged:        valTrue,
-		annOS:             "linux",
-		annStorage:        storage,
-		annSnapshotPolicy: snapshotPolicy,
+		cocoonmeta.AnnotationMode:           "clone",
+		cocoonmeta.AnnotationImage:          image,
+		cocoonmeta.AnnotationManaged:        valTrue,
+		cocoonmeta.AnnotationOS:             "linux",
+		cocoonmeta.AnnotationStorage:        storage,
+		cocoonmeta.AnnotationSnapshotPolicy: snapshotPolicy,
 	})
 	if forkFrom != "" && slot > 0 {
-		annotations[annForkFrom] = forkFrom
+		annotations[cocoonmeta.AnnotationForkFrom] = forkFrom
 	}
 
 	pod := newManagedPod(cs, podName, role, image, nodeName, annotations)
-	pod.Labels[labelSlot] = strconv.Itoa(slot)
+	pod.Labels[cocoonmeta.LabelSlot] = strconv.Itoa(slot)
 
 	applyResources(ctx, &pod.Spec.Containers[0], getMap(agentSpec, "resources"))
 	applyEnvFrom(&pod.Spec.Containers[0], agentSpec)
@@ -338,22 +317,22 @@ func buildToolboxPod(ctx context.Context, cs *unstructured.Unstructured, tb map[
 	statusHints := lookupToolboxRuntimeHints(cs, tbName)
 
 	podName := fmt.Sprintf("%s-%s", csName, tbName)
-	vmName := fmt.Sprintf("vk-%s-%s", ns, tbName)
+	vmName := cocoonmeta.VMNameForPod(ns, tbName)
 
 	annotations := managedPodAnnotations(vmName, map[string]string{
-		annMode:           tbMode,
-		annManaged:        valTrue,
-		annOS:             tbOS,
-		annImage:          tbImage,
-		annStorage:        tbStorage,
-		annSnapshotPolicy: snapshotPolicy,
+		cocoonmeta.AnnotationMode:           tbMode,
+		cocoonmeta.AnnotationManaged:        valTrue,
+		cocoonmeta.AnnotationOS:             tbOS,
+		cocoonmeta.AnnotationImage:          tbImage,
+		cocoonmeta.AnnotationStorage:        tbStorage,
+		cocoonmeta.AnnotationSnapshotPolicy: snapshotPolicy,
 	})
 
 	if tbMode == "static" {
 		applyStaticHints(annotations, tb, statusHints)
 	}
 
-	pod := newManagedPod(cs, podName, roleToolbox, tbImage, nodeName, annotations)
+	pod := newManagedPod(cs, podName, cocoonmeta.RoleToolbox, tbImage, nodeName, annotations)
 
 	applyResources(ctx, &pod.Spec.Containers[0], getMap(tb, "resources"))
 
@@ -372,7 +351,7 @@ func podIP(pod *corev1.Pod) string {
 	if ip := pod.Status.PodIP; ip != "" {
 		return ip
 	}
-	return pod.Annotations[annIP]
+	return pod.Annotations[cocoonmeta.AnnotationIP]
 }
 
 // buildCocoonSetStatus builds a status map from current pod state.
@@ -384,7 +363,7 @@ func buildCocoonSetStatus(phase string, pods []corev1.Pod, csName string, desire
 
 	for i := range pods {
 		pod := &pods[i]
-		role := pod.Labels[labelRole]
+		role := pod.Labels[cocoonmeta.LabelRole]
 
 		podPhase := string(pod.Status.Phase)
 		if podPhase == "" {
@@ -392,9 +371,9 @@ func buildCocoonSetStatus(phase string, pods []corev1.Pod, csName string, desire
 		}
 
 		switch role {
-		case roleMain, roleSubAgent:
+		case cocoonmeta.RoleMain, cocoonmeta.RoleSubAgent:
 			slot := 0
-			if s, ok := pod.Labels[labelSlot]; ok {
+			if s, ok := pod.Labels[cocoonmeta.LabelSlot]; ok {
 				slot, _ = strconv.Atoi(s)
 			}
 			if pod.Status.Phase == corev1.PodRunning {
@@ -404,21 +383,21 @@ func buildCocoonSetStatus(phase string, pods []corev1.Pod, csName string, desire
 				"slot":    int64(slot),
 				"role":    role,
 				"podName": pod.Name,
-				"vmName":  pod.Annotations[annVMName],
+				"vmName":  pod.Annotations[cocoonmeta.AnnotationVMName],
 				"phase":   podPhase,
 			}
-			if vmID, ok := pod.Annotations[annVMID]; ok {
+			if vmID, ok := pod.Annotations[cocoonmeta.AnnotationVMID]; ok {
 				agent["vmID"] = vmID
 			}
 			if ip := podIP(pod); ip != "" {
 				agent["ip"] = ip
 			}
-			if forkFrom, ok := pod.Annotations[annForkFrom]; ok && forkFrom != "" {
+			if forkFrom, ok := pod.Annotations[cocoonmeta.AnnotationForkFrom]; ok && forkFrom != "" {
 				agent["forkedFrom"] = forkFrom
 			}
 			agents = append(agents, agent)
 
-		case roleToolbox:
+		case cocoonmeta.RoleToolbox:
 			if prefix > len(pod.Name) {
 				continue
 			}
@@ -426,19 +405,19 @@ func buildCocoonSetStatus(phase string, pods []corev1.Pod, csName string, desire
 			tb := map[string]any{
 				"name":    tbName,
 				"podName": pod.Name,
-				"vmName":  pod.Annotations[annVMName],
+				"vmName":  pod.Annotations[cocoonmeta.AnnotationVMName],
 				"phase":   podPhase,
 			}
 			if ip := podIP(pod); ip != "" {
 				tb["ip"] = ip
 			}
-			if vmID, ok := pod.Annotations[annVMID]; ok && vmID != "" {
+			if vmID, ok := pod.Annotations[cocoonmeta.AnnotationVMID]; ok && vmID != "" {
 				tb["vmID"] = vmID
 			}
-			_, hasVNCPort := pod.Annotations[annVNCPort]
-			tb["connType"] = toolboxConnType(pod.Annotations[annOS], hasVNCPort)
+			_, hasVNCPort := pod.Annotations[cocoonmeta.AnnotationVNCPort]
+			tb["connType"] = toolboxConnType(pod.Annotations[cocoonmeta.AnnotationOS], hasVNCPort)
 			if hasVNCPort {
-				if port, err := strconv.Atoi(pod.Annotations[annVNCPort]); err == nil {
+				if port, err := strconv.Atoi(pod.Annotations[cocoonmeta.AnnotationVNCPort]); err == nil {
 					tb["vncPort"] = int64(port)
 				}
 			}
@@ -495,7 +474,7 @@ func annotationPatchValue(value string) any {
 // listOwnedPods returns pods with the cocoon.cis/cocoonset label matching the given name.
 func (c *controller) listOwnedPods(ctx context.Context, ns, csName string) ([]corev1.Pod, error) {
 	pods, err := c.clientset.CoreV1().Pods(ns).List(ctx, metav1.ListOptions{
-		LabelSelector: fmt.Sprintf("%s=%s", labelCocoonSet, csName),
+		LabelSelector: fmt.Sprintf("%s=%s", cocoonmeta.LabelCocoonSet, csName),
 	})
 	if err != nil {
 		return nil, err
@@ -509,8 +488,8 @@ func ownerRef(cs *unstructured.Unstructured) []metav1.OwnerReference {
 	isController := true
 	return []metav1.OwnerReference{
 		{
-			APIVersion:         apiVersion,
-			Kind:               kindCocoonSet,
+			APIVersion:         cocoonmeta.APIVersion,
+			Kind:               cocoonmeta.KindCocoonSet,
 			Name:               cs.GetName(),
 			UID:                cs.GetUID(),
 			Controller:         &isController,
@@ -523,7 +502,7 @@ func ownerRef(cs *unstructured.Unstructured) []metav1.OwnerReference {
 func vkTolerations() []corev1.Toleration {
 	return []corev1.Toleration{
 		{
-			Key:      "virtual-kubelet.io/provider",
+			Key:      cocoonmeta.TolerationKey,
 			Operator: corev1.TolerationOpExists,
 			Effect:   corev1.TaintEffectNoSchedule,
 		},
@@ -588,23 +567,23 @@ func applyEnvFrom(container *corev1.Container, agentSpec map[string]any) {
 // preferring runtime status hints over spec hints.
 func applyStaticHints(annotations map[string]string, tb, statusHints map[string]any) {
 	if ip := stringDefault(statusHints, "ip", ""); ip != "" {
-		annotations[annIP] = ip
+		annotations[cocoonmeta.AnnotationIP] = ip
 	} else if ip, ok := tb["staticIP"].(string); ok && ip != "" {
-		annotations[annIP] = ip
+		annotations[cocoonmeta.AnnotationIP] = ip
 	}
 	if vmID := stringDefault(statusHints, "vmID", ""); vmID != "" {
-		annotations[annVMID] = vmID
+		annotations[cocoonmeta.AnnotationVMID] = vmID
 	} else if vmID, ok := tb["staticVMID"].(string); ok && vmID != "" {
-		annotations[annVMID] = vmID
+		annotations[cocoonmeta.AnnotationVMID] = vmID
 	}
 	if vncPort, ok := getInt64Value(statusHints, "vncPort"); ok {
-		annotations[annVNCPort] = strconv.FormatInt(vncPort, 10)
+		annotations[cocoonmeta.AnnotationVNCPort] = strconv.FormatInt(vncPort, 10)
 	} else if vncPort, ok := tb["vncPort"]; ok {
 		switch v := vncPort.(type) {
 		case int64:
-			annotations[annVNCPort] = strconv.FormatInt(v, 10)
+			annotations[cocoonmeta.AnnotationVNCPort] = strconv.FormatInt(v, 10)
 		case float64:
-			annotations[annVNCPort] = strconv.FormatInt(int64(v), 10)
+			annotations[cocoonmeta.AnnotationVNCPort] = strconv.FormatInt(int64(v), 10)
 		}
 	}
 }
