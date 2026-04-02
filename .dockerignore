@@ -1,0 +1,10 @@
+.git
+.github
+bin
+dist
+coverage.out
+coverage.html
+coverage.txt
+cocoon-operator
+cocoon-operator.dbg
+*.log
