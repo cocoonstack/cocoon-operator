@@ -40,8 +40,6 @@ import (
 	"syscall"
 	"time"
 
-	commonk8s "github.com/cocoonstack/cocoon-common/k8s"
-	commonlog "github.com/cocoonstack/cocoon-common/log"
 	"github.com/projecteru2/core/log"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
@@ -52,8 +50,9 @@ import (
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/tools/cache"
 
+	commonk8s "github.com/cocoonstack/cocoon-common/k8s"
+	commonlog "github.com/cocoonstack/cocoon-common/log"
 	"github.com/cocoonstack/cocoon-common/meta"
-
 	"github.com/cocoonstack/cocoon-operator/version"
 )
 
@@ -89,16 +88,16 @@ func main() {
 
 	config, err := commonk8s.LoadConfig()
 	if err != nil {
-		logger.Fatalf(ctx, err, "k8s config: %v", err)
+		logger.Fatalf(ctx, err, "load k8s config")
 	}
 
 	clientset, err := kubernetes.NewForConfig(config)
 	if err != nil {
-		logger.Fatalf(ctx, err, "clientset: %v", err)
+		logger.Fatalf(ctx, err, "create clientset")
 	}
 	dynClient, err := dynamic.NewForConfig(config)
 	if err != nil {
-		logger.Fatalf(ctx, err, "dynamic client: %v", err)
+		logger.Fatalf(ctx, err, "create dynamic client")
 	}
 
 	ctx, cancel := signal.NotifyContext(ctx, syscall.SIGINT, syscall.SIGTERM)
@@ -169,6 +168,8 @@ func main() {
 // ---------- Hibernation reconcile ----------
 
 func (c *controller) reconcile(ctx context.Context, obj any) {
+	logger := log.WithFunc("controller.reconcile")
+
 	u, ok := obj.(*unstructured.Unstructured)
 	if !ok {
 		return
@@ -176,7 +177,7 @@ func (c *controller) reconcile(ctx context.Context, obj any) {
 
 	hib, err := commonk8s.DecodeUnstructured[hibernation](u)
 	if err != nil {
-		log.WithFunc("controller.reconcile").Errorf(ctx, err, "decode hibernation %s/%s", u.GetNamespace(), u.GetName())
+		logger.Errorf(ctx, err, "decode hibernation %s/%s", u.GetNamespace(), u.GetName())
 		return
 	}
 
@@ -283,7 +284,8 @@ func (c *controller) handlePodEvent(ctx context.Context, obj any) {
 	for _, ref := range u.GetOwnerReferences() {
 		if ref.Kind == meta.KindCocoonSet && ref.APIVersion == meta.APIVersion {
 			if err := c.reconcileCocoonSet(ctx, u.GetNamespace(), ref.Name); err != nil {
-				log.WithFunc("controller.handlePodEvent").Errorf(ctx, err, "cocoonset %s/%s: reconcile on pod event", u.GetNamespace(), ref.Name)
+				logger := log.WithFunc("controller.handlePodEvent")
+				logger.Errorf(ctx, err, "cocoonset %s/%s: reconcile on pod event", u.GetNamespace(), ref.Name)
 			}
 			return
 		}
@@ -292,13 +294,14 @@ func (c *controller) handlePodEvent(ctx context.Context, obj any) {
 
 // resyncCocoonSets reconciles all CocoonSets on timer tick.
 func (c *controller) resyncCocoonSets(ctx context.Context, store cache.Store) {
+	logger := log.WithFunc("controller.resyncCocoonSets")
 	for _, obj := range store.List() {
 		u, ok := obj.(*unstructured.Unstructured)
 		if !ok {
 			continue
 		}
 		if err := c.reconcileCocoonSet(ctx, u.GetNamespace(), u.GetName()); err != nil {
-			log.WithFunc("controller.resyncCocoonSets").Errorf(ctx, err, "cocoonset %s/%s: reconcile on resync", u.GetNamespace(), u.GetName())
+			logger.Errorf(ctx, err, "cocoonset %s/%s: reconcile on resync", u.GetNamespace(), u.GetName())
 		}
 	}
 }
@@ -316,7 +319,8 @@ func (c *controller) updateStatus(ctx context.Context, ns, name, phase, message,
 	}
 
 	if err := c.patchStatus(ctx, hibGVR, ns, name, status); err != nil {
-		log.WithFunc("controller.updateStatus").Errorf(ctx, err, "update status %s/%s -> %s", ns, name, phase)
+		logger := log.WithFunc("controller.updateStatus")
+		logger.Errorf(ctx, err, "update status %s/%s -> %s", ns, name, phase)
 	}
 }
 

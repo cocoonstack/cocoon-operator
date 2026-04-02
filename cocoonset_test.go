@@ -5,9 +5,10 @@ import (
 	"reflect"
 	"testing"
 
-	"github.com/cocoonstack/cocoon-common/meta"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+
+	"github.com/cocoonstack/cocoon-common/meta"
 )
 
 func TestBuildToolboxPodIgnoresStaticHintsForManagedWindows(t *testing.T) {

@@ -74,4 +74,4 @@ formatters:
   settings:
     goimports:
       local-prefixes:
-        - github.com/cocoonstack/cocoon-operator
+        - github.com/cocoonstack/

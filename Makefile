@@ -2,7 +2,7 @@
 
 REPO_PATH := github.com/cocoonstack/cocoon-operator
 BINARY_NAME := cocoon-operator
-GOIMPORTS_LOCAL_PREFIXES := $(REPO_PATH)
+GOIMPORTS_LOCAL_PREFIXES := github.com/cocoonstack/
 REVISION := $(shell git rev-parse HEAD || echo unknown)
 BUILTAT := $(shell date +%Y-%m-%dT%H:%M:%S)
 VERSION := $(shell git describe --tags $(shell git rev-list --tags --max-count=1) 2>/dev/null || echo dev)
