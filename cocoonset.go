@@ -443,7 +443,7 @@ func buildCocoonSetStatus(phase string, pods []corev1.Pod, csName string, desire
 // Pass a non-empty value to set, or an empty string to remove the annotation.
 func (c *controller) patchPodAnnotation(ctx context.Context, ns, csName, podName, key, value, verb string) { //nolint:unparam // key is parameterized for reuse across annotation types
 	logger := log.WithFunc("controller.patchPodAnnotation")
-	patch, err := commonk8s.MetadataAnnotationsMergePatch(map[string]any{key: annotationPatchValue(value)})
+	patch, err := commonk8s.AnnotationsMergePatch(map[string]any{key: annotationPatchValue(value)})
 	if err != nil {
 		logger.Errorf(ctx, err, "cocoonset %s/%s: marshal patch for pod %s", ns, csName, podName)
 		return
