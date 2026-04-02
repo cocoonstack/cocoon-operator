@@ -129,7 +129,6 @@ make help           # show all targets
 | [cocoon-common](https://github.com/cocoonstack/cocoon-common) | Shared metadata, Kubernetes, and logging helpers |
 | [cocoon-webhook](https://github.com/cocoonstack/cocoon-webhook) | Admission webhook for sticky scheduling |
 | [epoch](https://github.com/cocoonstack/epoch) | Snapshot storage backend for hibernated VMs |
-| [glance](https://github.com/cocoonstack/glance) | Web UI that surfaces CocoonSet and Hibernation state |
 | [vk-cocoon](https://github.com/cocoonstack/vk-cocoon) | Virtual kubelet provider that performs the actual VM lifecycle |
 
 ## License
