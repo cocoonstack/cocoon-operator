@@ -312,7 +312,7 @@ func buildAgentPod(ctx context.Context, cs *cocoonSet, slot int, forkFrom string
 	pod := newManagedPod(cs, podName, role, image, nodeName, annotations)
 	pod.Labels[meta.LabelSlot] = strconv.Itoa(slot)
 
-	if agentSpec.osType() == "windows" {
+	if agentSpec.osType() == osWindows {
 		pod.Spec.Containers[0].Ports = []corev1.ContainerPort{{
 			Name:          "rdp",
 			ContainerPort: 3389,
@@ -349,14 +349,17 @@ func buildToolboxPod(ctx context.Context, cs *cocoonSet, tb cocoonToolboxSpec) *
 
 	annotations := managedPodAnnotations(vmName, map[string]string{
 		meta.AnnotationMode:           tbMode,
-		meta.AnnotationManaged:        valTrue,
 		meta.AnnotationOS:             tbOS,
 		meta.AnnotationImage:          tbImage,
 		meta.AnnotationStorage:        tbStorage,
 		meta.AnnotationSnapshotPolicy: snapshotPolicy,
 	})
 
-	if tbMode == "static" {
+	if tbMode != modeStatic {
+		annotations[meta.AnnotationManaged] = valTrue
+	}
+
+	if tbMode == modeStatic {
 		applyStaticHints(annotations, tb, statusHints)
 	}
 
@@ -534,16 +537,20 @@ func vkTolerations() []corev1.Toleration {
 // applyResources copies CPU/memory limits from an unstructured map to a container.
 func applyResources(ctx context.Context, container *corev1.Container, resources resourceHints) {
 	if resources.CPU != "" {
-		if container.Resources.Limits == nil {
-			container.Resources.Limits = corev1.ResourceList{}
+		if q, ok := mustParseQuantity(ctx, resources.CPU); ok {
+			if container.Resources.Limits == nil {
+				container.Resources.Limits = corev1.ResourceList{}
+			}
+			container.Resources.Limits[corev1.ResourceCPU] = q
 		}
-		container.Resources.Limits[corev1.ResourceCPU] = mustParseQuantity(ctx, resources.CPU)
 	}
 	if resources.Memory != "" {
-		if container.Resources.Limits == nil {
-			container.Resources.Limits = corev1.ResourceList{}
+		if q, ok := mustParseQuantity(ctx, resources.Memory); ok {
+			if container.Resources.Limits == nil {
+				container.Resources.Limits = corev1.ResourceList{}
+			}
+			container.Resources.Limits[corev1.ResourceMemory] = q
 		}
-		container.Resources.Limits[corev1.ResourceMemory] = mustParseQuantity(ctx, resources.Memory)
 	}
 }
 

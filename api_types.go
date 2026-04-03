@@ -7,6 +7,18 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
+const (
+	modeClone  = "clone"
+	modeRun    = "run"
+	modeStatic = "static"
+
+	osLinux   = "linux"
+	osWindows = "windows"
+
+	defaultNodeName       = "cocoon-pool"
+	defaultSnapshotPolicy = "always"
+)
+
 type hibernation struct {
 	metav1.TypeMeta   `json:",inline"`
 	metav1.ObjectMeta `json:"metadata"`
@@ -54,11 +66,11 @@ type cocoonSetAgentSpec struct {
 }
 
 func (a cocoonSetAgentSpec) osType() string {
-	return cmp.Or(a.OS, "linux")
+	return cmp.Or(a.OS, osLinux)
 }
 
 func (a cocoonSetAgentSpec) modeType() string {
-	return cmp.Or(a.Mode, "clone")
+	return cmp.Or(a.Mode, modeClone)
 }
 
 type cocoonToolboxSpec struct {
@@ -118,19 +130,19 @@ type cocoonSetToolboxStatus struct {
 }
 
 func (s cocoonSetSpec) targetNodeName() string {
-	return cmp.Or(s.NodeName, "cocoon-pool")
+	return cmp.Or(s.NodeName, defaultNodeName)
 }
 
 func (s cocoonSetSpec) snapshotPolicy() string {
-	return cmp.Or(s.SnapshotPolicy, "always")
+	return cmp.Or(s.SnapshotPolicy, defaultSnapshotPolicy)
 }
 
 func (t cocoonToolboxSpec) osType() string {
-	return cmp.Or(t.OS, "linux")
+	return cmp.Or(t.OS, osLinux)
 }
 
 func (t cocoonToolboxSpec) mode() string {
-	return cmp.Or(t.Mode, "run")
+	return cmp.Or(t.Mode, modeRun)
 }
 
 func (s cocoonSetStatus) toolboxRuntimeHints(name string) *cocoonSetToolboxStatus {

@@ -71,6 +71,9 @@ func TestBuildToolboxPodKeepsStaticHintsForStaticMode(t *testing.T) {
 	if got := pod.Annotations[meta.AnnotationVNCPort]; got != "5901" {
 		t.Fatalf("VNC port mismatch: got %q", got)
 	}
+	if _, ok := pod.Annotations[meta.AnnotationManaged]; ok {
+		t.Fatalf("unexpected managed annotation for static toolbox")
+	}
 }
 
 func TestBuildToolboxPodPrefersRuntimeStatusHintsForStaticMode(t *testing.T) {
@@ -279,5 +282,16 @@ func TestAnnotationPatchValue(t *testing.T) {
 	}
 	if got := annotationPatchValue(""); got != nil {
 		t.Fatalf("expected nil for empty value, got %#v", got)
+	}
+}
+
+func TestApplyResourcesSkipsInvalidQuantities(t *testing.T) {
+	container := &corev1.Container{}
+	applyResources(context.Background(), container, resourceHints{
+		CPU:    "not-a-quantity",
+		Memory: "still-not-a-quantity",
+	})
+	if container.Resources.Limits != nil && len(container.Resources.Limits) != 0 {
+		t.Fatalf("unexpected limits for invalid resources: %#v", container.Resources.Limits)
 	}
 }
