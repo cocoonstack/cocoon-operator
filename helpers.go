@@ -7,8 +7,7 @@ import (
 	"k8s.io/apimachinery/pkg/api/resource"
 )
 
-// mustParseQuantity parses a resource quantity string.
-// The boolean return reports whether parsing succeeded.
+// mustParseQuantity returns false and logs a warning when s is not a valid quantity.
 func mustParseQuantity(ctx context.Context, s string) (resource.Quantity, bool) {
 	q, err := resource.ParseQuantity(s)
 	if err != nil {

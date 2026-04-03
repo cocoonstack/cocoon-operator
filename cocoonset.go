@@ -17,7 +17,6 @@ import (
 	"github.com/cocoonstack/cocoon-common/meta"
 )
 
-// csGVR is the GroupVersionResource for CocoonSet CRDs.
 var csGVR = schema.GroupVersionResource{
 	Group:    "cocoon.cis",
 	Version:  "v1alpha1",
@@ -32,7 +31,6 @@ const (
 
 // ---------- CocoonSet reconcile ----------
 
-// classifiedPods holds agent and toolbox pods classified by role.
 type classifiedPods struct {
 	agents    map[int]*corev1.Pod
 	toolboxes map[string]*corev1.Pod
@@ -123,7 +121,7 @@ func (c *controller) reconcileCocoonSet(ctx context.Context, ns, name string) er
 		if pod.Status.Phase == corev1.PodSucceeded || pod.Status.Phase == corev1.PodFailed {
 			logger.Infof(ctx, "deleting terminal pod %s/%s phase=%s", ns, pod.Name, pod.Status.Phase)
 			if delErr := c.clientset.CoreV1().Pods(ns).Delete(ctx, pod.Name, metav1.DeleteOptions{}); delErr != nil {
-				logger.Warnf(ctx, "delete terminal pod %s/%s: %v", ns, pod.Name, delErr)
+				logger.Errorf(ctx, delErr, "delete terminal pod %s/%s", ns, pod.Name)
 			}
 			hasTerminal = true
 		}
@@ -372,7 +370,6 @@ func buildToolboxPod(ctx context.Context, cs *cocoonSet, tb cocoonToolboxSpec) *
 
 // ---------- CocoonSet status ----------
 
-// updateCocoonSetStatus patches the status subresource of a CocoonSet.
 func (c *controller) updateCocoonSetStatus(ctx context.Context, ns, name string, status cocoonSetStatus) error {
 	return c.patchStatus(ctx, csGVR, ns, name, status)
 }
@@ -507,7 +504,6 @@ func (c *controller) listOwnedPods(ctx context.Context, ns, csName string) ([]co
 	return pods.Items, nil
 }
 
-// ownerRef builds the standard OwnerReference slice for a CocoonSet-owned pod.
 func ownerRef(cs *cocoonSet) []metav1.OwnerReference {
 	blockOwnerDeletion := true
 	isController := true
@@ -523,7 +519,6 @@ func ownerRef(cs *cocoonSet) []metav1.OwnerReference {
 	}
 }
 
-// vkTolerations returns the standard virtual-kubelet toleration.
 func vkTolerations() []corev1.Toleration {
 	return []corev1.Toleration{
 		{
@@ -534,7 +529,6 @@ func vkTolerations() []corev1.Toleration {
 	}
 }
 
-// applyResources copies CPU/memory limits from an unstructured map to a container.
 func applyResources(ctx context.Context, container *corev1.Container, resources resourceHints) {
 	if resources.CPU != "" {
 		if q, ok := mustParseQuantity(ctx, resources.CPU); ok {
@@ -554,7 +548,6 @@ func applyResources(ctx context.Context, container *corev1.Container, resources 
 	}
 }
 
-// applyEnvFrom copies envFrom sources from the typed agent spec to a container.
 func applyEnvFrom(container *corev1.Container, refs []envFromSourceSpec) {
 	container.EnvFrom = append(container.EnvFrom, envFromSource(refs)...)
 }

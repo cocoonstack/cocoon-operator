@@ -56,7 +56,6 @@ import (
 	"github.com/cocoonstack/cocoon-operator/version"
 )
 
-// hibGVR is the GroupVersionResource for Hibernation CRDs.
 var hibGVR = schema.GroupVersionResource{
 	Group:    "cocoon.cis",
 	Version:  "v1alpha1",

@@ -2,7 +2,7 @@ package main
 
 import (
 	"context"
-	"reflect"
+	"maps"
 	"testing"
 
 	corev1 "k8s.io/api/core/v1"
@@ -232,7 +232,7 @@ func TestManagedPodAnnotationsSkipsEmptyValues(t *testing.T) {
 		meta.AnnotationMode:    "clone",
 		meta.AnnotationStorage: "10G",
 	}
-	if !reflect.DeepEqual(got, want) {
+	if !maps.Equal(got, want) {
 		t.Fatalf("managedPodAnnotations mismatch:\nwant: %#v\ngot:  %#v", want, got)
 	}
 }
