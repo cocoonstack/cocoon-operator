@@ -159,14 +159,16 @@ func (c *controller) reconcileCocoonSet(ctx context.Context, ns, name string) er
 	}
 
 	// Scale sub-agents and toolboxes.
-	c.scaleSubAgents(ctx, cs, ns, name, cp.agents, replicas)
-	c.ensureToolboxes(ctx, cs, ns, name, cp.toolboxes, toolboxSpecs)
+	agentsChanged := c.scaleSubAgents(ctx, cs, ns, name, cp.agents, replicas)
+	toolboxesChanged := c.ensureToolboxes(ctx, cs, ns, name, cp.toolboxes, toolboxSpecs)
 
-	// Update status -- re-list pods to get current state after creates/deletes.
-	ownedPods, err = c.listOwnedPods(ctx, ns, name)
-	if err != nil {
-		logger.Errorf(ctx, err, "re-list pods %s/%s", ns, name)
-		return err
+	// Re-list pods only when creates/deletes actually happened.
+	if agentsChanged || toolboxesChanged {
+		ownedPods, err = c.listOwnedPods(ctx, ns, name)
+		if err != nil {
+			logger.Errorf(ctx, err, "re-list pods %s/%s", ns, name)
+			return err
+		}
 	}
 	phase := phaseRunning
 	readyCount := 0
@@ -185,9 +187,11 @@ func (c *controller) reconcileCocoonSet(ctx context.Context, ns, name string) er
 }
 
 // scaleSubAgents creates missing sub-agents and deletes excess ones.
-func (c *controller) scaleSubAgents(ctx context.Context, cs *cocoonSet, ns, name string, agentPods map[int]*corev1.Pod, replicas int64) {
+// Returns true if any pods were created or deleted.
+func (c *controller) scaleSubAgents(ctx context.Context, cs *cocoonSet, ns, name string, agentPods map[int]*corev1.Pod, replicas int64) bool {
 	logger := log.WithFunc("controller.scaleSubAgents")
 	mainVMName := agentPods[0].Annotations[meta.AnnotationVMName]
+	changed := false
 
 	// Scale up: create missing sub-agents.
 	for slot := 1; slot <= int(replicas); slot++ {
@@ -197,6 +201,7 @@ func (c *controller) scaleSubAgents(ctx context.Context, cs *cocoonSet, ns, name
 				logger.Errorf(ctx, err, "create sub-agent %s/%s slot %d", ns, name, slot)
 			} else {
 				logger.Infof(ctx, "created sub-agent pod %s/%s %s fork from %s", ns, name, pod.Name, mainVMName)
+				changed = true
 			}
 		}
 	}
@@ -215,13 +220,17 @@ func (c *controller) scaleSubAgents(ctx context.Context, cs *cocoonSet, ns, name
 			logger.Errorf(ctx, err, "delete excess slot %s/%s %d", ns, name, slot)
 		} else {
 			logger.Infof(ctx, "deleted excess sub-agent pod %s/%s %s slot %d", ns, name, pod.Name, slot)
+			changed = true
 		}
 	}
+	return changed
 }
 
 // ensureToolboxes creates missing toolbox pods.
-func (c *controller) ensureToolboxes(ctx context.Context, cs *cocoonSet, ns, name string, toolboxPods map[string]*corev1.Pod, toolboxSpecs []cocoonToolboxSpec) {
+// Returns true if any pods were created.
+func (c *controller) ensureToolboxes(ctx context.Context, cs *cocoonSet, ns, name string, toolboxPods map[string]*corev1.Pod, toolboxSpecs []cocoonToolboxSpec) bool {
 	logger := log.WithFunc("controller.ensureToolboxes")
+	changed := false
 	for _, tb := range toolboxSpecs {
 		tbName := tb.Name
 		if tbName == "" {
@@ -233,9 +242,11 @@ func (c *controller) ensureToolboxes(ctx context.Context, cs *cocoonSet, ns, nam
 				logger.Errorf(ctx, err, "create toolbox %s/%s %s", ns, name, tbName)
 			} else {
 				logger.Infof(ctx, "created toolbox pod %s/%s %s", ns, name, pod.Name)
+				changed = true
 			}
 		}
 	}
+	return changed
 }
 
 // ---------- Pod builders ----------
