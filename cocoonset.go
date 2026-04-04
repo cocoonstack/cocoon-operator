@@ -138,21 +138,22 @@ func (c *controller) reconcileCocoonSet(ctx context.Context, ns, name string) er
 	mainPod, hasMain := cp.agents[0]
 	if !hasMain {
 		pod := buildAgentPod(ctx, cs, 0, "")
-		if _, err := c.clientset.CoreV1().Pods(ns).Create(ctx, pod, metav1.CreateOptions{}); err != nil {
+		_, err = c.clientset.CoreV1().Pods(ns).Create(ctx, pod, metav1.CreateOptions{})
+		if err != nil {
 			logger.Errorf(ctx, err, "create main agent %s/%s", ns, name)
 			return err
 		}
 		logger.Infof(ctx, "created main agent pod %s/%s %s", ns, name, pod.Name)
-		if err := c.updateCocoonSetStatus(ctx, ns, name, buildCocoonSetStatus(phaseScaling, ownedPods, name, desired)); err != nil {
-			logger.Errorf(ctx, err, "update scaling status %s/%s", ns, name)
+		if statusErr := c.updateCocoonSetStatus(ctx, ns, name, buildCocoonSetStatus(phaseScaling, ownedPods, name, desired)); statusErr != nil {
+			logger.Errorf(ctx, statusErr, "update scaling status %s/%s", ns, name)
 		}
 		return nil
 	}
 
 	if mainPod.Status.Phase != corev1.PodRunning {
 		logger.Debugf(ctx, "main agent not ready %s/%s phase=%s", ns, name, mainPod.Status.Phase)
-		if err := c.updateCocoonSetStatus(ctx, ns, name, buildCocoonSetStatus(phaseScaling, ownedPods, name, desired)); err != nil {
-			logger.Errorf(ctx, err, "update scaling status %s/%s", ns, name)
+		if statusErr := c.updateCocoonSetStatus(ctx, ns, name, buildCocoonSetStatus(phaseScaling, ownedPods, name, desired)); statusErr != nil {
+			logger.Errorf(ctx, statusErr, "update scaling status %s/%s", ns, name)
 		}
 		return nil
 	}
@@ -162,7 +163,11 @@ func (c *controller) reconcileCocoonSet(ctx context.Context, ns, name string) er
 	c.ensureToolboxes(ctx, cs, ns, name, cp.toolboxes, toolboxSpecs)
 
 	// Update status -- re-list pods to get current state after creates/deletes.
-	ownedPods, _ = c.listOwnedPods(ctx, ns, name)
+	ownedPods, err = c.listOwnedPods(ctx, ns, name)
+	if err != nil {
+		logger.Errorf(ctx, err, "re-list pods %s/%s", ns, name)
+		return err
+	}
 	phase := phaseRunning
 	readyCount := 0
 	for i := range ownedPods {
