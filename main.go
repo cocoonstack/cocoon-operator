@@ -82,6 +82,13 @@ func main() {
 	}).SetupWithManager(mgr); err != nil {
 		logger.Fatalf(ctx, err, "register CocoonSetReconciler: %v", err)
 	}
+	if err := (&CocoonHibernationReconciler{
+		Client: mgr.GetClient(),
+		Scheme: mgr.GetScheme(),
+		Epoch:  epochClient,
+	}).SetupWithManager(mgr); err != nil {
+		logger.Fatalf(ctx, err, "register CocoonHibernationReconciler: %v", err)
+	}
 
 	signalCtx, cancel := signal.NotifyContext(ctx, syscall.SIGINT, syscall.SIGTERM)
 	defer cancel()
