@@ -1,4 +1,4 @@
-package main
+package cocoonset
 
 import (
 	"context"
@@ -15,8 +15,9 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	"sigs.k8s.io/controller-runtime/pkg/predicate"
 
-	cocoonv1alpha1 "github.com/cocoonstack/cocoon-common/apis/v1alpha1"
+	cocoonv1 "github.com/cocoonstack/cocoon-common/apis/v1"
 	"github.com/cocoonstack/cocoon-common/meta"
+	"github.com/cocoonstack/cocoon-operator/epoch"
 )
 
 const (
@@ -33,11 +34,11 @@ const (
 	requeueWaitForMain = 5 * time.Second
 )
 
-// CocoonSetReconciler reconciles a CocoonSet object.
-type CocoonSetReconciler struct {
+// Reconciler reconciles a CocoonSet object.
+type Reconciler struct {
 	client.Client
 	Scheme *runtime.Scheme
-	Epoch  SnapshotRegistry
+	Epoch  epoch.SnapshotRegistry
 }
 
 // SetupWithManager registers the reconciler against the supplied
@@ -46,19 +47,19 @@ type CocoonSetReconciler struct {
 // actually changes — status-only patches we make ourselves do not
 // loop back. The Owns side keeps the pod-event firehose because
 // pod status updates are exactly what drives the readyAgents diff.
-func (r *CocoonSetReconciler) SetupWithManager(mgr ctrl.Manager) error {
+func (r *Reconciler) SetupWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(mgr).
-		For(&cocoonv1alpha1.CocoonSet{}, builder.WithPredicates(predicate.GenerationChangedPredicate{})).
+		For(&cocoonv1.CocoonSet{}, builder.WithPredicates(predicate.GenerationChangedPredicate{})).
 		Owns(&corev1.Pod{}).
 		Complete(r)
 }
 
 // Reconcile is the entry point invoked by controller-runtime each
 // time a watched event lands.
-func (r *CocoonSetReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
-	logger := log.WithFunc("CocoonSetReconciler.Reconcile")
+func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
+	logger := log.WithFunc("cocoonset.Reconciler.Reconcile")
 
-	var cs cocoonv1alpha1.CocoonSet
+	var cs cocoonv1.CocoonSet
 	if err := r.Get(ctx, req.NamespacedName, &cs); err != nil {
 		if apierrors.IsNotFound(err) {
 			return ctrl.Result{}, nil
@@ -97,7 +98,7 @@ func (r *CocoonSetReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 	// status consumers.
 	if classified.main != nil && isPodTerminal(classified.main) {
 		return ctrl.Result{}, r.patchStatus(ctx, &cs,
-			buildStatus(&cs, classified, cocoonv1alpha1.CocoonSetPhaseFailed))
+			buildStatus(&cs, classified, cocoonv1.CocoonSetPhaseFailed))
 	}
 
 	// Suspend handling. We always ensure the main agent first
@@ -118,7 +119,7 @@ func (r *CocoonSetReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 			return ctrl.Result{}, err
 		}
 		return ctrl.Result{}, r.patchStatus(ctx, &cs,
-			buildStatus(&cs, classified, cocoonv1alpha1.CocoonSetPhaseSuspended))
+			buildStatus(&cs, classified, cocoonv1.CocoonSetPhaseSuspended))
 	}
 
 	// Ensure the main agent (slot 0) exists.
@@ -135,7 +136,7 @@ func (r *CocoonSetReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 	// sub-agents — they fork from the main VM and need it to be live.
 	if !isPodReady(classified.main) {
 		return ctrl.Result{RequeueAfter: requeueWaitForMain},
-			r.patchStatus(ctx, &cs, buildStatus(&cs, classified, cocoonv1alpha1.CocoonSetPhasePending))
+			r.patchStatus(ctx, &cs, buildStatus(&cs, classified, cocoonv1.CocoonSetPhasePending))
 	}
 
 	mainVMName := meta.ParseVMSpec(classified.main).VMName
@@ -167,8 +168,8 @@ func (r *CocoonSetReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 // ensureSubAgents creates missing sub-agent pods for slots
 // [1..Replicas] and deletes any slot beyond Replicas. Returns true
 // when at least one create or delete actually happened.
-func (r *CocoonSetReconciler) ensureSubAgents(ctx context.Context, cs *cocoonv1alpha1.CocoonSet, classified classifiedPods, mainVMName string) (bool, error) {
-	logger := log.WithFunc("CocoonSetReconciler.ensureSubAgents")
+func (r *Reconciler) ensureSubAgents(ctx context.Context, cs *cocoonv1.CocoonSet, classified classifiedPods, mainVMName string) (bool, error) {
+	logger := log.WithFunc("cocoonset.Reconciler.ensureSubAgents")
 	changed := false
 	for slot := int32(1); slot <= cs.Spec.Agent.Replicas; slot++ {
 		if _, exists := classified.sub[slot]; exists {
@@ -197,8 +198,8 @@ func (r *CocoonSetReconciler) ensureSubAgents(ctx context.Context, cs *cocoonv1a
 // ensureToolboxes creates missing toolbox pods for every spec entry
 // and deletes any toolbox not in spec. Returns true when at least
 // one create or delete actually happened.
-func (r *CocoonSetReconciler) ensureToolboxes(ctx context.Context, cs *cocoonv1alpha1.CocoonSet, classified classifiedPods) (bool, error) {
-	logger := log.WithFunc("CocoonSetReconciler.ensureToolboxes")
+func (r *Reconciler) ensureToolboxes(ctx context.Context, cs *cocoonv1.CocoonSet, classified classifiedPods) (bool, error) {
+	logger := log.WithFunc("cocoonset.Reconciler.ensureToolboxes")
 	changed := false
 	desired := map[string]bool{}
 	for _, tb := range cs.Spec.Toolboxes {
@@ -228,8 +229,8 @@ func (r *CocoonSetReconciler) ensureToolboxes(ctx context.Context, cs *cocoonv1a
 
 // reconcileDelete tears down everything the CocoonSet owns and then
 // removes the finalizer so the API server can finalize the delete.
-func (r *CocoonSetReconciler) reconcileDelete(ctx context.Context, cs *cocoonv1alpha1.CocoonSet) (ctrl.Result, error) {
-	logger := log.WithFunc("CocoonSetReconciler.reconcileDelete")
+func (r *Reconciler) reconcileDelete(ctx context.Context, cs *cocoonv1.CocoonSet) (ctrl.Result, error) {
+	logger := log.WithFunc("cocoonset.Reconciler.reconcileDelete")
 	logger.Infof(ctx, "deleting cocoonset %s/%s", cs.Namespace, cs.Name)
 
 	var podList corev1.PodList
@@ -247,7 +248,7 @@ func (r *CocoonSetReconciler) reconcileDelete(ctx context.Context, cs *cocoonv1a
 	}
 
 	// Garbage-collect snapshots when the policy says we should.
-	if cs.Spec.SnapshotPolicy.Default() != cocoonv1alpha1.SnapshotPolicyNever && r.Epoch != nil {
+	if cs.Spec.SnapshotPolicy.Default() != cocoonv1.SnapshotPolicyNever && r.Epoch != nil {
 		for i := range podList.Items {
 			vmName := meta.ParseVMSpec(&podList.Items[i]).VMName
 			if vmName == "" {
@@ -271,7 +272,7 @@ func (r *CocoonSetReconciler) reconcileDelete(ctx context.Context, cs *cocoonv1a
 // applySuspend writes HibernateState(true) onto every owned pod.
 // vk-cocoon picks up the annotation and snapshots / tears down the
 // VM while keeping the container alive.
-func (r *CocoonSetReconciler) applySuspend(ctx context.Context, classified classifiedPods) error {
+func (r *Reconciler) applySuspend(ctx context.Context, classified classifiedPods) error {
 	for _, pod := range classified.allByName {
 		if ctxErr := ctx.Err(); ctxErr != nil {
 			return ctxErr

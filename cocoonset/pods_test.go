@@ -1,4 +1,4 @@
-package main
+package cocoonset
 
 import (
 	"testing"
@@ -10,26 +10,26 @@ import (
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 
-	cocoonv1alpha1 "github.com/cocoonstack/cocoon-common/apis/v1alpha1"
+	cocoonv1 "github.com/cocoonstack/cocoon-common/apis/v1"
 	"github.com/cocoonstack/cocoon-common/meta"
 )
 
-// testScheme returns a scheme with corev1 + cocoonv1alpha1 types
+// testScheme returns a scheme with corev1 + cocoonv1 types
 // registered, matching what the operator's main wires up so the
 // pod builders can resolve the controller reference.
 func testScheme(t *testing.T) *runtime.Scheme {
 	t.Helper()
 	scheme := runtime.NewScheme()
 	utilruntime.Must(clientgoscheme.AddToScheme(scheme))
-	utilruntime.Must(cocoonv1alpha1.AddToScheme(scheme))
+	utilruntime.Must(cocoonv1.AddToScheme(scheme))
 	return scheme
 }
 
-func newCocoonSet(name string, modifiers ...func(*cocoonv1alpha1.CocoonSet)) *cocoonv1alpha1.CocoonSet {
-	cs := &cocoonv1alpha1.CocoonSet{
+func newCocoonSet(name string, modifiers ...func(*cocoonv1.CocoonSet)) *cocoonv1.CocoonSet {
+	cs := &cocoonv1.CocoonSet{
 		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: "ns", UID: "test-uid"},
-		Spec: cocoonv1alpha1.CocoonSetSpec{
-			Agent: cocoonv1alpha1.AgentSpec{
+		Spec: cocoonv1.CocoonSetSpec{
+			Agent: cocoonv1.AgentSpec{
 				Image: "ghcr.io/cocoonstack/cocoon/ubuntu:24.04",
 			},
 		},
@@ -62,7 +62,7 @@ func TestBuildAgentPodSlot0IsMain(t *testing.T) {
 }
 
 func TestBuildAgentPodSubAgentForksFromMain(t *testing.T) {
-	cs := newCocoonSet("demo", func(cs *cocoonv1alpha1.CocoonSet) {
+	cs := newCocoonSet("demo", func(cs *cocoonv1.CocoonSet) {
 		cs.Spec.Agent.Replicas = 2
 	})
 	mainVMName := "vk-ns-demo-0"
@@ -79,10 +79,10 @@ func TestBuildAgentPodSubAgentForksFromMain(t *testing.T) {
 func TestBuildAgentPodAppliesAgentDefaults(t *testing.T) {
 	cs := newCocoonSet("demo")
 	pod := buildAgentPod(cs, 0, "", testScheme(t))
-	if pod.Annotations[meta.AnnotationMode] != string(cocoonv1alpha1.AgentModeClone) {
+	if pod.Annotations[meta.AnnotationMode] != string(cocoonv1.AgentModeClone) {
 		t.Errorf("mode default: %q", pod.Annotations[meta.AnnotationMode])
 	}
-	if pod.Annotations[meta.AnnotationOS] != string(cocoonv1alpha1.OSLinux) {
+	if pod.Annotations[meta.AnnotationOS] != string(cocoonv1.OSLinux) {
 		t.Errorf("os default: %q", pod.Annotations[meta.AnnotationOS])
 	}
 	if pod.Annotations[meta.AnnotationManaged] != "true" {
@@ -92,7 +92,7 @@ func TestBuildAgentPodAppliesAgentDefaults(t *testing.T) {
 
 func TestBuildAgentPodPropagatesStorage(t *testing.T) {
 	q := resource.MustParse("100Gi")
-	cs := newCocoonSet("demo", func(cs *cocoonv1alpha1.CocoonSet) {
+	cs := newCocoonSet("demo", func(cs *cocoonv1.CocoonSet) {
 		cs.Spec.Agent.Storage = &q
 	})
 	pod := buildAgentPod(cs, 0, "", testScheme(t))
@@ -103,9 +103,9 @@ func TestBuildAgentPodPropagatesStorage(t *testing.T) {
 
 func TestBuildToolboxPodStaticCarriesRuntimeHints(t *testing.T) {
 	cs := newCocoonSet("demo")
-	tb := cocoonv1alpha1.ToolboxSpec{
+	tb := cocoonv1.ToolboxSpec{
 		Name:       "tb",
-		Mode:       cocoonv1alpha1.ToolboxModeStatic,
+		Mode:       cocoonv1.ToolboxModeStatic,
 		StaticIP:   "10.0.0.1",
 		StaticVMID: "qemu-1",
 		VNCPort:    5901,
@@ -128,9 +128,9 @@ func TestBuildToolboxPodStaticCarriesRuntimeHints(t *testing.T) {
 
 func TestBuildToolboxPodNonStaticIsManaged(t *testing.T) {
 	cs := newCocoonSet("demo")
-	tb := cocoonv1alpha1.ToolboxSpec{
+	tb := cocoonv1.ToolboxSpec{
 		Name:  "tb",
-		Mode:  cocoonv1alpha1.ToolboxModeRun,
+		Mode:  cocoonv1.ToolboxModeRun,
 		Image: "ghcr.io/cocoonstack/cocoon/toolbox:latest",
 	}
 	pod := buildToolboxPod(cs, tb, testScheme(t))
@@ -145,7 +145,7 @@ func TestClassifyPodsGroupsByRole(t *testing.T) {
 	main := buildAgentPod(cs, 0, "", scheme)
 	sub1 := buildAgentPod(cs, 1, "vk-ns-demo-0", scheme)
 	sub2 := buildAgentPod(cs, 2, "vk-ns-demo-0", scheme)
-	tb := buildToolboxPod(cs, cocoonv1alpha1.ToolboxSpec{Name: "tb", Image: "x"}, scheme)
+	tb := buildToolboxPod(cs, cocoonv1.ToolboxSpec{Name: "tb", Image: "x"}, scheme)
 
 	pods := []corev1.Pod{*main, *sub1, *sub2, *tb}
 	got := classifyPods(pods)

@@ -1,4 +1,4 @@
-package main
+package cocoonset
 
 import (
 	"context"
@@ -12,7 +12,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
-	cocoonv1alpha1 "github.com/cocoonstack/cocoon-common/apis/v1alpha1"
+	cocoonv1 "github.com/cocoonstack/cocoon-common/apis/v1"
 	"github.com/cocoonstack/cocoon-common/meta"
 )
 
@@ -22,7 +22,7 @@ import (
 // timestamps inside Conditions survive the diff because buildStatus
 // builds them through apimeta.SetStatusCondition, which preserves
 // the existing LastTransitionTime when nothing else changed.
-func (r *CocoonSetReconciler) patchStatus(ctx context.Context, cs *cocoonv1alpha1.CocoonSet, status cocoonv1alpha1.CocoonSetStatus) error {
+func (r *Reconciler) patchStatus(ctx context.Context, cs *cocoonv1.CocoonSet, status cocoonv1.CocoonSetStatus) error {
 	mergeConditions(&status, cs.Status.Conditions)
 	if equality.Semantic.DeepEqual(cs.Status, status) {
 		return nil
@@ -40,7 +40,7 @@ func (r *CocoonSetReconciler) patchStatus(ctx context.Context, cs *cocoonv1alpha
 // prev. The result is that timestamps survive when nothing else
 // about a condition changed, so equality.Semantic.DeepEqual can
 // catch the no-op case without a hand-rolled comparator.
-func mergeConditions(next *cocoonv1alpha1.CocoonSetStatus, prev []metav1.Condition) {
+func mergeConditions(next *cocoonv1.CocoonSetStatus, prev []metav1.Condition) {
 	merged := make([]metav1.Condition, 0, len(prev))
 	merged = append(merged, prev...)
 	for _, c := range next.Conditions {
@@ -53,7 +53,7 @@ func mergeConditions(next *cocoonv1alpha1.CocoonSetStatus, prev []metav1.Conditi
 // classified-pods snapshot. The phase argument lets the caller
 // override the auto-derived phase (used by the suspend short-circuit
 // and the pending-main path).
-func buildStatus(cs *cocoonv1alpha1.CocoonSet, classified classifiedPods, phase cocoonv1alpha1.CocoonSetPhase) cocoonv1alpha1.CocoonSetStatus {
+func buildStatus(cs *cocoonv1.CocoonSet, classified classifiedPods, phase cocoonv1.CocoonSetPhase) cocoonv1.CocoonSetStatus {
 	desired := int32(1) + cs.Spec.Agent.Replicas
 	ready := int32(0)
 	if classified.main != nil && isPodReady(classified.main) {
@@ -65,7 +65,7 @@ func buildStatus(cs *cocoonv1alpha1.CocoonSet, classified classifiedPods, phase 
 		}
 	}
 
-	agents := make([]cocoonv1alpha1.AgentStatus, 0, desired)
+	agents := make([]cocoonv1.AgentStatus, 0, desired)
 	if classified.main != nil {
 		agents = append(agents, agentStatusFromPod(classified.main, 0, meta.RoleMain, ""))
 	}
@@ -82,7 +82,7 @@ func buildStatus(cs *cocoonv1alpha1.CocoonSet, classified classifiedPods, phase 
 		agents = append(agents, agentStatusFromPod(classified.sub[slot], slot, meta.RoleSubAgent, mainVMName))
 	}
 
-	tbStatuses := make([]cocoonv1alpha1.ToolboxStatus, 0, len(classified.toolbox))
+	tbStatuses := make([]cocoonv1.ToolboxStatus, 0, len(classified.toolbox))
 	tbNames := make([]string, 0, len(classified.toolbox))
 	for name := range classified.toolbox {
 		tbNames = append(tbNames, name)
@@ -92,7 +92,7 @@ func buildStatus(cs *cocoonv1alpha1.CocoonSet, classified classifiedPods, phase 
 		tbStatuses = append(tbStatuses, toolboxStatusFromPod(classified.toolbox[name], name))
 	}
 
-	return cocoonv1alpha1.CocoonSetStatus{
+	return cocoonv1.CocoonSetStatus{
 		ObservedGeneration: cs.Generation,
 		Phase:              phase,
 		ReadyAgents:        ready,
@@ -105,7 +105,7 @@ func buildStatus(cs *cocoonv1alpha1.CocoonSet, classified classifiedPods, phase 
 
 // currentPhase derives the running-state phase from a classified
 // snapshot when no override is in effect.
-func currentPhase(cs *cocoonv1alpha1.CocoonSet, classified classifiedPods) cocoonv1alpha1.CocoonSetPhase {
+func currentPhase(cs *cocoonv1.CocoonSet, classified classifiedPods) cocoonv1.CocoonSetPhase {
 	desired := int32(1) + cs.Spec.Agent.Replicas
 	ready := int32(0)
 	if classified.main != nil && isPodReady(classified.main) {
@@ -118,18 +118,18 @@ func currentPhase(cs *cocoonv1alpha1.CocoonSet, classified classifiedPods) cocoo
 	}
 	switch {
 	case classified.main == nil:
-		return cocoonv1alpha1.CocoonSetPhasePending
+		return cocoonv1.CocoonSetPhasePending
 	case ready < desired:
-		return cocoonv1alpha1.CocoonSetPhaseScaling
+		return cocoonv1.CocoonSetPhaseScaling
 	default:
-		return cocoonv1alpha1.CocoonSetPhaseRunning
+		return cocoonv1.CocoonSetPhaseRunning
 	}
 }
 
-func agentStatusFromPod(pod *corev1.Pod, slot int32, role, forkedFrom string) cocoonv1alpha1.AgentStatus {
+func agentStatusFromPod(pod *corev1.Pod, slot int32, role, forkedFrom string) cocoonv1.AgentStatus {
 	spec := meta.ParseVMSpec(pod)
 	runtime := meta.ParseVMRuntime(pod)
-	return cocoonv1alpha1.AgentStatus{
+	return cocoonv1.AgentStatus{
 		Slot:       slot,
 		Role:       role,
 		PodName:    pod.Name,
@@ -141,10 +141,10 @@ func agentStatusFromPod(pod *corev1.Pod, slot int32, role, forkedFrom string) co
 	}
 }
 
-func toolboxStatusFromPod(pod *corev1.Pod, name string) cocoonv1alpha1.ToolboxStatus {
+func toolboxStatusFromPod(pod *corev1.Pod, name string) cocoonv1.ToolboxStatus {
 	spec := meta.ParseVMSpec(pod)
 	runtime := meta.ParseVMRuntime(pod)
-	return cocoonv1alpha1.ToolboxStatus{
+	return cocoonv1.ToolboxStatus{
 		Name:     name,
 		PodName:  pod.Name,
 		VMName:   spec.VMName,
@@ -161,7 +161,7 @@ func toolboxStatusFromPod(pod *corev1.Pod, name string) cocoonv1alpha1.ToolboxSt
 // left zero so apimeta.SetStatusCondition (called from
 // mergeConditions on the patchStatus path) preserves the existing
 // LastTransitionTime when nothing else changed.
-func buildConditions(cs *cocoonv1alpha1.CocoonSet, ready, desired int32, phase cocoonv1alpha1.CocoonSetPhase) []metav1.Condition {
+func buildConditions(cs *cocoonv1.CocoonSet, ready, desired int32, phase cocoonv1.CocoonSetPhase) []metav1.Condition {
 	readyCond := metav1.Condition{
 		Type:               "Ready",
 		Status:             metav1.ConditionFalse,
@@ -181,7 +181,7 @@ func buildConditions(cs *cocoonv1alpha1.CocoonSet, ready, desired int32, phase c
 		Message:            string(phase),
 		ObservedGeneration: cs.Generation,
 	}
-	if phase == cocoonv1alpha1.CocoonSetPhasePending || phase == cocoonv1alpha1.CocoonSetPhaseScaling {
+	if phase == cocoonv1.CocoonSetPhasePending || phase == cocoonv1.CocoonSetPhaseScaling {
 		progressing.Status = metav1.ConditionTrue
 		progressing.Reason = "Reconciling"
 	}

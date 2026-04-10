@@ -1,4 +1,4 @@
-package main
+package hibernation
 
 import (
 	"context"
@@ -8,12 +8,12 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
-	cocoonv1alpha1 "github.com/cocoonstack/cocoon-common/apis/v1alpha1"
+	cocoonv1 "github.com/cocoonstack/cocoon-common/apis/v1"
 	"github.com/cocoonstack/cocoon-common/meta"
 )
 
 // fakeRegistry is a SnapshotRegistry stand-in for the hibernation
-// tests. The behaviour of GetManifest / DeleteManifest is fully
+// tests. The behaviour of HasManifest / DeleteManifest is fully
 // driven by the bool fields so each test can simulate a particular
 // epoch state without standing up a real client.
 type fakeRegistry struct {
@@ -23,14 +23,11 @@ type fakeRegistry struct {
 	deleteErr       error
 }
 
-func (f *fakeRegistry) GetManifest(_ context.Context, _, _ string) ([]byte, string, error) {
+func (f *fakeRegistry) HasManifest(_ context.Context, _, _ string) (bool, error) {
 	if f.manifestErr != nil {
-		return nil, "", f.manifestErr
+		return false, f.manifestErr
 	}
-	if f.manifestPresent {
-		return []byte("{}"), "application/json", nil
-	}
-	return nil, "", errors.New("not found")
+	return f.manifestPresent, nil
 }
 
 func (f *fakeRegistry) DeleteManifest(_ context.Context, _, _ string) error {
@@ -40,15 +37,15 @@ func (f *fakeRegistry) DeleteManifest(_ context.Context, _, _ string) error {
 
 func TestReadyConditionMaps(t *testing.T) {
 	cases := []struct {
-		phase  cocoonv1alpha1.CocoonHibernationPhase
+		phase  cocoonv1.CocoonHibernationPhase
 		status metav1.ConditionStatus
 	}{
-		{cocoonv1alpha1.CocoonHibernationPhaseHibernated, metav1.ConditionTrue},
-		{cocoonv1alpha1.CocoonHibernationPhaseActive, metav1.ConditionTrue},
-		{cocoonv1alpha1.CocoonHibernationPhaseFailed, metav1.ConditionFalse},
-		{cocoonv1alpha1.CocoonHibernationPhaseHibernating, metav1.ConditionFalse},
-		{cocoonv1alpha1.CocoonHibernationPhaseWaking, metav1.ConditionFalse},
-		{cocoonv1alpha1.CocoonHibernationPhasePending, metav1.ConditionFalse},
+		{cocoonv1.CocoonHibernationPhaseHibernated, metav1.ConditionTrue},
+		{cocoonv1.CocoonHibernationPhaseActive, metav1.ConditionTrue},
+		{cocoonv1.CocoonHibernationPhaseFailed, metav1.ConditionFalse},
+		{cocoonv1.CocoonHibernationPhaseHibernating, metav1.ConditionFalse},
+		{cocoonv1.CocoonHibernationPhaseWaking, metav1.ConditionFalse},
+		{cocoonv1.CocoonHibernationPhasePending, metav1.ConditionFalse},
 	}
 	for _, c := range cases {
 		t.Run(string(c.phase), func(t *testing.T) {
@@ -89,20 +86,30 @@ func TestIsContainerRunning(t *testing.T) {
 
 func TestFakeRegistryGetMissing(t *testing.T) {
 	r := &fakeRegistry{}
-	_, _, err := r.GetManifest(context.Background(), "x", "hibernate")
-	if err == nil {
-		t.Errorf("expected error when manifest is not present")
+	present, err := r.HasManifest(context.Background(), "x", "hibernate")
+	if err != nil {
+		t.Fatalf("has: %v", err)
+	}
+	if present {
+		t.Errorf("expected manifest absent")
 	}
 }
 
 func TestFakeRegistryGetPresent(t *testing.T) {
 	r := &fakeRegistry{manifestPresent: true}
-	body, _, err := r.GetManifest(context.Background(), "x", "hibernate")
+	present, err := r.HasManifest(context.Background(), "x", "hibernate")
 	if err != nil {
-		t.Fatalf("get: %v", err)
+		t.Fatalf("has: %v", err)
 	}
-	if len(body) == 0 {
-		t.Errorf("body should not be empty when manifest present")
+	if !present {
+		t.Errorf("expected manifest present")
+	}
+}
+
+func TestFakeRegistryGetErrorPropagates(t *testing.T) {
+	r := &fakeRegistry{manifestErr: errors.New("transport boom")}
+	if _, err := r.HasManifest(context.Background(), "x", "hibernate"); err == nil {
+		t.Errorf("expected transport error to surface")
 	}
 }
 
@@ -116,11 +123,15 @@ func TestFakeRegistryDeleteRecords(t *testing.T) {
 	}
 }
 
+// TestPodVMNameRoundtrip exercises the meta.VMSpec annotation
+// roundtrip on the same shape of pod the cocoonset reconciler
+// produces. Building it inline (rather than reaching across into
+// the cocoonset package) keeps the hibernation tests free of any
+// reverse dependency on cocoonset.
 func TestPodVMNameRoundtrip(t *testing.T) {
-	cs := newCocoonSet("demo")
-	pod := buildAgentPod(cs, 0, "", testScheme(t))
-	got := meta.ParseVMSpec(pod).VMName
-	if got != "vk-ns-demo-0" {
+	pod := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "demo-0", Namespace: "ns"}}
+	(&meta.VMSpec{VMName: "vk-ns-demo-0", Managed: true}).Apply(pod)
+	if got := meta.ParseVMSpec(pod).VMName; got != "vk-ns-demo-0" {
 		t.Errorf("vmName roundtrip: %q", got)
 	}
 }

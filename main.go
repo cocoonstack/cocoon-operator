@@ -4,7 +4,11 @@
 // sub-agents + M toolboxes); CocoonHibernation drives per-pod
 // hibernate / wake transitions through vk-cocoon. Both reconcilers
 // are built on controller-runtime and consume the typed CRD shapes
-// shipped from cocoon-common/apis/v1alpha1.
+// shipped from cocoon-common/apis/v1.
+//
+// This file is the binary entry point. The reconcilers themselves
+// live in the cocoonset and hibernation packages; the epoch
+// SnapshotRegistry adapter lives in the epoch package.
 package main
 
 import (
@@ -23,8 +27,11 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/healthz"
 	metricsserver "sigs.k8s.io/controller-runtime/pkg/metrics/server"
 
-	cocoonv1alpha1 "github.com/cocoonstack/cocoon-common/apis/v1alpha1"
+	cocoonv1 "github.com/cocoonstack/cocoon-common/apis/v1"
 	commonlog "github.com/cocoonstack/cocoon-common/log"
+	"github.com/cocoonstack/cocoon-operator/cocoonset"
+	"github.com/cocoonstack/cocoon-operator/epoch"
+	"github.com/cocoonstack/cocoon-operator/hibernation"
 	"github.com/cocoonstack/cocoon-operator/version"
 )
 
@@ -74,21 +81,21 @@ func main() {
 		logger.Fatalf(ctx, err, "add readyz check: %v", err)
 	}
 
-	epochClient := newEpochClient(envOrDefault("EPOCH_URL", "http://epoch.cocoon-system.svc:8080"), os.Getenv("EPOCH_TOKEN"))
+	epochClient := epoch.New(envOrDefault("EPOCH_URL", "http://epoch.cocoon-system.svc:8080"), os.Getenv("EPOCH_TOKEN"))
 
-	if err := (&CocoonSetReconciler{
+	if err := (&cocoonset.Reconciler{
 		Client: mgr.GetClient(),
 		Scheme: mgr.GetScheme(),
 		Epoch:  epochClient,
 	}).SetupWithManager(mgr); err != nil {
-		logger.Fatalf(ctx, err, "register CocoonSetReconciler: %v", err)
+		logger.Fatalf(ctx, err, "register cocoonset.Reconciler: %v", err)
 	}
-	if err := (&CocoonHibernationReconciler{
+	if err := (&hibernation.Reconciler{
 		Client: mgr.GetClient(),
 		Scheme: mgr.GetScheme(),
 		Epoch:  epochClient,
 	}).SetupWithManager(mgr); err != nil {
-		logger.Fatalf(ctx, err, "register CocoonHibernationReconciler: %v", err)
+		logger.Fatalf(ctx, err, "register hibernation.Reconciler: %v", err)
 	}
 
 	signalCtx, cancel := signal.NotifyContext(ctx, syscall.SIGINT, syscall.SIGTERM)
@@ -106,7 +113,7 @@ func main() {
 func buildScheme() *runtime.Scheme {
 	scheme := runtime.NewScheme()
 	utilruntime.Must(clientgoscheme.AddToScheme(scheme))
-	utilruntime.Must(cocoonv1alpha1.AddToScheme(scheme))
+	utilruntime.Must(cocoonv1.AddToScheme(scheme))
 	return scheme
 }
 

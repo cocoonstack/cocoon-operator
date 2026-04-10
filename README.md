@@ -5,7 +5,17 @@ Kubernetes operator that manages VM-backed pod lifecycles through two CRDs:
 - **CocoonSet** — declarative spec for an agent group (one main agent + N sub-agents + M toolboxes)
 - **CocoonHibernation** — per-pod hibernate / wake request
 
-Both reconcilers are built on [controller-runtime](https://sigs.k8s.io/controller-runtime) and consume the typed CRD shapes shipped from [cocoon-common/apis/v1alpha1](https://github.com/cocoonstack/cocoon-common).
+Both reconcilers are built on [controller-runtime](https://sigs.k8s.io/controller-runtime) and consume the typed CRD shapes shipped from [cocoon-common/apis/v1](https://github.com/cocoonstack/cocoon-common).
+
+The binary entry point is `main.go`; the reconcilers themselves live in subpackages so each one is independently testable:
+
+```
+cocoon-operator/
+├── main.go              # manager wiring + flag parsing
+├── cocoonset/           # CocoonSet reconciler, pod builders, status diff
+├── hibernation/         # CocoonHibernation reconciler
+└── epoch/               # SnapshotRegistry interface + epoch HTTP adapter
+```
 
 ## Architecture
 
@@ -14,9 +24,9 @@ Both reconcilers are built on [controller-runtime](https://sigs.k8s.io/controlle
 │                        cocoon-operator                            │
 │                                                                  │
 │  ┌────────────────────────┐    ┌─────────────────────────────┐  │
-│  │  CocoonSetReconciler   │    │ CocoonHibernationReconciler │  │
+│  │  cocoonset.Reconciler  │    │ hibernation.Reconciler      │  │
 │  │  - finalizer + GC       │    │  - HibernateState patches   │  │
-│  │  - main → subs → tbs    │    │  - epoch.GetManifest probe  │  │
+│  │  - main → subs → tbs    │    │  - epoch.HasManifest probe  │  │
 │  │  - patch /status        │    │  - Conditions               │  │
 │  └────────┬───────────────┘    └────────────┬────────────────┘  │
 │           │                                  │                   │
@@ -49,7 +59,7 @@ Pods are constructed via `meta.VMSpec.Apply` so the operator never touches the a
 
 | Spec.Desire | What the reconciler does | Terminal phase |
 |---|---|---|
-| `Hibernate` | `meta.HibernateState(true).Apply` on the target pod, then poll `epoch.GetManifest(vmName, "hibernate")` until the snapshot lands | `Hibernated` |
+| `Hibernate` | `meta.HibernateState(true).Apply` on the target pod, then poll `epoch.HasManifest(vmName, "hibernate")` until the snapshot lands | `Hibernated` |
 | `Wake` | Clear `meta.HibernateState`, wait for the pod's container to be `Running`, then drop the hibernation snapshot tag from epoch | `Active` |
 
 There is no `cocoon-vm-snapshots` ConfigMap bridge — epoch is the single source of truth for hibernation state. Failure paths set `Phase=Failed` with a one-shot message in the `Ready` condition instead of looping forever on a bad reference.

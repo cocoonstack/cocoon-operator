@@ -74,7 +74,7 @@ import-crds: ## Copy CRD YAML from cocoon-common into config/crd/bases
 	fi; \
 	rm -rf config/crd/bases; \
 	mkdir -p config/crd/bases; \
-	cp $$COCOON_COMMON_DIR/apis/v1alpha1/crds/*.yaml config/crd/bases/; \
+	cp $$COCOON_COMMON_DIR/apis/v1/crds/*.yaml config/crd/bases/; \
 	echo "imported $$(ls config/crd/bases | wc -l | tr -d ' ') CRDs from $$COCOON_COMMON_DIR"
 
 # --- Build ---

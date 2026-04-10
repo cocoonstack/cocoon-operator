@@ -1,4 +1,8 @@
-package main
+// Package cocoonset hosts the CocoonSet reconciler and the pod
+// builder helpers it relies on. The package is named after the CRD
+// it manages so the import path reads naturally
+// (`cocoonset.Reconciler`, `cocoonset.BuildAgentPod`).
+package cocoonset
 
 import (
 	"fmt"
@@ -10,7 +14,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 
-	cocoonv1alpha1 "github.com/cocoonstack/cocoon-common/apis/v1alpha1"
+	cocoonv1 "github.com/cocoonstack/cocoon-common/apis/v1"
 	"github.com/cocoonstack/cocoon-common/meta"
 )
 
@@ -76,7 +80,7 @@ func classifyPods(pods []corev1.Pod) classifiedPods {
 // buildAgentPod constructs the desired Pod for an agent slot.
 // slot 0 is the main agent; slot >= 1 are sub-agents that fork from
 // the main agent's VM.
-func buildAgentPod(cs *cocoonv1alpha1.CocoonSet, slot int32, mainVMName string, scheme *runtime.Scheme) *corev1.Pod {
+func buildAgentPod(cs *cocoonv1.CocoonSet, slot int32, mainVMName string, scheme *runtime.Scheme) *corev1.Pod {
 	role := meta.RoleMain
 	forkFrom := ""
 	if slot > 0 {
@@ -111,13 +115,13 @@ func buildAgentPod(cs *cocoonv1alpha1.CocoonSet, slot int32, mainVMName string, 
 }
 
 // buildToolboxPod constructs the desired Pod for a toolbox entry.
-func buildToolboxPod(cs *cocoonv1alpha1.CocoonSet, tb cocoonv1alpha1.ToolboxSpec, scheme *runtime.Scheme) *corev1.Pod {
+func buildToolboxPod(cs *cocoonv1.CocoonSet, tb cocoonv1.ToolboxSpec, scheme *runtime.Scheme) *corev1.Pod {
 	vmName := meta.VMNameForPod(cs.Namespace, tb.Name)
 	podName := fmt.Sprintf("%s-%s", cs.Name, tb.Name)
 
 	pod := newManagedPod(cs, podName, meta.RoleToolbox, tb.Name, scheme)
 
-	managed := tb.Mode != cocoonv1alpha1.ToolboxModeStatic
+	managed := tb.Mode != cocoonv1.ToolboxModeStatic
 	spec := meta.VMSpec{
 		VMName:         vmName,
 		Image:          tb.Image,
@@ -129,7 +133,7 @@ func buildToolboxPod(cs *cocoonv1alpha1.CocoonSet, tb cocoonv1alpha1.ToolboxSpec
 	}
 	spec.Apply(pod)
 
-	if tb.Mode == cocoonv1alpha1.ToolboxModeStatic {
+	if tb.Mode == cocoonv1.ToolboxModeStatic {
 		// Static toolboxes carry pre-assigned runtime hints so
 		// vk-cocoon does not invent its own.
 		runtime := meta.VMRuntime{VMID: tb.StaticVMID, IP: tb.StaticIP, VNCPort: tb.VNCPort}
@@ -146,7 +150,7 @@ func buildToolboxPod(cs *cocoonv1alpha1.CocoonSet, tb cocoonv1alpha1.ToolboxSpec
 // from the CocoonSet. A failure here is a programmer bug (missing
 // type registration in the scheme), not a runtime condition, so
 // panic instead of bubbling an error through every caller.
-func newManagedPod(cs *cocoonv1alpha1.CocoonSet, podName, role, slotLabel string, scheme *runtime.Scheme) *corev1.Pod {
+func newManagedPod(cs *cocoonv1.CocoonSet, podName, role, slotLabel string, scheme *runtime.Scheme) *corev1.Pod {
 	one := int64(1)
 	pool := cs.Spec.NodePool
 	if pool == "" {

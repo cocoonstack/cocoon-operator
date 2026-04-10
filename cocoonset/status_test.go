@@ -1,4 +1,4 @@
-package main
+package cocoonset
 
 import (
 	"testing"
@@ -7,7 +7,7 @@ import (
 	"k8s.io/apimachinery/pkg/api/equality"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
-	cocoonv1alpha1 "github.com/cocoonstack/cocoon-common/apis/v1alpha1"
+	cocoonv1 "github.com/cocoonstack/cocoon-common/apis/v1"
 	"github.com/cocoonstack/cocoon-common/meta"
 )
 
@@ -21,17 +21,17 @@ func readyPod(p *corev1.Pod) *corev1.Pod {
 }
 
 func TestCurrentPhasePending(t *testing.T) {
-	cs := newCocoonSet("demo", func(cs *cocoonv1alpha1.CocoonSet) {
+	cs := newCocoonSet("demo", func(cs *cocoonv1.CocoonSet) {
 		cs.Spec.Agent.Replicas = 1
 	})
 	classified := classifiedPods{sub: map[int32]*corev1.Pod{}, toolbox: map[string]*corev1.Pod{}, allByName: map[string]*corev1.Pod{}}
-	if got := currentPhase(cs, classified); got != cocoonv1alpha1.CocoonSetPhasePending {
+	if got := currentPhase(cs, classified); got != cocoonv1.CocoonSetPhasePending {
 		t.Errorf("phase: %q, want Pending", got)
 	}
 }
 
 func TestCurrentPhaseScaling(t *testing.T) {
-	cs := newCocoonSet("demo", func(cs *cocoonv1alpha1.CocoonSet) {
+	cs := newCocoonSet("demo", func(cs *cocoonv1.CocoonSet) {
 		cs.Spec.Agent.Replicas = 1
 	})
 	main := readyPod(buildAgentPod(cs, 0, "", testScheme(t)))
@@ -41,7 +41,7 @@ func TestCurrentPhaseScaling(t *testing.T) {
 		toolbox:   map[string]*corev1.Pod{},
 		allByName: map[string]*corev1.Pod{main.Name: main},
 	}
-	if got := currentPhase(cs, classified); got != cocoonv1alpha1.CocoonSetPhaseScaling {
+	if got := currentPhase(cs, classified); got != cocoonv1.CocoonSetPhaseScaling {
 		t.Errorf("phase: %q, want Scaling", got)
 	}
 }
@@ -55,13 +55,13 @@ func TestCurrentPhaseRunning(t *testing.T) {
 		toolbox:   map[string]*corev1.Pod{},
 		allByName: map[string]*corev1.Pod{main.Name: main},
 	}
-	if got := currentPhase(cs, classified); got != cocoonv1alpha1.CocoonSetPhaseRunning {
+	if got := currentPhase(cs, classified); got != cocoonv1.CocoonSetPhaseRunning {
 		t.Errorf("phase: %q, want Running", got)
 	}
 }
 
 func TestBuildStatusReportsAgents(t *testing.T) {
-	cs := newCocoonSet("demo", func(cs *cocoonv1alpha1.CocoonSet) {
+	cs := newCocoonSet("demo", func(cs *cocoonv1.CocoonSet) {
 		cs.Spec.Agent.Replicas = 2
 	})
 	main := readyPod(buildAgentPod(cs, 0, "", testScheme(t)))
@@ -91,10 +91,10 @@ func TestStatusEqualIgnoresConditionTimestamps(t *testing.T) {
 	cs := newCocoonSet("demo")
 	a := buildStatus(cs, classifiedPods{
 		sub: map[int32]*corev1.Pod{}, toolbox: map[string]*corev1.Pod{}, allByName: map[string]*corev1.Pod{},
-	}, cocoonv1alpha1.CocoonSetPhasePending)
+	}, cocoonv1.CocoonSetPhasePending)
 	b := buildStatus(cs, classifiedPods{
 		sub: map[int32]*corev1.Pod{}, toolbox: map[string]*corev1.Pod{}, allByName: map[string]*corev1.Pod{},
-	}, cocoonv1alpha1.CocoonSetPhasePending)
+	}, cocoonv1.CocoonSetPhasePending)
 	// Conditions carry zero timestamps from buildStatus; semantic
 	// deep-equal must agree two identical builds are equivalent.
 	if !equality.Semantic.DeepEqual(a, b) {
@@ -106,10 +106,10 @@ func TestStatusEqualDetectsChange(t *testing.T) {
 	cs := newCocoonSet("demo")
 	a := buildStatus(cs, classifiedPods{
 		sub: map[int32]*corev1.Pod{}, toolbox: map[string]*corev1.Pod{}, allByName: map[string]*corev1.Pod{},
-	}, cocoonv1alpha1.CocoonSetPhasePending)
+	}, cocoonv1.CocoonSetPhasePending)
 	b := buildStatus(cs, classifiedPods{
 		sub: map[int32]*corev1.Pod{}, toolbox: map[string]*corev1.Pod{}, allByName: map[string]*corev1.Pod{},
-	}, cocoonv1alpha1.CocoonSetPhaseRunning)
+	}, cocoonv1.CocoonSetPhaseRunning)
 	if equality.Semantic.DeepEqual(a, b) {
 		t.Errorf("equality.Semantic.DeepEqual should detect phase change")
 	}
@@ -138,7 +138,7 @@ func TestAgentStatusFromPod(t *testing.T) {
 
 func TestBuildConditionsAllReady(t *testing.T) {
 	cs := newCocoonSet("demo")
-	conds := buildConditions(cs, 1, 1, cocoonv1alpha1.CocoonSetPhaseRunning)
+	conds := buildConditions(cs, 1, 1, cocoonv1.CocoonSetPhaseRunning)
 	var ready *metav1.Condition
 	for i := range conds {
 		if conds[i].Type == "Ready" {
