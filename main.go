@@ -73,8 +73,11 @@ func main() {
 		logger.Fatalf(ctx, err, "add readyz check: %v", err)
 	}
 
+	epochClient := newEpochClient(envOrDefault("EPOCH_URL", "http://epoch.cocoon-system.svc:8080"), os.Getenv("EPOCH_TOKEN"))
+	_ = epochClient
+
 	// Subsequent commits register the CocoonSet and CocoonHibernation
-	// reconcilers against mgr here.
+	// reconcilers against mgr here, threading epochClient through.
 
 	signalCtx, cancel := signal.NotifyContext(ctx, syscall.SIGINT, syscall.SIGTERM)
 	defer cancel()
