@@ -162,12 +162,16 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 		return ctrl.Result{Requeue: true}, nil
 	}
 
-	return ctrl.Result{}, r.patchStatus(ctx, &cs, buildStatus(&cs, classified, currentPhase(&cs, classified)))
+	return ctrl.Result{}, r.patchStatus(ctx, &cs, buildStatus(&cs, classified, ""))
 }
 
 // ensureSubAgents creates missing sub-agent pods for slots
 // [1..Replicas] and deletes any slot beyond Replicas. Returns true
 // when at least one create or delete actually happened.
+//
+// IsAlreadyExists / IsNotFound from a previous reconcile race are
+// suppressed but do not flip `changed`, so the success log only fires
+// when we actually mutated cluster state.
 func (r *Reconciler) ensureSubAgents(ctx context.Context, cs *cocoonv1.CocoonSet, classified classifiedPods, mainVMName string) (bool, error) {
 	logger := log.WithFunc("cocoonset.Reconciler.ensureSubAgents")
 	changed := false
@@ -176,7 +180,10 @@ func (r *Reconciler) ensureSubAgents(ctx context.Context, cs *cocoonv1.CocoonSet
 			continue
 		}
 		subPod := buildAgentPod(cs, slot, mainVMName, r.Scheme)
-		if err := r.Create(ctx, subPod); err != nil && !apierrors.IsAlreadyExists(err) {
+		if err := r.Create(ctx, subPod); err != nil {
+			if apierrors.IsAlreadyExists(err) {
+				continue
+			}
 			return changed, fmt.Errorf("create sub-agent slot %d: %w", slot, err)
 		}
 		logger.Infof(ctx, "created sub-agent %s/%s", subPod.Namespace, subPod.Name)
@@ -186,7 +193,10 @@ func (r *Reconciler) ensureSubAgents(ctx context.Context, cs *cocoonv1.CocoonSet
 		if slot <= cs.Spec.Agent.Replicas {
 			continue
 		}
-		if err := r.Delete(ctx, pod); err != nil && !apierrors.IsNotFound(err) {
+		if err := r.Delete(ctx, pod); err != nil {
+			if apierrors.IsNotFound(err) {
+				continue
+			}
 			return changed, fmt.Errorf("delete extra sub-agent slot %d: %w", slot, err)
 		}
 		logger.Infof(ctx, "deleted extra sub-agent %s/%s", pod.Namespace, pod.Name)
@@ -197,7 +207,8 @@ func (r *Reconciler) ensureSubAgents(ctx context.Context, cs *cocoonv1.CocoonSet
 
 // ensureToolboxes creates missing toolbox pods for every spec entry
 // and deletes any toolbox not in spec. Returns true when at least
-// one create or delete actually happened.
+// one create or delete actually happened. Same suppress-but-don't-log
+// rule as ensureSubAgents.
 func (r *Reconciler) ensureToolboxes(ctx context.Context, cs *cocoonv1.CocoonSet, classified classifiedPods) (bool, error) {
 	logger := log.WithFunc("cocoonset.Reconciler.ensureToolboxes")
 	changed := false
@@ -208,7 +219,10 @@ func (r *Reconciler) ensureToolboxes(ctx context.Context, cs *cocoonv1.CocoonSet
 			continue
 		}
 		tbPod := buildToolboxPod(cs, tb, r.Scheme)
-		if err := r.Create(ctx, tbPod); err != nil && !apierrors.IsAlreadyExists(err) {
+		if err := r.Create(ctx, tbPod); err != nil {
+			if apierrors.IsAlreadyExists(err) {
+				continue
+			}
 			return changed, fmt.Errorf("create toolbox %s: %w", tb.Name, err)
 		}
 		logger.Infof(ctx, "created toolbox %s/%s", tbPod.Namespace, tbPod.Name)
@@ -218,7 +232,10 @@ func (r *Reconciler) ensureToolboxes(ctx context.Context, cs *cocoonv1.CocoonSet
 		if desired[name] {
 			continue
 		}
-		if err := r.Delete(ctx, pod); err != nil && !apierrors.IsNotFound(err) {
+		if err := r.Delete(ctx, pod); err != nil {
+			if apierrors.IsNotFound(err) {
+				continue
+			}
 			return changed, fmt.Errorf("delete extra toolbox %s: %w", name, err)
 		}
 		logger.Infof(ctx, "deleted extra toolbox %s/%s", pod.Namespace, pod.Name)
@@ -229,6 +246,8 @@ func (r *Reconciler) ensureToolboxes(ctx context.Context, cs *cocoonv1.CocoonSet
 
 // reconcileDelete tears down everything the CocoonSet owns and then
 // removes the finalizer so the API server can finalize the delete.
+// Pod deletion and snapshot GC happen in a single pass — VM names are
+// collected before each Delete call so we never need a second walk.
 func (r *Reconciler) reconcileDelete(ctx context.Context, cs *cocoonv1.CocoonSet) (ctrl.Result, error) {
 	logger := log.WithFunc("cocoonset.Reconciler.reconcileDelete")
 	logger.Infof(ctx, "deleting cocoonset %s/%s", cs.Namespace, cs.Name)
@@ -240,20 +259,18 @@ func (r *Reconciler) reconcileDelete(ctx context.Context, cs *cocoonv1.CocoonSet
 	); err != nil {
 		return ctrl.Result{}, fmt.Errorf("list owned pods for delete: %w", err)
 	}
+
+	gcSnapshots := cs.Spec.SnapshotPolicy.Default() != cocoonv1.SnapshotPolicyNever && r.Epoch != nil
 	for i := range podList.Items {
 		pod := &podList.Items[i]
+		var vmName string
+		if gcSnapshots {
+			vmName = meta.ParseVMSpec(pod).VMName
+		}
 		if err := r.Delete(ctx, pod); err != nil && !apierrors.IsNotFound(err) {
 			return ctrl.Result{}, fmt.Errorf("delete pod %s/%s: %w", pod.Namespace, pod.Name, err)
 		}
-	}
-
-	// Garbage-collect snapshots when the policy says we should.
-	if cs.Spec.SnapshotPolicy.Default() != cocoonv1.SnapshotPolicyNever && r.Epoch != nil {
-		for i := range podList.Items {
-			vmName := meta.ParseVMSpec(&podList.Items[i]).VMName
-			if vmName == "" {
-				continue
-			}
+		if gcSnapshots && vmName != "" {
 			if err := r.Epoch.DeleteManifest(ctx, vmName, "latest"); err != nil {
 				logger.Warnf(ctx, "delete snapshot %s: %v", vmName, err)
 			}

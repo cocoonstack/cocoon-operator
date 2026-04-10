@@ -86,7 +86,7 @@ func TestIsContainerRunning(t *testing.T) {
 
 func TestFakeRegistryGetMissing(t *testing.T) {
 	r := &fakeRegistry{}
-	present, err := r.HasManifest(context.Background(), "x", "hibernate")
+	present, err := r.HasManifest(t.Context(), "x", "hibernate")
 	if err != nil {
 		t.Fatalf("has: %v", err)
 	}
@@ -97,7 +97,7 @@ func TestFakeRegistryGetMissing(t *testing.T) {
 
 func TestFakeRegistryGetPresent(t *testing.T) {
 	r := &fakeRegistry{manifestPresent: true}
-	present, err := r.HasManifest(context.Background(), "x", "hibernate")
+	present, err := r.HasManifest(t.Context(), "x", "hibernate")
 	if err != nil {
 		t.Fatalf("has: %v", err)
 	}
@@ -108,14 +108,14 @@ func TestFakeRegistryGetPresent(t *testing.T) {
 
 func TestFakeRegistryGetErrorPropagates(t *testing.T) {
 	r := &fakeRegistry{manifestErr: errors.New("transport boom")}
-	if _, err := r.HasManifest(context.Background(), "x", "hibernate"); err == nil {
+	if _, err := r.HasManifest(t.Context(), "x", "hibernate"); err == nil {
 		t.Errorf("expected transport error to surface")
 	}
 }
 
 func TestFakeRegistryDeleteRecords(t *testing.T) {
 	r := &fakeRegistry{}
-	if err := r.DeleteManifest(context.Background(), "x", "hibernate"); err != nil {
+	if err := r.DeleteManifest(t.Context(), "x", "hibernate"); err != nil {
 		t.Fatalf("delete: %v", err)
 	}
 	if !r.deleteCalled {

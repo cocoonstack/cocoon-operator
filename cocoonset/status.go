@@ -3,8 +3,8 @@ package cocoonset
 import (
 	"context"
 	"fmt"
+	"maps"
 	"slices"
-	"sort"
 
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/equality"
@@ -14,6 +14,16 @@ import (
 
 	cocoonv1 "github.com/cocoonstack/cocoon-common/apis/v1"
 	"github.com/cocoonstack/cocoon-common/meta"
+)
+
+const (
+	conditionTypeReady       = "Ready"
+	conditionTypeProgressing = "Progressing"
+
+	conditionReasonAllReady    = "AllAgentsReady"
+	conditionReasonNotReady    = "AgentsNotReady"
+	conditionReasonStable      = "Stable"
+	conditionReasonReconciling = "Reconciling"
 )
 
 // patchStatus writes the supplied status onto the CocoonSet via the
@@ -50,46 +60,44 @@ func mergeConditions(next *cocoonv1.CocoonSetStatus, prev []metav1.Condition) {
 }
 
 // buildStatus rebuilds the CocoonSetStatus from the supplied
-// classified-pods snapshot. The phase argument lets the caller
-// override the auto-derived phase (used by the suspend short-circuit
-// and the pending-main path).
+// classified-pods snapshot. When phase is empty the running-state
+// phase is auto-derived from the (ready, desired) counts; the suspend
+// short-circuit and pending-main paths pass an explicit override.
+//
+// One pass over classified.sub computes the ready count and the
+// AgentStatus list together so the reconcile path never walks the
+// same map twice on the stable path.
 func buildStatus(cs *cocoonv1.CocoonSet, classified classifiedPods, phase cocoonv1.CocoonSetPhase) cocoonv1.CocoonSetStatus {
 	desired := int32(1) + cs.Spec.Agent.Replicas
 	ready := int32(0)
-	if classified.main != nil && isPodReady(classified.main) {
-		ready++
-	}
-	for _, p := range classified.sub {
-		if isPodReady(p) {
-			ready++
-		}
-	}
 
 	agents := make([]cocoonv1.AgentStatus, 0, desired)
 	if classified.main != nil {
+		if isPodReady(classified.main) {
+			ready++
+		}
 		agents = append(agents, agentStatusFromPod(classified.main, 0, meta.RoleMain, ""))
 	}
-	subSlots := make([]int32, 0, len(classified.sub))
-	for slot := range classified.sub {
-		subSlots = append(subSlots, slot)
-	}
-	slices.Sort(subSlots)
+
 	mainVMName := ""
 	if classified.main != nil {
 		mainVMName = meta.ParseVMSpec(classified.main).VMName
 	}
-	for _, slot := range subSlots {
-		agents = append(agents, agentStatusFromPod(classified.sub[slot], slot, meta.RoleSubAgent, mainVMName))
+	for _, slot := range slices.Sorted(maps.Keys(classified.sub)) {
+		sub := classified.sub[slot]
+		if isPodReady(sub) {
+			ready++
+		}
+		agents = append(agents, agentStatusFromPod(sub, slot, meta.RoleSubAgent, mainVMName))
 	}
 
 	tbStatuses := make([]cocoonv1.ToolboxStatus, 0, len(classified.toolbox))
-	tbNames := make([]string, 0, len(classified.toolbox))
-	for name := range classified.toolbox {
-		tbNames = append(tbNames, name)
-	}
-	sort.Strings(tbNames)
-	for _, name := range tbNames {
+	for _, name := range slices.Sorted(maps.Keys(classified.toolbox)) {
 		tbStatuses = append(tbStatuses, toolboxStatusFromPod(classified.toolbox[name], name))
+	}
+
+	if phase == "" {
+		phase = derivePhase(classified.main, ready, desired)
 	}
 
 	return cocoonv1.CocoonSetStatus{
@@ -103,21 +111,12 @@ func buildStatus(cs *cocoonv1.CocoonSet, classified classifiedPods, phase cocoon
 	}
 }
 
-// currentPhase derives the running-state phase from a classified
-// snapshot when no override is in effect.
-func currentPhase(cs *cocoonv1.CocoonSet, classified classifiedPods) cocoonv1.CocoonSetPhase {
-	desired := int32(1) + cs.Spec.Agent.Replicas
-	ready := int32(0)
-	if classified.main != nil && isPodReady(classified.main) {
-		ready++
-	}
-	for _, p := range classified.sub {
-		if isPodReady(p) {
-			ready++
-		}
-	}
+// derivePhase reports the running-state phase implied by the
+// (main, ready, desired) triple. Used by buildStatus on the no-override
+// path.
+func derivePhase(main *corev1.Pod, ready, desired int32) cocoonv1.CocoonSetPhase {
 	switch {
-	case classified.main == nil:
+	case main == nil:
 		return cocoonv1.CocoonSetPhasePending
 	case ready < desired:
 		return cocoonv1.CocoonSetPhaseScaling
@@ -128,14 +127,14 @@ func currentPhase(cs *cocoonv1.CocoonSet, classified classifiedPods) cocoonv1.Co
 
 func agentStatusFromPod(pod *corev1.Pod, slot int32, role, forkedFrom string) cocoonv1.AgentStatus {
 	spec := meta.ParseVMSpec(pod)
-	runtime := meta.ParseVMRuntime(pod)
+	vmRuntime := meta.ParseVMRuntime(pod)
 	return cocoonv1.AgentStatus{
 		Slot:       slot,
 		Role:       role,
 		PodName:    pod.Name,
 		VMName:     spec.VMName,
-		VMID:       runtime.VMID,
-		IP:         runtime.IP,
+		VMID:       vmRuntime.VMID,
+		IP:         vmRuntime.IP,
 		Phase:      string(pod.Status.Phase),
 		ForkedFrom: forkedFrom,
 	}
@@ -143,16 +142,16 @@ func agentStatusFromPod(pod *corev1.Pod, slot int32, role, forkedFrom string) co
 
 func toolboxStatusFromPod(pod *corev1.Pod, name string) cocoonv1.ToolboxStatus {
 	spec := meta.ParseVMSpec(pod)
-	runtime := meta.ParseVMRuntime(pod)
+	vmRuntime := meta.ParseVMRuntime(pod)
 	return cocoonv1.ToolboxStatus{
 		Name:     name,
 		PodName:  pod.Name,
 		VMName:   spec.VMName,
-		VMID:     runtime.VMID,
-		IP:       runtime.IP,
+		VMID:     vmRuntime.VMID,
+		IP:       vmRuntime.IP,
 		Phase:    string(pod.Status.Phase),
-		ConnType: meta.ConnectionType(spec.OS, runtime.VNCPort > 0),
-		VNCPort:  runtime.VNCPort,
+		ConnType: meta.ConnectionType(spec.OS, vmRuntime.VNCPort > 0),
+		VNCPort:  vmRuntime.VNCPort,
 	}
 }
 
@@ -163,27 +162,27 @@ func toolboxStatusFromPod(pod *corev1.Pod, name string) cocoonv1.ToolboxStatus {
 // LastTransitionTime when nothing else changed.
 func buildConditions(cs *cocoonv1.CocoonSet, ready, desired int32, phase cocoonv1.CocoonSetPhase) []metav1.Condition {
 	readyCond := metav1.Condition{
-		Type:               "Ready",
+		Type:               conditionTypeReady,
 		Status:             metav1.ConditionFalse,
-		Reason:             "AgentsNotReady",
+		Reason:             conditionReasonNotReady,
 		Message:            fmt.Sprintf("%d/%d agents ready", ready, desired),
 		ObservedGeneration: cs.Generation,
 	}
 	if ready == desired && desired > 0 {
 		readyCond.Status = metav1.ConditionTrue
-		readyCond.Reason = "AllAgentsReady"
+		readyCond.Reason = conditionReasonAllReady
 	}
 
 	progressing := metav1.Condition{
-		Type:               "Progressing",
+		Type:               conditionTypeProgressing,
 		Status:             metav1.ConditionFalse,
-		Reason:             "Stable",
+		Reason:             conditionReasonStable,
 		Message:            string(phase),
 		ObservedGeneration: cs.Generation,
 	}
 	if phase == cocoonv1.CocoonSetPhasePending || phase == cocoonv1.CocoonSetPhaseScaling {
 		progressing.Status = metav1.ConditionTrue
-		progressing.Reason = "Reconciling"
+		progressing.Reason = conditionReasonReconciling
 	}
 
 	return []metav1.Condition{readyCond, progressing}

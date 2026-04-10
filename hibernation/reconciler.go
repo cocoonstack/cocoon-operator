@@ -109,12 +109,6 @@ func (r *Reconciler) reconcileHibernate(ctx context.Context, hib *cocoonv1.Cocoo
 		}
 	}
 
-	if r.Epoch == nil {
-		// No epoch wired (test path) — assume done after writing the
-		// annotation. Tests inject a fake registry to override.
-		return ctrl.Result{}, r.setPhase(ctx, hib, cocoonv1.CocoonHibernationPhaseHibernated, vmName)
-	}
-
 	present, err := r.Epoch.HasManifest(ctx, vmName, meta.HibernateSnapshotTag)
 	if err != nil {
 		return ctrl.Result{}, fmt.Errorf("probe hibernate snapshot %s: %w", vmName, err)
@@ -142,12 +136,13 @@ func (r *Reconciler) reconcileWake(ctx context.Context, hib *cocoonv1.CocoonHibe
 
 	if isContainerRunning(pod) {
 		// vk-cocoon has restored the VM. Drop the snapshot tag so a
-		// future hibernate has a clean slate.
-		if r.Epoch != nil {
-			if err := r.Epoch.DeleteManifest(ctx, vmName, meta.HibernateSnapshotTag); err != nil {
-				log.WithFunc("hibernation.Reconciler.reconcileWake").Warnf(ctx,
-					"delete hibernation snapshot %s: %v", vmName, err)
-			}
+		// future hibernate has a clean slate. A failure here is
+		// non-fatal: a stale tag will be overwritten by the next
+		// hibernate, and surfacing the error would block wake on a
+		// transient registry hiccup.
+		if err := r.Epoch.DeleteManifest(ctx, vmName, meta.HibernateSnapshotTag); err != nil {
+			log.WithFunc("hibernation.Reconciler.reconcileWake").Warnf(ctx,
+				"delete hibernation snapshot %s: %v", vmName, err)
 		}
 		return ctrl.Result{}, r.setPhase(ctx, hib, cocoonv1.CocoonHibernationPhaseActive, vmName)
 	}

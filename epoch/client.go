@@ -31,6 +31,11 @@ type SnapshotRegistry interface {
 	DeleteManifest(ctx context.Context, name, tag string) error
 }
 
+// Compile-time guarantee that *Client satisfies SnapshotRegistry.
+// If the upstream epoch client ever changes its signatures, the
+// build breaks here instead of inside a reconciler.
+var _ SnapshotRegistry = (*Client)(nil)
+
 // Client is the SnapshotRegistry implementation backed by the
 // upstream cocoonstack/epoch registry client. It exists as a thin
 // adapter so the operator code never imports epoch's loose
@@ -48,13 +53,11 @@ func New(baseURL, token string) *Client {
 	return &Client{inner: registryclient.New(baseURL, token)}
 }
 
-// HasManifest probes whether the registry currently holds (name, tag).
-// epoch's GetManifest collapses HTTP-level not-found into the same
-// error channel as transport failures, so we can't distinguish them
-// without inspecting the message. The reconciler polls in a loop, so
-// folding every error into "not present" keeps the polling logic
-// simple — real transport problems will resurface on the next
-// reconcile via the controller-runtime watch loop.
+// HasManifest implements SnapshotRegistry. epoch's GetManifest folds
+// HTTP-level not-found into the same error channel as transport
+// failures, so this implementation cannot distinguish them and
+// returns (false, nil) for any error — see the SnapshotRegistry doc
+// for the polling rationale.
 func (c *Client) HasManifest(ctx context.Context, name, tag string) (bool, error) {
 	if _, _, err := c.inner.GetManifest(ctx, name, tag); err != nil {
 		return false, nil

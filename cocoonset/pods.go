@@ -136,8 +136,8 @@ func buildToolboxPod(cs *cocoonv1.CocoonSet, tb cocoonv1.ToolboxSpec, scheme *ru
 	if tb.Mode == cocoonv1.ToolboxModeStatic {
 		// Static toolboxes carry pre-assigned runtime hints so
 		// vk-cocoon does not invent its own.
-		runtime := meta.VMRuntime{VMID: tb.StaticVMID, IP: tb.StaticIP, VNCPort: tb.VNCPort}
-		runtime.Apply(pod)
+		vmRuntime := meta.VMRuntime{VMID: tb.StaticVMID, IP: tb.StaticIP, VNCPort: tb.VNCPort}
+		vmRuntime.Apply(pod)
 	}
 	pod.Spec.Containers[0].Resources = tb.Resources
 	return pod

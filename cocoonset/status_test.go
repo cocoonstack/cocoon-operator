@@ -20,17 +20,17 @@ func readyPod(p *corev1.Pod) *corev1.Pod {
 	return p
 }
 
-func TestCurrentPhasePending(t *testing.T) {
+func TestBuildStatusPendingWhenNoMain(t *testing.T) {
 	cs := newCocoonSet("demo", func(cs *cocoonv1.CocoonSet) {
 		cs.Spec.Agent.Replicas = 1
 	})
 	classified := classifiedPods{sub: map[int32]*corev1.Pod{}, toolbox: map[string]*corev1.Pod{}, allByName: map[string]*corev1.Pod{}}
-	if got := currentPhase(cs, classified); got != cocoonv1.CocoonSetPhasePending {
+	if got := buildStatus(cs, classified, "").Phase; got != cocoonv1.CocoonSetPhasePending {
 		t.Errorf("phase: %q, want Pending", got)
 	}
 }
 
-func TestCurrentPhaseScaling(t *testing.T) {
+func TestBuildStatusScalingWhenSubsMissing(t *testing.T) {
 	cs := newCocoonSet("demo", func(cs *cocoonv1.CocoonSet) {
 		cs.Spec.Agent.Replicas = 1
 	})
@@ -41,12 +41,12 @@ func TestCurrentPhaseScaling(t *testing.T) {
 		toolbox:   map[string]*corev1.Pod{},
 		allByName: map[string]*corev1.Pod{main.Name: main},
 	}
-	if got := currentPhase(cs, classified); got != cocoonv1.CocoonSetPhaseScaling {
+	if got := buildStatus(cs, classified, "").Phase; got != cocoonv1.CocoonSetPhaseScaling {
 		t.Errorf("phase: %q, want Scaling", got)
 	}
 }
 
-func TestCurrentPhaseRunning(t *testing.T) {
+func TestBuildStatusRunningWhenAllReady(t *testing.T) {
 	cs := newCocoonSet("demo")
 	main := readyPod(buildAgentPod(cs, 0, "", testScheme(t)))
 	classified := classifiedPods{
@@ -55,7 +55,7 @@ func TestCurrentPhaseRunning(t *testing.T) {
 		toolbox:   map[string]*corev1.Pod{},
 		allByName: map[string]*corev1.Pod{main.Name: main},
 	}
-	if got := currentPhase(cs, classified); got != cocoonv1.CocoonSetPhaseRunning {
+	if got := buildStatus(cs, classified, "").Phase; got != cocoonv1.CocoonSetPhaseRunning {
 		t.Errorf("phase: %q, want Running", got)
 	}
 }
@@ -72,7 +72,7 @@ func TestBuildStatusReportsAgents(t *testing.T) {
 		toolbox:   map[string]*corev1.Pod{},
 		allByName: map[string]*corev1.Pod{main.Name: main, sub1.Name: sub1},
 	}
-	status := buildStatus(cs, classified, currentPhase(cs, classified))
+	status := buildStatus(cs, classified, "")
 	if status.DesiredAgents != 3 {
 		t.Errorf("desired: %d, want 3", status.DesiredAgents)
 	}
@@ -119,8 +119,8 @@ func TestAgentStatusFromPod(t *testing.T) {
 	cs := newCocoonSet("demo")
 	pod := buildAgentPod(cs, 0, "", testScheme(t))
 	pod.Status.Phase = corev1.PodRunning
-	runtime := meta.VMRuntime{VMID: "qemu-1", IP: "10.0.0.1"}
-	runtime.Apply(pod)
+	vmRuntime := meta.VMRuntime{VMID: "qemu-1", IP: "10.0.0.1"}
+	vmRuntime.Apply(pod)
 	st := agentStatusFromPod(pod, 0, meta.RoleMain, "")
 	if st.VMName != "vk-ns-demo-0" {
 		t.Errorf("vmName: %q", st.VMName)
@@ -141,7 +141,7 @@ func TestBuildConditionsAllReady(t *testing.T) {
 	conds := buildConditions(cs, 1, 1, cocoonv1.CocoonSetPhaseRunning)
 	var ready *metav1.Condition
 	for i := range conds {
-		if conds[i].Type == "Ready" {
+		if conds[i].Type == conditionTypeReady {
 			ready = &conds[i]
 		}
 	}
