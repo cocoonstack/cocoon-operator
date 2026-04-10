@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"fmt"
+	"time"
 
 	"github.com/projecteru2/core/log"
 	corev1 "k8s.io/api/core/v1"
@@ -13,6 +14,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 
 	cocoonv1alpha1 "github.com/cocoonstack/cocoon-common/apis/v1alpha1"
+	"github.com/cocoonstack/cocoon-common/meta"
 )
 
 const (
@@ -21,6 +23,12 @@ const (
 	// collect snapshots) before the API server actually removes the
 	// object.
 	finalizerName = "cocoonset.cocoonstack.io/finalizer"
+
+	// requeueWaitForMain is how long the reconciler waits before
+	// re-checking whether the main agent has come up. The wait is
+	// short on purpose: scaling sub-agents is gated on the main
+	// agent being Ready.
+	requeueWaitForMain = 5 * time.Second
 )
 
 // CocoonSetReconciler reconciles a CocoonSet object.
@@ -40,9 +48,7 @@ func (r *CocoonSetReconciler) SetupWithManager(mgr ctrl.Manager) error {
 }
 
 // Reconcile is the entry point invoked by controller-runtime each
-// time a watched event lands. It is intentionally short — every
-// non-trivial subroutine lives in cocoonset_pods.go or
-// cocoonset_status.go so this file stays a high-level outline.
+// time a watched event lands.
 func (r *CocoonSetReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	logger := log.WithFunc("CocoonSetReconciler.Reconcile")
 
@@ -65,26 +71,138 @@ func (r *CocoonSetReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 		if err := r.Update(ctx, &cs); err != nil {
 			return ctrl.Result{}, fmt.Errorf("add finalizer: %w", err)
 		}
-		// Re-queue: the next iteration will see a fresh copy.
 		return ctrl.Result{Requeue: true}, nil
 	}
 
-	logger.Debugf(ctx, "reconcile cocoonset %s/%s gen=%d", cs.Namespace, cs.Name, cs.Generation)
+	// List every pod the operator owns for this CocoonSet by label.
+	var podList corev1.PodList
+	if err := r.List(ctx, &podList,
+		client.InNamespace(cs.Namespace),
+		client.MatchingLabels{meta.LabelCocoonSet: cs.Name},
+	); err != nil {
+		return ctrl.Result{}, fmt.Errorf("list owned pods: %w", err)
+	}
 
-	// Subsequent commits replace this with the full reconcile loop:
-	// list owned pods, classify, ensure main, ensure sub-agents,
-	// ensure toolboxes, build status, and patch /status.
-	return ctrl.Result{}, nil
+	classified := classifyPods(podList.Items)
+
+	// Suspend short-circuit: if Spec.Suspend is true the reconciler
+	// just flips the hibernate annotation on every owned pod and
+	// reports the Suspended phase. We do not delete the pods — the
+	// vk-cocoon side keeps the container alive while the VM sleeps.
+	if cs.Spec.Suspend {
+		if err := r.applySuspend(ctx, classified); err != nil {
+			return ctrl.Result{}, err
+		}
+		return ctrl.Result{}, r.patchStatus(ctx, &cs, buildStatus(&cs, classified, cocoonv1alpha1.CocoonSetPhaseSuspended))
+	}
+
+	// Ensure the main agent (slot 0) exists.
+	if classified.main == nil {
+		mainPod := buildAgentPod(&cs, 0, "")
+		if err := r.Create(ctx, mainPod); err != nil {
+			return ctrl.Result{}, fmt.Errorf("create main agent: %w", err)
+		}
+		logger.Infof(ctx, "created main agent %s/%s", mainPod.Namespace, mainPod.Name)
+		return ctrl.Result{Requeue: true}, nil
+	}
+
+	// Until the main agent is Ready we hold off on creating any
+	// sub-agents — they fork from the main VM and need it to be live.
+	if !isPodReady(classified.main) {
+		return ctrl.Result{RequeueAfter: requeueWaitForMain},
+			r.patchStatus(ctx, &cs, buildStatus(&cs, classified, cocoonv1alpha1.CocoonSetPhasePending))
+	}
+
+	mainVMName := meta.ParseVMSpec(classified.main).VMName
+
+	// Ensure sub-agent slots [1..Replicas]; delete any slot beyond.
+	for slot := int32(1); slot <= cs.Spec.Agent.Replicas; slot++ {
+		if _, exists := classified.sub[slot]; exists {
+			continue
+		}
+		subPod := buildAgentPod(&cs, slot, mainVMName)
+		if err := r.Create(ctx, subPod); err != nil && !apierrors.IsAlreadyExists(err) {
+			return ctrl.Result{}, fmt.Errorf("create sub-agent slot %d: %w", slot, err)
+		}
+		logger.Infof(ctx, "created sub-agent %s/%s", subPod.Namespace, subPod.Name)
+	}
+	for slot, pod := range classified.sub {
+		if slot > cs.Spec.Agent.Replicas {
+			if err := r.Delete(ctx, pod); err != nil && !apierrors.IsNotFound(err) {
+				return ctrl.Result{}, fmt.Errorf("delete extra sub-agent slot %d: %w", slot, err)
+			}
+			logger.Infof(ctx, "deleted extra sub-agent %s/%s", pod.Namespace, pod.Name)
+		}
+	}
+
+	// Ensure toolboxes; delete any toolbox not in spec.
+	desired := map[string]bool{}
+	for _, tb := range cs.Spec.Toolboxes {
+		desired[tb.Name] = true
+		if _, exists := classified.toolbox[tb.Name]; exists {
+			continue
+		}
+		tbPod := buildToolboxPod(&cs, tb)
+		if err := r.Create(ctx, tbPod); err != nil && !apierrors.IsAlreadyExists(err) {
+			return ctrl.Result{}, fmt.Errorf("create toolbox %s: %w", tb.Name, err)
+		}
+		logger.Infof(ctx, "created toolbox %s/%s", tbPod.Namespace, tbPod.Name)
+	}
+	for name, pod := range classified.toolbox {
+		if desired[name] {
+			continue
+		}
+		if err := r.Delete(ctx, pod); err != nil && !apierrors.IsNotFound(err) {
+			return ctrl.Result{}, fmt.Errorf("delete extra toolbox %s: %w", name, err)
+		}
+		logger.Infof(ctx, "deleted extra toolbox %s/%s", pod.Namespace, pod.Name)
+	}
+
+	// Re-classify after creates/deletes so the status mirrors the
+	// state we just enacted.
+	if err := r.List(ctx, &podList,
+		client.InNamespace(cs.Namespace),
+		client.MatchingLabels{meta.LabelCocoonSet: cs.Name},
+	); err != nil {
+		return ctrl.Result{}, fmt.Errorf("re-list owned pods: %w", err)
+	}
+	classified = classifyPods(podList.Items)
+
+	return ctrl.Result{}, r.patchStatus(ctx, &cs, buildStatus(&cs, classified, currentPhase(&cs, classified)))
 }
 
 // reconcileDelete tears down everything the CocoonSet owns and then
 // removes the finalizer so the API server can finalize the delete.
-// The pod-deletion / snapshot GC body is filled in by a later commit.
 func (r *CocoonSetReconciler) reconcileDelete(ctx context.Context, cs *cocoonv1alpha1.CocoonSet) (ctrl.Result, error) {
 	logger := log.WithFunc("CocoonSetReconciler.reconcileDelete")
 	logger.Infof(ctx, "deleting cocoonset %s/%s", cs.Namespace, cs.Name)
 
-	// owned-pod cleanup + epoch.DeleteManifest live in a later commit.
+	var podList corev1.PodList
+	if err := r.List(ctx, &podList,
+		client.InNamespace(cs.Namespace),
+		client.MatchingLabels{meta.LabelCocoonSet: cs.Name},
+	); err != nil {
+		return ctrl.Result{}, fmt.Errorf("list owned pods for delete: %w", err)
+	}
+	for i := range podList.Items {
+		pod := &podList.Items[i]
+		if err := r.Delete(ctx, pod); err != nil && !apierrors.IsNotFound(err) {
+			return ctrl.Result{}, fmt.Errorf("delete pod %s/%s: %w", pod.Namespace, pod.Name, err)
+		}
+	}
+
+	// Garbage-collect snapshots when the policy says we should.
+	if defaultedSnapshotPolicy(cs.Spec.SnapshotPolicy) != cocoonv1alpha1.SnapshotPolicyNever && r.Epoch != nil {
+		for i := range podList.Items {
+			vmName := meta.ParseVMSpec(&podList.Items[i]).VMName
+			if vmName == "" {
+				continue
+			}
+			if err := r.Epoch.DeleteManifest(ctx, vmName, "latest"); err != nil {
+				logger.Warnf(ctx, "delete snapshot %s: %v", vmName, err)
+			}
+		}
+	}
 
 	if controllerutil.ContainsFinalizer(cs, finalizerName) {
 		controllerutil.RemoveFinalizer(cs, finalizerName)
@@ -93,4 +211,36 @@ func (r *CocoonSetReconciler) reconcileDelete(ctx context.Context, cs *cocoonv1a
 		}
 	}
 	return ctrl.Result{}, nil
+}
+
+// applySuspend writes HibernateState(true) onto every owned pod.
+// vk-cocoon picks up the annotation and snapshots / tears down the
+// VM while keeping the container alive.
+func (r *CocoonSetReconciler) applySuspend(ctx context.Context, classified classifiedPods) error {
+	for _, pod := range classified.allByName {
+		if meta.ReadHibernateState(pod) {
+			continue
+		}
+		patch := client.MergeFrom(pod.DeepCopy())
+		meta.HibernateState(true).Apply(pod)
+		if err := r.Patch(ctx, pod, patch); err != nil {
+			return fmt.Errorf("patch hibernate annotation on %s/%s: %w", pod.Namespace, pod.Name, err)
+		}
+	}
+	return nil
+}
+
+// isPodReady returns true if the pod has a Ready condition set to
+// True. The reconciler uses this to gate sub-agent creation on the
+// main agent's liveness.
+func isPodReady(pod *corev1.Pod) bool {
+	if pod == nil {
+		return false
+	}
+	for _, c := range pod.Status.Conditions {
+		if c.Type == corev1.PodReady && c.Status == corev1.ConditionTrue {
+			return true
+		}
+	}
+	return false
 }
