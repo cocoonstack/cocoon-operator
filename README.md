@@ -1,148 +1,120 @@
 # cocoon-operator
 
-Kubernetes operator that manages VM-backed pod lifecycles through two CRDs: **Hibernation** for suspending or waking a single VM pod, and **CocoonSet** for managing a group of related VM pods.
+Kubernetes operator that manages VM-backed pod lifecycles through two CRDs:
 
-## Overview
+- **CocoonSet** — declarative spec for an agent group (one main agent + N sub-agents + M toolboxes)
+- **CocoonHibernation** — per-pod hibernate / wake request
 
-- **Hibernation controller** -- watches `Hibernation` CRDs and annotates pods with `vm.cocoonstack.io/hibernate=true` (also mirrored to the legacy `cocoon.cis/hibernate` key during the rename window) to trigger vk-cocoon snapshot and restore
-- **CocoonSet controller** -- watches `CocoonSet` CRDs, creates and deletes agent and toolbox pods, manages suspend and unsuspend, and reports aggregate status
-- **Pod watcher** -- detects pod changes owned by CocoonSets and triggers reconciliation
-
-Kubernetes controllers assume pods are replaceable. VM-backed workloads are not. This operator keeps stateful VM workflows inside native Kubernetes APIs: scale out from a known main VM, keep stable slot identities, hibernate without letting ReplicaSets recreate the pod, and expose aggregate state through CRD status.
+Both reconcilers are built on [controller-runtime](https://sigs.k8s.io/controller-runtime) and consume the typed CRD shapes shipped from [cocoon-common/apis/v1alpha1](https://github.com/cocoonstack/cocoon-common).
 
 ## Architecture
 
-The operator runs a single binary with three informer loops:
-
-1. **Hibernation controller** -- annotates pods for vk-cocoon snapshot and restore
-2. **CocoonSet controller** -- manages agent and toolbox pod groups
-3. **Pod watcher** -- triggers reconciliation on pod changes
-
-A 30-second informer resync and 60-second periodic reconciliation catch status transitions that informer events may miss.
-
-## Installation
-
-### Prerequisites
-
-- Kubernetes cluster (v1.26+)
-- `kubectl` configured to talk to the cluster
-- [vk-cocoon](https://github.com/cocoonstack/vk-cocoon) virtual kubelet provider running on at least one node
-
-### Download
-
-Download pre-built binaries from [GitHub Releases](https://github.com/cocoonstack/cocoon-operator/releases).
-
-### Build from source
-
-```bash
-git clone https://github.com/cocoonstack/cocoon-operator.git
-cd cocoon-operator
-make build          # produces ./cocoon-operator
+```
+┌──────────────────────────────────────────────────────────────────┐
+│                        cocoon-operator                            │
+│                                                                  │
+│  ┌────────────────────────┐    ┌─────────────────────────────┐  │
+│  │  CocoonSetReconciler   │    │ CocoonHibernationReconciler │  │
+│  │  - finalizer + GC       │    │  - HibernateState patches   │  │
+│  │  - main → subs → tbs    │    │  - epoch.GetManifest probe  │  │
+│  │  - patch /status        │    │  - Conditions               │  │
+│  └────────┬───────────────┘    └────────────┬────────────────┘  │
+│           │                                  │                   │
+│           ▼                                  ▼                   │
+│  ┌────────────────────┐         ┌──────────────────────┐        │
+│  │ controller-runtime │         │ epoch SnapshotRegistry│        │
+│  │ Manager            │         │ (HTTP via             │        │
+│  │  - leader election │         │  registryclient)      │        │
+│  │  - metrics :8080    │        └──────────────────────┘        │
+│  │  - probes :8081     │                                         │
+│  └────────────────────┘                                          │
+└──────────────────────────────────────────────────────────────────┘
 ```
 
-### Deploy
+### CocoonSet reconcile loop
 
-1. Install the CRDs:
+1. Fetch the CocoonSet (return early on NotFound).
+2. If `DeletionTimestamp` is set, walk owned pods, delete them, optionally `epoch.DeleteManifest` for each VM, then drop the finalizer.
+3. Ensure the `cocoonset.cocoonstack.io/finalizer` is in place.
+4. List owned pods by `cocoonset.cocoonstack.io/name=<cs.Name>` and classify by role label.
+5. **Suspend short-circuit**: if `spec.suspend == true`, write `meta.HibernateState(true)` onto every pod and report `Phase=Suspended`.
+6. Ensure the **main agent** (slot 0). If it is not yet `Ready`, requeue in 5 seconds and report `Phase=Pending`.
+7. Ensure sub-agents `[1..Replicas]`; delete extras above the requested count.
+8. Ensure toolboxes by name; delete extras.
+9. Re-list and patch `/status` (with structural diff so unchanged status patches are no-ops).
 
-```bash
-kubectl apply -f deploy/crd.yaml
-kubectl apply -f deploy/cocoonset-crd.yaml
-```
+Pods are constructed via `meta.VMSpec.Apply` so the operator never touches the annotation map directly. The `For` watch uses `predicate.GenerationChangedPredicate` so reconciles only fire when the spec actually changes — status-only patches the operator makes itself never loop back. The `Owns` side keeps the unfiltered pod-event firehose because pod status changes are exactly what drives the readyAgents diff.
 
-2. Deploy the operator:
+### CocoonHibernation reconcile loop
 
-```bash
-kubectl apply -f deploy/deploy.yaml
-```
+| Spec.Desire | What the reconciler does | Terminal phase |
+|---|---|---|
+| `Hibernate` | `meta.HibernateState(true).Apply` on the target pod, then poll `epoch.GetManifest(vmName, "hibernate")` until the snapshot lands | `Hibernated` |
+| `Wake` | Clear `meta.HibernateState`, wait for the pod's container to be `Running`, then drop the hibernation snapshot tag from epoch | `Active` |
 
-3. Verify the operator is running:
-
-```bash
-kubectl get pods -l app=cocoon-operator
-```
+There is no `cocoon-vm-snapshots` ConfigMap bridge — epoch is the single source of truth for hibernation state. Failure paths set `Phase=Failed` with a one-shot message in the `Ready` condition instead of looping forever on a bad reference.
 
 ## Configuration
 
 | Variable | Default | Description |
 |---|---|---|
-| `KUBECONFIG` | `~/.kube/config` | Path to kubeconfig when running outside the cluster |
-| `LOG_LEVEL` | `info` | Log level for the operator process |
+| `KUBECONFIG` | unset | Path to kubeconfig when running outside the cluster |
+| `OPERATOR_LOG_LEVEL` | `info` | `projecteru2/core/log` level |
+| `EPOCH_URL` | `http://epoch.cocoon-system.svc:8080` | Base URL of the epoch registry |
+| `EPOCH_TOKEN` | unset | Bearer token (read-only is enough) |
+| `METRICS_ADDR` | `:8080` | Prometheus listener |
+| `PROBE_ADDR` | `:8081` | healthz / readyz listener |
+| `LEADER_ELECT` | `true` | Enable leader election so only one replica reconciles |
 
-### Annotation namespace
+CLI flags (`--metrics-bind-address`, `--health-probe-bind-address`, `--leader-elect`) override the corresponding env var.
 
-The operator writes managed-Pod annotations under two cocoonstack.io subdomains:
+## Installation
 
-| Prefix | Meaning | Examples |
-|---|---|---|
-| `cocoonset.cocoonstack.io/` | Declarative fields mirrored from a CocoonSet spec | `mode`, `image`, `os`, `storage`, `snapshot-policy`, `network`, `managed` |
-| `vm.cocoonstack.io/` | Runtime state observed about the VM backing a Pod | `id`, `name`, `ip`, `vnc-port`, `hibernate`, `fork-from` |
-
-For the duration of the legacy `cocoon.cis/*` migration the operator **dual-writes** every annotation: the canonical key under cocoonstack.io plus its `cocoon.cis/*` mirror, in the same merge patch. Providers (like vk-cocoon) that have not yet caught up to the rename keep reading the legacy key; providers that have caught up read the canonical key. Both stay in sync because every reconcile rewrites both keys to the same value. The legacy mirror will be retired once every consumer is on the new prefix; see [cocoon-common's `meta` package docs](https://github.com/cocoonstack/cocoon-common#meta) for the helper API.
-
-The CRD API group (`cocoon.cis/v1alpha1`) and the selector labels (`cocoon.cis/cocoonset` etc.) stay on the legacy prefix in this round — renaming the API group requires migrating every existing CocoonSet CR, and renaming the selector labels requires a coordinated cutover so in-flight Pods are not orphaned by their owner controllers. Both will move under cocoonstack.io in dedicated follow-ups.
-
-## Usage
-
-### Hibernate a pod
-
-```yaml
-apiVersion: cocoon.cis/v1alpha1
-kind: Hibernation
-metadata:
-  name: hibernate-bot-1
-  namespace: prod
-spec:
-  podName: sre-agent-xxx
-  action: hibernate
+```bash
+kubectl apply -k github.com/cocoonstack/cocoon-operator/config/default?ref=main
 ```
 
-### Manage a VM group
+This installs:
+- `cocoon-system` namespace
+- Both CRDs (imported from `cocoon-common` via `make import-crds`)
+- `ServiceAccount`, `ClusterRole`, and `ClusterRoleBinding`
+- The operator `Deployment` (1 replica with leader election on)
 
-```yaml
-apiVersion: cocoon.cis/v1alpha1
-kind: CocoonSet
-metadata:
-  name: demo
-spec:
-  agent:
-    image: ubuntu-dev-base
-    replicas: 1
-    resources:
-      cpu: "2"
-      memory: "4Gi"
-  toolboxes:
-    - name: windows
-      os: windows
-      image: windows-server-2022
-      mode: static
+To override the image tag or replica count, build a kustomize overlay that imports `config/default` as a base.
+
+### Keeping CRDs in sync with cocoon-common
+
+The CRD YAML lives under `config/crd/bases/` and is committed so a clean clone works out of the box. After bumping the cocoon-common dependency, regenerate the bases with:
+
+```bash
+go get github.com/cocoonstack/cocoon-common@<version>
+make import-crds
+git add config/crd/bases && git commit
 ```
 
-### Manifests
-
-| File | Description |
-|---|---|
-| `deploy/crd.yaml` | Hibernation CRD |
-| `deploy/cocoonset-crd.yaml` | CocoonSet CRD |
-| `deploy/deploy.yaml` | Operator Deployment and RBAC |
+The `import-crds` target uses `go list -m -f '{{.Dir}}'` to resolve the cocoon-common module path and copies the YAML straight from there. CI rejects PRs that forget this step.
 
 ## Development
 
 ```bash
-make build          # build binary
-make test           # run tests
-make lint           # run golangci-lint
-make fmt            # format code
+make all            # full pipeline: deps + fmt + lint + test + build
+make build          # build cocoon-operator binary
+make test           # vet + race-detected tests
+make lint           # golangci-lint on linux + darwin
+make import-crds    # refresh config/crd/bases from cocoon-common
 make help           # show all targets
 ```
 
-## Related Projects
+The Makefile detects Go workspace mode (`go env GOWORK`) and skips `go mod tidy` when active so cross-module references resolve through `go.work` without forcing a release of cocoon-common.
+
+## Related projects
 
 | Project | Role |
 |---|---|
-| [cocoon-common](https://github.com/cocoonstack/cocoon-common) | Shared metadata, Kubernetes, and logging helpers |
-| [cocoon-webhook](https://github.com/cocoonstack/cocoon-webhook) | Admission webhook for sticky scheduling |
-| [epoch](https://github.com/cocoonstack/epoch) | Snapshot storage backend for hibernated VMs |
-| [vk-cocoon](https://github.com/cocoonstack/vk-cocoon) | Virtual kubelet provider that performs the actual VM lifecycle |
+| [cocoon-common](https://github.com/cocoonstack/cocoon-common) | CRD types, annotation contract, shared helpers |
+| [cocoon-webhook](https://github.com/cocoonstack/cocoon-webhook) | Admission webhook for sticky scheduling and CocoonSet validation |
+| [epoch](https://github.com/cocoonstack/epoch) | Snapshot registry; the operator queries it via `SnapshotRegistry` |
+| [vk-cocoon](https://github.com/cocoonstack/vk-cocoon) | Virtual kubelet provider managing VM lifecycle |
 
 ## License
 
