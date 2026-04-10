@@ -1,4 +1,4 @@
-.PHONY: all build test lint vet fmt fmt-check deps clean coverage cloc help
+.PHONY: all build test lint vet fmt fmt-check deps import-crds clean coverage cloc help
 
 REPO_PATH := github.com/cocoonstack/cocoon-operator
 BINARY_NAME := cocoon-operator
@@ -65,6 +65,17 @@ deps: ## Tidy Go modules (no-op when running inside a Go workspace)
 	else \
 		echo "==> workspace mode active ($$(go env GOWORK)); skipping go mod tidy"; \
 	fi
+
+import-crds: ## Copy CRD YAML from cocoon-common into config/crd/bases
+	@COCOON_COMMON_DIR="$$(go list -m -f '{{.Dir}}' github.com/cocoonstack/cocoon-common)"; \
+	if [ -z "$$COCOON_COMMON_DIR" ]; then \
+		echo "could not resolve github.com/cocoonstack/cocoon-common module path" >&2; \
+		exit 1; \
+	fi; \
+	rm -rf config/crd/bases; \
+	mkdir -p config/crd/bases; \
+	cp $$COCOON_COMMON_DIR/apis/v1alpha1/crds/*.yaml config/crd/bases/; \
+	echo "imported $$(ls config/crd/bases | wc -l | tr -d ' ') CRDs from $$COCOON_COMMON_DIR"
 
 # --- Build ---
 
