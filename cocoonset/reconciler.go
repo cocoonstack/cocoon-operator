@@ -108,7 +108,7 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 	// every owned pod and short-circuit the rest of the loop.
 	if cs.Spec.Suspend {
 		if classified.main == nil {
-			mainPod := buildAgentPod(&cs, 0, "", r.Scheme)
+			mainPod := buildAgentPod(&cs, 0, "", "", r.Scheme)
 			if err := r.Create(ctx, mainPod); err != nil {
 				return ctrl.Result{}, fmt.Errorf("create main agent before suspend: %w", err)
 			}
@@ -124,7 +124,7 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 
 	// Ensure the main agent (slot 0) exists.
 	if classified.main == nil {
-		mainPod := buildAgentPod(&cs, 0, "", r.Scheme)
+		mainPod := buildAgentPod(&cs, 0, "", "", r.Scheme)
 		if err := r.Create(ctx, mainPod); err != nil {
 			return ctrl.Result{}, fmt.Errorf("create main agent: %w", err)
 		}
@@ -140,13 +140,14 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 	}
 
 	mainVMName := meta.ParseVMSpec(classified.main).VMName
+	mainNodeName := classified.main.Spec.NodeName
 
 	// Track whether the ensure loops actually changed cluster
 	// state. The status patch only needs a re-list when something
 	// moved; otherwise the in-memory classified snapshot is fresh
 	// enough and the next pod-event reconcile will pick up any
 	// drift through the Owns watch.
-	subChanged, err := r.ensureSubAgents(ctx, &cs, classified, mainVMName)
+	subChanged, err := r.ensureSubAgents(ctx, &cs, classified, mainVMName, mainNodeName)
 	if err != nil {
 		return ctrl.Result{}, err
 	}
@@ -172,14 +173,14 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 // IsAlreadyExists / IsNotFound from a previous reconcile race are
 // suppressed but do not flip `changed`, so the success log only fires
 // when we actually mutated cluster state.
-func (r *Reconciler) ensureSubAgents(ctx context.Context, cs *cocoonv1.CocoonSet, classified classifiedPods, mainVMName string) (bool, error) {
+func (r *Reconciler) ensureSubAgents(ctx context.Context, cs *cocoonv1.CocoonSet, classified classifiedPods, mainVMName, mainNodeName string) (bool, error) {
 	logger := log.WithFunc("cocoonset.Reconciler.ensureSubAgents")
 	changed := false
 	for slot := int32(1); slot <= cs.Spec.Agent.Replicas; slot++ {
 		if _, exists := classified.sub[slot]; exists {
 			continue
 		}
-		subPod := buildAgentPod(cs, slot, mainVMName, r.Scheme)
+		subPod := buildAgentPod(cs, slot, mainVMName, mainNodeName, r.Scheme)
 		if err := r.Create(ctx, subPod); err != nil {
 			if apierrors.IsAlreadyExists(err) {
 				continue

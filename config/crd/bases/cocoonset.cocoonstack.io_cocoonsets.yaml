@@ -32,7 +32,7 @@ spec:
     - jsonPath: .metadata.creationTimestamp
       name: Age
       type: date
-    name: v1alpha1
+    name: v1
     schema:
       openAPIV3Schema:
         description: CocoonSet is the Schema for the cocoonsets API.
@@ -358,34 +358,27 @@ spec:
               agents:
                 description: Agents reports per-agent runtime state.
                 items:
-                  description: AgentStatus is the per-agent runtime state.
+                  description: |-
+                    AgentStatus is the per-agent runtime state. Slot 0 is always the
+                    main agent; ForkedFrom is set only for sub-agents and points at
+                    the main VM they cloned from.
                   properties:
                     forkedFrom:
-                      description: ForkedFrom is the parent main VM name (sub-agents
-                        only).
                       type: string
                     ip:
-                      description: IP is the VM's primary IP address.
                       type: string
                     phase:
-                      description: Phase mirrors the backing pod's phase.
                       type: string
                     podName:
-                      description: PodName is the backing pod's name.
                       type: string
                     role:
-                      description: Role is "main" or "sub-agent".
                       type: string
                     slot:
-                      description: Slot is the agent index. Slot 0 is always the main
-                        agent.
                       format: int32
                       type: integer
                     vmID:
-                      description: VMID is the runtime VM identifier reported by vk-cocoon.
                       type: string
                     vmName:
-                      description: VMName is the deterministic VM name vk-cocoon uses.
                       type: string
                   required:
                   - role
@@ -479,32 +472,26 @@ spec:
               toolboxes:
                 description: Toolboxes reports per-toolbox runtime state.
                 items:
-                  description: ToolboxStatus is the per-toolbox runtime state.
+                  description: |-
+                    ToolboxStatus is the per-toolbox runtime state. ConnType is the
+                    preferred kubectl-style connection protocol picked by
+                    meta.ConnectionType (ssh / rdp / adb / vnc).
                   properties:
                     connType:
-                      description: ConnType is the preferred connection protocol (ssh
-                        / rdp / adb / vnc).
                       type: string
                     ip:
-                      description: IP is the toolbox VM's primary IP address.
                       type: string
                     name:
-                      description: Name matches the spec entry.
                       type: string
                     phase:
-                      description: Phase mirrors the backing pod's phase.
                       type: string
                     podName:
-                      description: PodName is the backing pod's name.
                       type: string
                     vmID:
-                      description: VMID is the runtime VM identifier reported by vk-cocoon.
                       type: string
                     vmName:
-                      description: VMName is the deterministic VM name vk-cocoon uses.
                       type: string
                     vncPort:
-                      description: VNCPort mirrors the spec when VNC access is configured.
                       format: int32
                       type: integer
                   required:

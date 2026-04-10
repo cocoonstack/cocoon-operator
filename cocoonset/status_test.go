@@ -34,7 +34,7 @@ func TestBuildStatusScalingWhenSubsMissing(t *testing.T) {
 	cs := newCocoonSet("demo", func(cs *cocoonv1.CocoonSet) {
 		cs.Spec.Agent.Replicas = 1
 	})
-	main := readyPod(buildAgentPod(cs, 0, "", testScheme(t)))
+	main := readyPod(buildAgentPod(cs, 0, "", "", testScheme(t)))
 	classified := classifiedPods{
 		main:      main,
 		sub:       map[int32]*corev1.Pod{},
@@ -48,7 +48,7 @@ func TestBuildStatusScalingWhenSubsMissing(t *testing.T) {
 
 func TestBuildStatusRunningWhenAllReady(t *testing.T) {
 	cs := newCocoonSet("demo")
-	main := readyPod(buildAgentPod(cs, 0, "", testScheme(t)))
+	main := readyPod(buildAgentPod(cs, 0, "", "", testScheme(t)))
 	classified := classifiedPods{
 		main:      main,
 		sub:       map[int32]*corev1.Pod{},
@@ -64,8 +64,8 @@ func TestBuildStatusReportsAgents(t *testing.T) {
 	cs := newCocoonSet("demo", func(cs *cocoonv1.CocoonSet) {
 		cs.Spec.Agent.Replicas = 2
 	})
-	main := readyPod(buildAgentPod(cs, 0, "", testScheme(t)))
-	sub1 := readyPod(buildAgentPod(cs, 1, "vk-ns-demo-0", testScheme(t)))
+	main := readyPod(buildAgentPod(cs, 0, "", "", testScheme(t)))
+	sub1 := readyPod(buildAgentPod(cs, 1, "vk-ns-demo-0", "", testScheme(t)))
 	classified := classifiedPods{
 		main:      main,
 		sub:       map[int32]*corev1.Pod{1: sub1},
@@ -117,7 +117,7 @@ func TestStatusEqualDetectsChange(t *testing.T) {
 
 func TestAgentStatusFromPod(t *testing.T) {
 	cs := newCocoonSet("demo")
-	pod := buildAgentPod(cs, 0, "", testScheme(t))
+	pod := buildAgentPod(cs, 0, "", "", testScheme(t))
 	pod.Status.Phase = corev1.PodRunning
 	vmRuntime := meta.VMRuntime{VMID: "qemu-1", IP: "10.0.0.1"}
 	vmRuntime.Apply(pod)

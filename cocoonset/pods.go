@@ -80,7 +80,7 @@ func classifyPods(pods []corev1.Pod) classifiedPods {
 // buildAgentPod constructs the desired Pod for an agent slot.
 // slot 0 is the main agent; slot >= 1 are sub-agents that fork from
 // the main agent's VM.
-func buildAgentPod(cs *cocoonv1.CocoonSet, slot int32, mainVMName string, scheme *runtime.Scheme) *corev1.Pod {
+func buildAgentPod(cs *cocoonv1.CocoonSet, slot int32, mainVMName, bindNodeName string, scheme *runtime.Scheme) *corev1.Pod {
 	role := meta.RoleMain
 	forkFrom := ""
 	if slot > 0 {
@@ -110,6 +110,9 @@ func buildAgentPod(cs *cocoonv1.CocoonSet, slot int32, mainVMName string, scheme
 	pod.Spec.Containers[0].EnvFrom = cs.Spec.Agent.EnvFrom
 	if cs.Spec.Agent.ServiceAccountName != "" {
 		pod.Spec.ServiceAccountName = cs.Spec.Agent.ServiceAccountName
+	}
+	if bindNodeName != "" {
+		pod.Spec.NodeName = bindNodeName
 	}
 	return pod
 }

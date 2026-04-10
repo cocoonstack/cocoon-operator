@@ -42,7 +42,7 @@ func newCocoonSet(name string, modifiers ...func(*cocoonv1.CocoonSet)) *cocoonv1
 
 func TestBuildAgentPodSlot0IsMain(t *testing.T) {
 	cs := newCocoonSet("demo")
-	pod := buildAgentPod(cs, 0, "", testScheme(t))
+	pod := buildAgentPod(cs, 0, "", "", testScheme(t))
 
 	if pod.Name != "demo-0" {
 		t.Errorf("pod name: %q, want demo-0", pod.Name)
@@ -66,7 +66,7 @@ func TestBuildAgentPodSubAgentForksFromMain(t *testing.T) {
 		cs.Spec.Agent.Replicas = 2
 	})
 	mainVMName := "vk-ns-demo-0"
-	pod := buildAgentPod(cs, 1, mainVMName, testScheme(t))
+	pod := buildAgentPod(cs, 1, mainVMName, "cocoonset-node-2", testScheme(t))
 
 	if pod.Labels[meta.LabelRole] != meta.RoleSubAgent {
 		t.Errorf("role: %q, want sub-agent", pod.Labels[meta.LabelRole])
@@ -74,11 +74,14 @@ func TestBuildAgentPodSubAgentForksFromMain(t *testing.T) {
 	if pod.Annotations[meta.AnnotationForkFrom] != mainVMName {
 		t.Errorf("fork-from: %q, want %q", pod.Annotations[meta.AnnotationForkFrom], mainVMName)
 	}
+	if pod.Spec.NodeName != "cocoonset-node-2" {
+		t.Errorf("nodeName: %q, want cocoonset-node-2", pod.Spec.NodeName)
+	}
 }
 
 func TestBuildAgentPodAppliesAgentDefaults(t *testing.T) {
 	cs := newCocoonSet("demo")
-	pod := buildAgentPod(cs, 0, "", testScheme(t))
+	pod := buildAgentPod(cs, 0, "", "", testScheme(t))
 	if pod.Annotations[meta.AnnotationMode] != string(cocoonv1.AgentModeClone) {
 		t.Errorf("mode default: %q", pod.Annotations[meta.AnnotationMode])
 	}
@@ -95,7 +98,7 @@ func TestBuildAgentPodPropagatesStorage(t *testing.T) {
 	cs := newCocoonSet("demo", func(cs *cocoonv1.CocoonSet) {
 		cs.Spec.Agent.Storage = &q
 	})
-	pod := buildAgentPod(cs, 0, "", testScheme(t))
+	pod := buildAgentPod(cs, 0, "", "", testScheme(t))
 	if pod.Annotations[meta.AnnotationStorage] != "100Gi" {
 		t.Errorf("storage: %q", pod.Annotations[meta.AnnotationStorage])
 	}
@@ -142,9 +145,9 @@ func TestBuildToolboxPodNonStaticIsManaged(t *testing.T) {
 func TestClassifyPodsGroupsByRole(t *testing.T) {
 	cs := newCocoonSet("demo")
 	scheme := testScheme(t)
-	main := buildAgentPod(cs, 0, "", scheme)
-	sub1 := buildAgentPod(cs, 1, "vk-ns-demo-0", scheme)
-	sub2 := buildAgentPod(cs, 2, "vk-ns-demo-0", scheme)
+	main := buildAgentPod(cs, 0, "", "", scheme)
+	sub1 := buildAgentPod(cs, 1, "vk-ns-demo-0", "", scheme)
+	sub2 := buildAgentPod(cs, 2, "vk-ns-demo-0", "", scheme)
 	tb := buildToolboxPod(cs, cocoonv1.ToolboxSpec{Name: "tb", Image: "x"}, scheme)
 
 	pods := []corev1.Pod{*main, *sub1, *sub2, *tb}
