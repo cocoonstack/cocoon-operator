@@ -10,8 +10,10 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/runtime"
 	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/builder"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
+	"sigs.k8s.io/controller-runtime/pkg/predicate"
 
 	cocoonv1alpha1 "github.com/cocoonstack/cocoon-common/apis/v1alpha1"
 	"github.com/cocoonstack/cocoon-common/meta"
@@ -39,10 +41,14 @@ type CocoonSetReconciler struct {
 }
 
 // SetupWithManager registers the reconciler against the supplied
-// controller-runtime manager.
+// controller-runtime manager. The For predicate is
+// GenerationChangedPredicate so reconciles only fire when the spec
+// actually changes — status-only patches we make ourselves do not
+// loop back. The Owns side keeps the pod-event firehose because
+// pod status updates are exactly what drives the readyAgents diff.
 func (r *CocoonSetReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(mgr).
-		For(&cocoonv1alpha1.CocoonSet{}).
+		For(&cocoonv1alpha1.CocoonSet{}, builder.WithPredicates(predicate.GenerationChangedPredicate{})).
 		Owns(&corev1.Pod{}).
 		Complete(r)
 }
