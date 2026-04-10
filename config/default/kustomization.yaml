@@ -1,0 +1,11 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+# kubectl apply -k config/default installs the entire operator stack:
+# namespace, CRDs (imported from cocoon-common), RBAC, and the
+# Deployment.
+resources:
+  - namespace.yaml
+  - ../crd
+  - ../rbac
+  - ../manager

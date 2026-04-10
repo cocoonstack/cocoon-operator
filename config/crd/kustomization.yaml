@@ -1,0 +1,9 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+# CRDs are imported from cocoon-common via `make import-crds`. The
+# resulting YAML lives under bases/ and is committed so that a clean
+# clone can build the manifests straight away.
+resources:
+  - bases/cocoonset.cocoonstack.io_cocoonsets.yaml
+  - bases/cocoonset.cocoonstack.io_cocoonhibernations.yaml

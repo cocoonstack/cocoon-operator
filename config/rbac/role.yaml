@@ -1,0 +1,54 @@
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: cocoon-operator
+  labels:
+    app.kubernetes.io/name: cocoon-operator
+rules:
+  # CocoonSet and CocoonHibernation custom resources.
+  - apiGroups: ["cocoonset.cocoonstack.io"]
+    resources: ["cocoonsets", "cocoonhibernations"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  - apiGroups: ["cocoonset.cocoonstack.io"]
+    resources: ["cocoonsets/status", "cocoonhibernations/status"]
+    verbs: ["get", "update", "patch"]
+  - apiGroups: ["cocoonset.cocoonstack.io"]
+    resources: ["cocoonsets/finalizers", "cocoonhibernations/finalizers"]
+    verbs: ["update"]
+
+  # Owned pods.
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  - apiGroups: [""]
+    resources: ["pods/status"]
+    verbs: ["get"]
+
+  # Leader election needs ConfigMap and Lease access in the
+  # operator's own namespace.
+  - apiGroups: [""]
+    resources: ["configmaps"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  - apiGroups: ["coordination.k8s.io"]
+    resources: ["leases"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+
+  # Events the controller emits via the recorder.
+  - apiGroups: [""]
+    resources: ["events"]
+    verbs: ["create", "patch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: cocoon-operator
+  labels:
+    app.kubernetes.io/name: cocoon-operator
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: cocoon-operator
+subjects:
+  - kind: ServiceAccount
+    name: cocoon-operator
+    namespace: cocoon-system

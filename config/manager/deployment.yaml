@@ -1,0 +1,59 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: cocoon-operator
+  namespace: cocoon-system
+  labels:
+    app.kubernetes.io/name: cocoon-operator
+    app.kubernetes.io/component: controller
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: cocoon-operator
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: cocoon-operator
+        app.kubernetes.io/component: controller
+    spec:
+      serviceAccountName: cocoon-operator
+      containers:
+        - name: manager
+          image: ghcr.io/cocoonstack/cocoon-operator:latest
+          imagePullPolicy: IfNotPresent
+          args:
+            - --metrics-bind-address=:8080
+            - --health-probe-bind-address=:8081
+            - --leader-elect=true
+          env:
+            - name: OPERATOR_LOG_LEVEL
+              value: info
+            - name: EPOCH_URL
+              value: http://epoch.cocoon-system.svc:8080
+          ports:
+            - name: metrics
+              containerPort: 8080
+              protocol: TCP
+            - name: probe
+              containerPort: 8081
+              protocol: TCP
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: probe
+            initialDelaySeconds: 15
+            periodSeconds: 20
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: probe
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              cpu: 1000m
+              memory: 512Mi
