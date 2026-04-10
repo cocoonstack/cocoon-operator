@@ -74,10 +74,14 @@ func main() {
 	}
 
 	epochClient := newEpochClient(envOrDefault("EPOCH_URL", "http://epoch.cocoon-system.svc:8080"), os.Getenv("EPOCH_TOKEN"))
-	_ = epochClient
 
-	// Subsequent commits register the CocoonSet and CocoonHibernation
-	// reconcilers against mgr here, threading epochClient through.
+	if err := (&CocoonSetReconciler{
+		Client: mgr.GetClient(),
+		Scheme: mgr.GetScheme(),
+		Epoch:  epochClient,
+	}).SetupWithManager(mgr); err != nil {
+		logger.Fatalf(ctx, err, "register CocoonSetReconciler: %v", err)
+	}
 
 	signalCtx, cancel := signal.NotifyContext(ctx, syscall.SIGINT, syscall.SIGTERM)
 	defer cancel()
