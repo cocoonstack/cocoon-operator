@@ -91,20 +91,39 @@ func (r *CocoonSetReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 
 	classified := classifyPods(podList.Items)
 
-	// Suspend short-circuit: if Spec.Suspend is true the reconciler
-	// just flips the hibernate annotation on every owned pod and
-	// reports the Suspended phase. We do not delete the pods — the
-	// vk-cocoon side keeps the container alive while the VM sleeps.
+	// Detect a wedged main agent (terminal phase like Failed) and
+	// stop the reconcile loop with a Failed phase. Without this we
+	// would requeue every 5 seconds forever, hiding the wedge from
+	// status consumers.
+	if classified.main != nil && isPodTerminal(classified.main) {
+		return ctrl.Result{}, r.patchStatus(ctx, &cs,
+			buildStatus(&cs, classified, cocoonv1alpha1.CocoonSetPhaseFailed))
+	}
+
+	// Suspend handling. We always ensure the main agent first
+	// (suspend on a CocoonSet that never had a main pod would
+	// otherwise produce a phantom Suspended phase with zero ready
+	// agents). Once main exists we apply HibernateState(true) to
+	// every owned pod and short-circuit the rest of the loop.
 	if cs.Spec.Suspend {
+		if classified.main == nil {
+			mainPod := buildAgentPod(&cs, 0, "", r.Scheme)
+			if err := r.Create(ctx, mainPod); err != nil {
+				return ctrl.Result{}, fmt.Errorf("create main agent before suspend: %w", err)
+			}
+			logger.Infof(ctx, "created main agent %s/%s ahead of suspend", mainPod.Namespace, mainPod.Name)
+			return ctrl.Result{Requeue: true}, nil
+		}
 		if err := r.applySuspend(ctx, classified); err != nil {
 			return ctrl.Result{}, err
 		}
-		return ctrl.Result{}, r.patchStatus(ctx, &cs, buildStatus(&cs, classified, cocoonv1alpha1.CocoonSetPhaseSuspended))
+		return ctrl.Result{}, r.patchStatus(ctx, &cs,
+			buildStatus(&cs, classified, cocoonv1alpha1.CocoonSetPhaseSuspended))
 	}
 
 	// Ensure the main agent (slot 0) exists.
 	if classified.main == nil {
-		mainPod := buildAgentPod(&cs, 0, "")
+		mainPod := buildAgentPod(&cs, 0, "", r.Scheme)
 		if err := r.Create(ctx, mainPod); err != nil {
 			return ctrl.Result{}, fmt.Errorf("create main agent: %w", err)
 		}
@@ -121,60 +140,90 @@ func (r *CocoonSetReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 
 	mainVMName := meta.ParseVMSpec(classified.main).VMName
 
-	// Ensure sub-agent slots [1..Replicas]; delete any slot beyond.
+	// Track whether the ensure loops actually changed cluster
+	// state. The status patch only needs a re-list when something
+	// moved; otherwise the in-memory classified snapshot is fresh
+	// enough and the next pod-event reconcile will pick up any
+	// drift through the Owns watch.
+	subChanged, err := r.ensureSubAgents(ctx, &cs, classified, mainVMName)
+	if err != nil {
+		return ctrl.Result{}, err
+	}
+	tbChanged, err := r.ensureToolboxes(ctx, &cs, classified)
+	if err != nil {
+		return ctrl.Result{}, err
+	}
+
+	// Skip the second list when no creates / deletes happened.
+	// The Owns watch on Pod will fire a fresh reconcile as soon as
+	// the API server commits any of our writes anyway.
+	if subChanged || tbChanged {
+		return ctrl.Result{Requeue: true}, nil
+	}
+
+	return ctrl.Result{}, r.patchStatus(ctx, &cs, buildStatus(&cs, classified, currentPhase(&cs, classified)))
+}
+
+// ensureSubAgents creates missing sub-agent pods for slots
+// [1..Replicas] and deletes any slot beyond Replicas. Returns true
+// when at least one create or delete actually happened.
+func (r *CocoonSetReconciler) ensureSubAgents(ctx context.Context, cs *cocoonv1alpha1.CocoonSet, classified classifiedPods, mainVMName string) (bool, error) {
+	logger := log.WithFunc("CocoonSetReconciler.ensureSubAgents")
+	changed := false
 	for slot := int32(1); slot <= cs.Spec.Agent.Replicas; slot++ {
 		if _, exists := classified.sub[slot]; exists {
 			continue
 		}
-		subPod := buildAgentPod(&cs, slot, mainVMName)
+		subPod := buildAgentPod(cs, slot, mainVMName, r.Scheme)
 		if err := r.Create(ctx, subPod); err != nil && !apierrors.IsAlreadyExists(err) {
-			return ctrl.Result{}, fmt.Errorf("create sub-agent slot %d: %w", slot, err)
+			return changed, fmt.Errorf("create sub-agent slot %d: %w", slot, err)
 		}
 		logger.Infof(ctx, "created sub-agent %s/%s", subPod.Namespace, subPod.Name)
+		changed = true
 	}
 	for slot, pod := range classified.sub {
-		if slot > cs.Spec.Agent.Replicas {
-			if err := r.Delete(ctx, pod); err != nil && !apierrors.IsNotFound(err) {
-				return ctrl.Result{}, fmt.Errorf("delete extra sub-agent slot %d: %w", slot, err)
-			}
-			logger.Infof(ctx, "deleted extra sub-agent %s/%s", pod.Namespace, pod.Name)
+		if slot <= cs.Spec.Agent.Replicas {
+			continue
 		}
+		if err := r.Delete(ctx, pod); err != nil && !apierrors.IsNotFound(err) {
+			return changed, fmt.Errorf("delete extra sub-agent slot %d: %w", slot, err)
+		}
+		logger.Infof(ctx, "deleted extra sub-agent %s/%s", pod.Namespace, pod.Name)
+		changed = true
 	}
+	return changed, nil
+}
 
-	// Ensure toolboxes; delete any toolbox not in spec.
+// ensureToolboxes creates missing toolbox pods for every spec entry
+// and deletes any toolbox not in spec. Returns true when at least
+// one create or delete actually happened.
+func (r *CocoonSetReconciler) ensureToolboxes(ctx context.Context, cs *cocoonv1alpha1.CocoonSet, classified classifiedPods) (bool, error) {
+	logger := log.WithFunc("CocoonSetReconciler.ensureToolboxes")
+	changed := false
 	desired := map[string]bool{}
 	for _, tb := range cs.Spec.Toolboxes {
 		desired[tb.Name] = true
 		if _, exists := classified.toolbox[tb.Name]; exists {
 			continue
 		}
-		tbPod := buildToolboxPod(&cs, tb)
+		tbPod := buildToolboxPod(cs, tb, r.Scheme)
 		if err := r.Create(ctx, tbPod); err != nil && !apierrors.IsAlreadyExists(err) {
-			return ctrl.Result{}, fmt.Errorf("create toolbox %s: %w", tb.Name, err)
+			return changed, fmt.Errorf("create toolbox %s: %w", tb.Name, err)
 		}
 		logger.Infof(ctx, "created toolbox %s/%s", tbPod.Namespace, tbPod.Name)
+		changed = true
 	}
 	for name, pod := range classified.toolbox {
 		if desired[name] {
 			continue
 		}
 		if err := r.Delete(ctx, pod); err != nil && !apierrors.IsNotFound(err) {
-			return ctrl.Result{}, fmt.Errorf("delete extra toolbox %s: %w", name, err)
+			return changed, fmt.Errorf("delete extra toolbox %s: %w", name, err)
 		}
 		logger.Infof(ctx, "deleted extra toolbox %s/%s", pod.Namespace, pod.Name)
+		changed = true
 	}
-
-	// Re-classify after creates/deletes so the status mirrors the
-	// state we just enacted.
-	if err := r.List(ctx, &podList,
-		client.InNamespace(cs.Namespace),
-		client.MatchingLabels{meta.LabelCocoonSet: cs.Name},
-	); err != nil {
-		return ctrl.Result{}, fmt.Errorf("re-list owned pods: %w", err)
-	}
-	classified = classifyPods(podList.Items)
-
-	return ctrl.Result{}, r.patchStatus(ctx, &cs, buildStatus(&cs, classified, currentPhase(&cs, classified)))
+	return changed, nil
 }
 
 // reconcileDelete tears down everything the CocoonSet owns and then
@@ -198,7 +247,7 @@ func (r *CocoonSetReconciler) reconcileDelete(ctx context.Context, cs *cocoonv1a
 	}
 
 	// Garbage-collect snapshots when the policy says we should.
-	if defaultedSnapshotPolicy(cs.Spec.SnapshotPolicy) != cocoonv1alpha1.SnapshotPolicyNever && r.Epoch != nil {
+	if cs.Spec.SnapshotPolicy.Default() != cocoonv1alpha1.SnapshotPolicyNever && r.Epoch != nil {
 		for i := range podList.Items {
 			vmName := meta.ParseVMSpec(&podList.Items[i]).VMName
 			if vmName == "" {
@@ -224,6 +273,9 @@ func (r *CocoonSetReconciler) reconcileDelete(ctx context.Context, cs *cocoonv1a
 // VM while keeping the container alive.
 func (r *CocoonSetReconciler) applySuspend(ctx context.Context, classified classifiedPods) error {
 	for _, pod := range classified.allByName {
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return ctxErr
+		}
 		if meta.ReadHibernateState(pod) {
 			continue
 		}
@@ -249,4 +301,15 @@ func isPodReady(pod *corev1.Pod) bool {
 		}
 	}
 	return false
+}
+
+// isPodTerminal reports whether the pod has reached a phase that
+// will not progress without operator intervention. The reconciler
+// surfaces this as CocoonSetPhaseFailed so users see the wedge in
+// status instead of an indefinite Pending.
+func isPodTerminal(pod *corev1.Pod) bool {
+	if pod == nil {
+		return false
+	}
+	return pod.Status.Phase == corev1.PodFailed
 }

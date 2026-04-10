@@ -8,6 +8,7 @@ import (
 	"github.com/projecteru2/core/log"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
@@ -27,6 +28,7 @@ const (
 	conditionTypeReady     = "Ready"
 	conditionReasonPending = "Pending"
 	conditionReasonDone    = "Done"
+	conditionReasonFailed  = "Failed"
 )
 
 // CocoonHibernationReconciler reconciles a CocoonHibernation object.
@@ -46,7 +48,9 @@ func (r *CocoonHibernationReconciler) SetupWithManager(mgr ctrl.Manager) error {
 
 // Reconcile drives a single hibernate or wake transition for one
 // pod. Each invocation either completes the transition (no requeue)
-// or schedules another probe a few seconds later.
+// or schedules another probe a few seconds later. A previous Failed
+// phase is recoverable: a successful path through the switch below
+// will overwrite the failure with the new in-flight state.
 func (r *CocoonHibernationReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	logger := log.WithFunc("CocoonHibernationReconciler.Reconcile")
 
@@ -60,20 +64,20 @@ func (r *CocoonHibernationReconciler) Reconcile(ctx context.Context, req ctrl.Re
 
 	// Resolve the target pod from spec.podRef.
 	if hib.Spec.PodRef.Name == "" {
-		return ctrl.Result{}, r.setFailed(ctx, &hib, "spec.podRef.name is required")
+		return ctrl.Result{}, r.markFailed(ctx, &hib, "spec.podRef.name is required")
 	}
 	var pod corev1.Pod
 	err := r.Get(ctx, types.NamespacedName{Namespace: hib.Namespace, Name: hib.Spec.PodRef.Name}, &pod)
 	if err != nil {
 		if apierrors.IsNotFound(err) {
-			return ctrl.Result{}, r.setFailed(ctx, &hib, fmt.Sprintf("pod %s/%s not found", hib.Namespace, hib.Spec.PodRef.Name))
+			return ctrl.Result{}, r.markFailed(ctx, &hib, fmt.Sprintf("pod %s/%s not found", hib.Namespace, hib.Spec.PodRef.Name))
 		}
 		return ctrl.Result{}, fmt.Errorf("get target pod: %w", err)
 	}
 
 	vmName := meta.ParseVMSpec(&pod).VMName
 	if vmName == "" {
-		return ctrl.Result{}, r.setFailed(ctx, &hib, fmt.Sprintf("pod %s/%s has no %s annotation", pod.Namespace, pod.Name, meta.AnnotationVMName))
+		return ctrl.Result{}, r.markFailed(ctx, &hib, fmt.Sprintf("pod %s/%s has no %s annotation", pod.Namespace, pod.Name, meta.AnnotationVMName))
 	}
 
 	logger.Debugf(ctx, "reconcile hibernation %s/%s desire=%s vm=%s", hib.Namespace, hib.Name, hib.Spec.Desire, vmName)
@@ -84,7 +88,7 @@ func (r *CocoonHibernationReconciler) Reconcile(ctx context.Context, req ctrl.Re
 	case cocoonv1alpha1.HibernationDesireWake:
 		return r.reconcileWake(ctx, &hib, &pod, vmName)
 	default:
-		return ctrl.Result{}, r.setFailed(ctx, &hib, fmt.Sprintf("unknown desire %q", hib.Spec.Desire))
+		return ctrl.Result{}, r.markFailed(ctx, &hib, fmt.Sprintf("unknown desire %q", hib.Spec.Desire))
 	}
 }
 
@@ -147,8 +151,9 @@ func (r *CocoonHibernationReconciler) reconcileWake(ctx context.Context, hib *co
 }
 
 // setPhase patches the CocoonHibernation status with the supplied
-// phase and a Ready condition mirroring whether the phase is a
-// terminal state.
+// phase and uses apimeta.SetStatusCondition so the existing
+// LastTransitionTime survives a no-op update. A previous Failed
+// phase will be cleared as the recovery transition flows through.
 func (r *CocoonHibernationReconciler) setPhase(ctx context.Context, hib *cocoonv1alpha1.CocoonHibernation, phase cocoonv1alpha1.CocoonHibernationPhase, vmName string) error {
 	if hib.Status.Phase == phase && hib.Status.VMName == vmName {
 		return nil
@@ -157,42 +162,42 @@ func (r *CocoonHibernationReconciler) setPhase(ctx context.Context, hib *cocoonv
 	hib.Status.ObservedGeneration = hib.Generation
 	hib.Status.Phase = phase
 	hib.Status.VMName = vmName
-	hib.Status.Conditions = []metav1.Condition{readyCondition(phase, hib.Generation)}
+	apimeta.SetStatusCondition(&hib.Status.Conditions, readyCondition(phase, hib.Generation))
 	if err := r.Status().Patch(ctx, hib, patch); err != nil {
 		return fmt.Errorf("patch hibernation status: %w", err)
 	}
 	return nil
 }
 
-// setFailed marks the hibernation as Failed with a one-shot message
-// in the Ready condition.
-func (r *CocoonHibernationReconciler) setFailed(ctx context.Context, hib *cocoonv1alpha1.CocoonHibernation, msg string) error {
-	if hib.Status.Phase == cocoonv1alpha1.CocoonHibernationPhaseFailed {
-		return nil
-	}
+// markFailed marks the hibernation as Failed with a one-shot
+// message. Unlike the previous setFailed, this is reached only on
+// the *current* reconcile pass — a subsequent pass through Reconcile
+// that finds the failure preconditions cleared (e.g. the pod now
+// exists) will land in setPhase and overwrite the Failed condition
+// with the new in-flight state.
+func (r *CocoonHibernationReconciler) markFailed(ctx context.Context, hib *cocoonv1alpha1.CocoonHibernation, msg string) error {
 	patch := client.MergeFrom(hib.DeepCopy())
 	hib.Status.ObservedGeneration = hib.Generation
 	hib.Status.Phase = cocoonv1alpha1.CocoonHibernationPhaseFailed
-	hib.Status.Conditions = []metav1.Condition{
-		{
-			Type:               conditionTypeReady,
-			Status:             metav1.ConditionFalse,
-			Reason:             "Failed",
-			Message:            msg,
-			LastTransitionTime: metav1.Now(),
-			ObservedGeneration: hib.Generation,
-		},
-	}
+	apimeta.SetStatusCondition(&hib.Status.Conditions, metav1.Condition{
+		Type:               conditionTypeReady,
+		Status:             metav1.ConditionFalse,
+		Reason:             conditionReasonFailed,
+		Message:            msg,
+		ObservedGeneration: hib.Generation,
+	})
 	if err := r.Status().Patch(ctx, hib, patch); err != nil {
 		return fmt.Errorf("patch failed status: %w", err)
 	}
 	return nil
 }
 
+// readyCondition returns the Ready condition that mirrors a phase.
+// LastTransitionTime is left zero so apimeta.SetStatusCondition
+// preserves the existing timestamp on no-op updates.
 func readyCondition(phase cocoonv1alpha1.CocoonHibernationPhase, generation int64) metav1.Condition {
 	c := metav1.Condition{
 		Type:               conditionTypeReady,
-		LastTransitionTime: metav1.Now(),
 		ObservedGeneration: generation,
 	}
 	switch phase {
@@ -202,7 +207,7 @@ func readyCondition(phase cocoonv1alpha1.CocoonHibernationPhase, generation int6
 		c.Message = string(phase)
 	case cocoonv1alpha1.CocoonHibernationPhaseFailed:
 		c.Status = metav1.ConditionFalse
-		c.Reason = "Failed"
+		c.Reason = conditionReasonFailed
 		c.Message = string(phase)
 	default:
 		c.Status = metav1.ConditionFalse

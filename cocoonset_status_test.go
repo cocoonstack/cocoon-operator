@@ -4,6 +4,7 @@ import (
 	"testing"
 
 	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/api/equality"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	cocoonv1alpha1 "github.com/cocoonstack/cocoon-common/apis/v1alpha1"
@@ -33,7 +34,7 @@ func TestCurrentPhaseScaling(t *testing.T) {
 	cs := newCocoonSet("demo", func(cs *cocoonv1alpha1.CocoonSet) {
 		cs.Spec.Agent.Replicas = 1
 	})
-	main := readyPod(buildAgentPod(cs, 0, ""))
+	main := readyPod(buildAgentPod(cs, 0, "", testScheme(t)))
 	classified := classifiedPods{
 		main:      main,
 		sub:       map[int32]*corev1.Pod{},
@@ -47,7 +48,7 @@ func TestCurrentPhaseScaling(t *testing.T) {
 
 func TestCurrentPhaseRunning(t *testing.T) {
 	cs := newCocoonSet("demo")
-	main := readyPod(buildAgentPod(cs, 0, ""))
+	main := readyPod(buildAgentPod(cs, 0, "", testScheme(t)))
 	classified := classifiedPods{
 		main:      main,
 		sub:       map[int32]*corev1.Pod{},
@@ -63,8 +64,8 @@ func TestBuildStatusReportsAgents(t *testing.T) {
 	cs := newCocoonSet("demo", func(cs *cocoonv1alpha1.CocoonSet) {
 		cs.Spec.Agent.Replicas = 2
 	})
-	main := readyPod(buildAgentPod(cs, 0, ""))
-	sub1 := readyPod(buildAgentPod(cs, 1, "vk-ns-demo-0"))
+	main := readyPod(buildAgentPod(cs, 0, "", testScheme(t)))
+	sub1 := readyPod(buildAgentPod(cs, 1, "vk-ns-demo-0", testScheme(t)))
 	classified := classifiedPods{
 		main:      main,
 		sub:       map[int32]*corev1.Pod{1: sub1},
@@ -94,9 +95,10 @@ func TestStatusEqualIgnoresConditionTimestamps(t *testing.T) {
 	b := buildStatus(cs, classifiedPods{
 		sub: map[int32]*corev1.Pod{}, toolbox: map[string]*corev1.Pod{}, allByName: map[string]*corev1.Pod{},
 	}, cocoonv1alpha1.CocoonSetPhasePending)
-	// even though metav1.Now() advanced, statusEqual should still return true.
-	if !statusEqual(a, b) {
-		t.Errorf("statusEqual must ignore condition timestamps")
+	// Conditions carry zero timestamps from buildStatus; semantic
+	// deep-equal must agree two identical builds are equivalent.
+	if !equality.Semantic.DeepEqual(a, b) {
+		t.Errorf("equality.Semantic.DeepEqual must accept identical builds")
 	}
 }
 
@@ -108,14 +110,14 @@ func TestStatusEqualDetectsChange(t *testing.T) {
 	b := buildStatus(cs, classifiedPods{
 		sub: map[int32]*corev1.Pod{}, toolbox: map[string]*corev1.Pod{}, allByName: map[string]*corev1.Pod{},
 	}, cocoonv1alpha1.CocoonSetPhaseRunning)
-	if statusEqual(a, b) {
-		t.Errorf("statusEqual should detect phase change")
+	if equality.Semantic.DeepEqual(a, b) {
+		t.Errorf("equality.Semantic.DeepEqual should detect phase change")
 	}
 }
 
 func TestAgentStatusFromPod(t *testing.T) {
 	cs := newCocoonSet("demo")
-	pod := buildAgentPod(cs, 0, "")
+	pod := buildAgentPod(cs, 0, "", testScheme(t))
 	pod.Status.Phase = corev1.PodRunning
 	runtime := meta.VMRuntime{VMID: "qemu-1", IP: "10.0.0.1"}
 	runtime.Apply(pod)

@@ -12,6 +12,7 @@ import (
 	"flag"
 	"os"
 	"os/signal"
+	"strconv"
 	"syscall"
 
 	"github.com/projecteru2/core/log"
@@ -118,17 +119,16 @@ func envOrDefault(key, fallback string) string {
 	return fallback
 }
 
-// envBool reads a boolean env var. Recognized truthy values are
-// "1", "true", "yes" (case-insensitive). Anything else is false.
+// envBool reads a boolean env var via strconv.ParseBool, falling
+// back to the supplied default when the var is unset or unparseable.
 func envBool(key string, fallback bool) bool {
 	v := os.Getenv(key)
 	if v == "" {
 		return fallback
 	}
-	switch v {
-	case "1", "true", "TRUE", "True", "yes", "YES", "Yes":
-		return true
-	default:
-		return false
+	parsed, err := strconv.ParseBool(v)
+	if err != nil {
+		return fallback
 	}
+	return parsed
 }

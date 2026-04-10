@@ -5,7 +5,10 @@ import (
 	"strconv"
 
 	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
+	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 
 	cocoonv1alpha1 "github.com/cocoonstack/cocoon-common/apis/v1alpha1"
 	"github.com/cocoonstack/cocoon-common/meta"
@@ -59,10 +62,9 @@ func classifyPods(pods []corev1.Pod) classifiedPods {
 			}
 			out.sub[int32(slot)] = p
 		case meta.RoleToolbox:
-			// Toolbox pods are named "<csname>-<toolboxname>"; we
-			// rely on the LabelCocoonSet + the trailing pod-name
-			// segment to recover the spec entry. Storing by name
-			// keeps lookups O(1).
+			// Toolbox pods reuse the slot label as the toolbox name
+			// (operator side; classification mirror only). Storing
+			// by that key keeps lookups O(1).
 			out.toolbox[p.Labels[meta.LabelSlot]] = p
 		default:
 			out.unknowns = append(out.unknowns, p)
@@ -74,7 +76,7 @@ func classifyPods(pods []corev1.Pod) classifiedPods {
 // buildAgentPod constructs the desired Pod for an agent slot.
 // slot 0 is the main agent; slot >= 1 are sub-agents that fork from
 // the main agent's VM.
-func buildAgentPod(cs *cocoonv1alpha1.CocoonSet, slot int32, mainVMName string) *corev1.Pod {
+func buildAgentPod(cs *cocoonv1alpha1.CocoonSet, slot int32, mainVMName string, scheme *runtime.Scheme) *corev1.Pod {
 	role := meta.RoleMain
 	forkFrom := ""
 	if slot > 0 {
@@ -85,16 +87,16 @@ func buildAgentPod(cs *cocoonv1alpha1.CocoonSet, slot int32, mainVMName string) 
 	vmName := meta.VMNameForDeployment(cs.Namespace, cs.Name, int(slot))
 	podName := fmt.Sprintf("%s-%d", cs.Name, slot)
 
-	pod := newManagedPod(cs, podName, role, strconv.FormatInt(int64(slot), 10))
+	pod := newManagedPod(cs, podName, role, strconv.FormatInt(int64(slot), 10), scheme)
 
 	spec := meta.VMSpec{
 		VMName:         vmName,
 		Image:          cs.Spec.Agent.Image,
-		Mode:           string(defaultedAgentMode(cs.Spec.Agent.Mode)),
-		OS:             string(defaultedOSType(cs.Spec.Agent.OS, cocoonv1alpha1.OSLinux)),
+		Mode:           string(cs.Spec.Agent.Mode.Default()),
+		OS:             string(cs.Spec.Agent.OS.Default()),
 		Network:        cs.Spec.Agent.Network,
 		Storage:        quantityString(cs.Spec.Agent.Storage),
-		SnapshotPolicy: string(defaultedSnapshotPolicy(cs.Spec.SnapshotPolicy)),
+		SnapshotPolicy: string(cs.Spec.SnapshotPolicy.Default()),
 		ForkFrom:       forkFrom,
 		Managed:        true,
 	}
@@ -109,20 +111,20 @@ func buildAgentPod(cs *cocoonv1alpha1.CocoonSet, slot int32, mainVMName string) 
 }
 
 // buildToolboxPod constructs the desired Pod for a toolbox entry.
-func buildToolboxPod(cs *cocoonv1alpha1.CocoonSet, tb cocoonv1alpha1.ToolboxSpec) *corev1.Pod {
+func buildToolboxPod(cs *cocoonv1alpha1.CocoonSet, tb cocoonv1alpha1.ToolboxSpec, scheme *runtime.Scheme) *corev1.Pod {
 	vmName := meta.VMNameForPod(cs.Namespace, tb.Name)
 	podName := fmt.Sprintf("%s-%s", cs.Name, tb.Name)
 
-	pod := newManagedPod(cs, podName, meta.RoleToolbox, tb.Name)
+	pod := newManagedPod(cs, podName, meta.RoleToolbox, tb.Name, scheme)
 
 	managed := tb.Mode != cocoonv1alpha1.ToolboxModeStatic
 	spec := meta.VMSpec{
 		VMName:         vmName,
 		Image:          tb.Image,
-		Mode:           string(defaultedToolboxMode(tb.Mode)),
-		OS:             string(defaultedOSType(tb.OS, cocoonv1alpha1.OSLinux)),
+		Mode:           string(tb.Mode.Default()),
+		OS:             string(tb.OS.Default()),
 		Storage:        quantityString(tb.Storage),
-		SnapshotPolicy: string(defaultedSnapshotPolicy(cs.Spec.SnapshotPolicy)),
+		SnapshotPolicy: string(cs.Spec.SnapshotPolicy.Default()),
 		Managed:        managed,
 	}
 	spec.Apply(pod)
@@ -139,12 +141,18 @@ func buildToolboxPod(cs *cocoonv1alpha1.CocoonSet, tb cocoonv1alpha1.ToolboxSpec
 
 // newManagedPod returns a fresh Pod skeleton with the labels,
 // owner-reference, toleration, and placeholder container that every
-// CocoonSet-managed pod shares. The slotLabel argument is the value
-// for meta.LabelSlot — for sub-agents this is the slot number, for
-// toolboxes it is the toolbox name.
-func newManagedPod(cs *cocoonv1alpha1.CocoonSet, podName, role, slotLabel string) *corev1.Pod {
+// CocoonSet-managed pod shares. controllerutil.SetControllerReference
+// fills in APIVersion + Kind + Controller=true + BlockOwnerDeletion=true
+// from the CocoonSet. A failure here is a programmer bug (missing
+// type registration in the scheme), not a runtime condition, so
+// panic instead of bubbling an error through every caller.
+func newManagedPod(cs *cocoonv1alpha1.CocoonSet, podName, role, slotLabel string, scheme *runtime.Scheme) *corev1.Pod {
 	one := int64(1)
-	return &corev1.Pod{
+	pool := cs.Spec.NodePool
+	if pool == "" {
+		pool = meta.DefaultNodePool
+	}
+	pod := &corev1.Pod{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      podName,
 			Namespace: cs.Namespace,
@@ -154,16 +162,6 @@ func newManagedPod(cs *cocoonv1alpha1.CocoonSet, podName, role, slotLabel string
 				meta.LabelSlot:           slotLabel,
 				"app.kubernetes.io/name": cs.Name,
 			},
-			OwnerReferences: []metav1.OwnerReference{
-				{
-					APIVersion:         meta.APIVersion,
-					Kind:               meta.KindCocoonSet,
-					Name:               cs.Name,
-					UID:                cs.UID,
-					Controller:         pointerBool(true),
-					BlockOwnerDeletion: pointerBool(true),
-				},
-			},
 		},
 		Spec: corev1.PodSpec{
 			TerminationGracePeriodSeconds: &one,
@@ -171,7 +169,7 @@ func newManagedPod(cs *cocoonv1alpha1.CocoonSet, podName, role, slotLabel string
 				{Key: meta.TolerationKey, Operator: corev1.TolerationOpExists},
 			},
 			NodeSelector: map[string]string{
-				"cocoonstack.io/pool": defaultedNodePool(cs.Spec.NodePool),
+				meta.LabelNodePool: pool,
 			},
 			Containers: []corev1.Container{
 				{
@@ -181,50 +179,17 @@ func newManagedPod(cs *cocoonv1alpha1.CocoonSet, podName, role, slotLabel string
 			},
 		},
 	}
-}
-
-func pointerBool(v bool) *bool {
-	return &v
-}
-
-func defaultedAgentMode(m cocoonv1alpha1.AgentMode) cocoonv1alpha1.AgentMode {
-	if m == "" {
-		return cocoonv1alpha1.AgentModeClone
+	if err := controllerutil.SetControllerReference(cs, pod, scheme); err != nil {
+		// CocoonSet is registered with the scheme in main.go's
+		// buildScheme; failing here means a refactor mis-wired it.
+		panic(fmt.Errorf("set controller reference: %w", err))
 	}
-	return m
-}
-
-func defaultedToolboxMode(m cocoonv1alpha1.ToolboxMode) cocoonv1alpha1.ToolboxMode {
-	if m == "" {
-		return cocoonv1alpha1.ToolboxModeRun
-	}
-	return m
-}
-
-func defaultedOSType(o, fallback cocoonv1alpha1.OSType) cocoonv1alpha1.OSType {
-	if o == "" {
-		return fallback
-	}
-	return o
-}
-
-func defaultedSnapshotPolicy(p cocoonv1alpha1.SnapshotPolicy) cocoonv1alpha1.SnapshotPolicy {
-	if p == "" {
-		return cocoonv1alpha1.SnapshotPolicyAlways
-	}
-	return p
-}
-
-func defaultedNodePool(p string) string {
-	if p == "" {
-		return "default"
-	}
-	return p
+	return pod
 }
 
 // quantityString returns the canonical string form of a resource
 // quantity, or "" when the pointer is nil.
-func quantityString(q interface{ String() string }) string {
+func quantityString(q *resource.Quantity) string {
 	if q == nil {
 		return ""
 	}

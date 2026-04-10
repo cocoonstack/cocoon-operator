@@ -118,7 +118,7 @@ func TestFakeRegistryDeleteRecords(t *testing.T) {
 
 func TestPodVMNameRoundtrip(t *testing.T) {
 	cs := newCocoonSet("demo")
-	pod := buildAgentPod(cs, 0, "")
+	pod := buildAgentPod(cs, 0, "", testScheme(t))
 	got := meta.ParseVMSpec(pod).VMName
 	if got != "vk-ns-demo-0" {
 		t.Errorf("vmName roundtrip: %q", got)

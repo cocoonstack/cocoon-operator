@@ -3,11 +3,12 @@ package main
 import (
 	"context"
 	"fmt"
-	"reflect"
 	"slices"
 	"sort"
 
 	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/api/equality"
+	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
@@ -17,10 +18,13 @@ import (
 
 // patchStatus writes the supplied status onto the CocoonSet via the
 // /status subresource. It diff-checks first so reconciles that did
-// not actually change anything do not bump .metadata.generation
-// observers downstream.
+// not actually change anything stay no-ops at the API server. The
+// timestamps inside Conditions survive the diff because buildStatus
+// builds them through apimeta.SetStatusCondition, which preserves
+// the existing LastTransitionTime when nothing else changed.
 func (r *CocoonSetReconciler) patchStatus(ctx context.Context, cs *cocoonv1alpha1.CocoonSet, status cocoonv1alpha1.CocoonSetStatus) error {
-	if statusEqual(cs.Status, status) {
+	mergeConditions(&status, cs.Status.Conditions)
+	if equality.Semantic.DeepEqual(cs.Status, status) {
 		return nil
 	}
 	patch := client.MergeFrom(cs.DeepCopy())
@@ -29,6 +33,20 @@ func (r *CocoonSetReconciler) patchStatus(ctx context.Context, cs *cocoonv1alpha
 		return fmt.Errorf("patch status %s/%s: %w", cs.Namespace, cs.Name, err)
 	}
 	return nil
+}
+
+// mergeConditions takes the freshly-built conditions on next and
+// runs them through apimeta.SetStatusCondition against a copy of
+// prev. The result is that timestamps survive when nothing else
+// about a condition changed, so equality.Semantic.DeepEqual can
+// catch the no-op case without a hand-rolled comparator.
+func mergeConditions(next *cocoonv1alpha1.CocoonSetStatus, prev []metav1.Condition) {
+	merged := make([]metav1.Condition, 0, len(prev))
+	merged = append(merged, prev...)
+	for _, c := range next.Conditions {
+		apimeta.SetStatusCondition(&merged, c)
+	}
+	next.Conditions = merged
 }
 
 // buildStatus rebuilds the CocoonSetStatus from the supplied
@@ -138,14 +156,17 @@ func toolboxStatusFromPod(pod *corev1.Pod, name string) cocoonv1alpha1.ToolboxSt
 	}
 }
 
+// buildConditions returns the freshly-computed Ready and
+// Progressing conditions for the supplied phase. Timestamps are
+// left zero so apimeta.SetStatusCondition (called from
+// mergeConditions on the patchStatus path) preserves the existing
+// LastTransitionTime when nothing else changed.
 func buildConditions(cs *cocoonv1alpha1.CocoonSet, ready, desired int32, phase cocoonv1alpha1.CocoonSetPhase) []metav1.Condition {
-	now := metav1.Now()
 	readyCond := metav1.Condition{
 		Type:               "Ready",
 		Status:             metav1.ConditionFalse,
 		Reason:             "AgentsNotReady",
 		Message:            fmt.Sprintf("%d/%d agents ready", ready, desired),
-		LastTransitionTime: now,
 		ObservedGeneration: cs.Generation,
 	}
 	if ready == desired && desired > 0 {
@@ -158,7 +179,6 @@ func buildConditions(cs *cocoonv1alpha1.CocoonSet, ready, desired int32, phase c
 		Status:             metav1.ConditionFalse,
 		Reason:             "Stable",
 		Message:            string(phase),
-		LastTransitionTime: now,
 		ObservedGeneration: cs.Generation,
 	}
 	if phase == cocoonv1alpha1.CocoonSetPhasePending || phase == cocoonv1alpha1.CocoonSetPhaseScaling {
@@ -167,39 +187,4 @@ func buildConditions(cs *cocoonv1alpha1.CocoonSet, ready, desired int32, phase c
 	}
 
 	return []metav1.Condition{readyCond, progressing}
-}
-
-// statusEqual is a structural compare that ignores condition
-// timestamps so the patchStatus diff doesn't fire on every reconcile
-// just because metav1.Now() advanced.
-func statusEqual(a, b cocoonv1alpha1.CocoonSetStatus) bool {
-	if a.ObservedGeneration != b.ObservedGeneration ||
-		a.Phase != b.Phase ||
-		a.ReadyAgents != b.ReadyAgents ||
-		a.DesiredAgents != b.DesiredAgents {
-		return false
-	}
-	if !reflect.DeepEqual(a.Agents, b.Agents) {
-		return false
-	}
-	if !reflect.DeepEqual(a.Toolboxes, b.Toolboxes) {
-		return false
-	}
-	return conditionsEqualIgnoringTime(a.Conditions, b.Conditions)
-}
-
-func conditionsEqualIgnoringTime(a, b []metav1.Condition) bool {
-	if len(a) != len(b) {
-		return false
-	}
-	for i := range a {
-		if a[i].Type != b[i].Type ||
-			a[i].Status != b[i].Status ||
-			a[i].Reason != b[i].Reason ||
-			a[i].Message != b[i].Message ||
-			a[i].ObservedGeneration != b[i].ObservedGeneration {
-			return false
-		}
-	}
-	return true
 }

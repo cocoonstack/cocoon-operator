@@ -6,10 +6,24 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
+	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
+	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 
 	cocoonv1alpha1 "github.com/cocoonstack/cocoon-common/apis/v1alpha1"
 	"github.com/cocoonstack/cocoon-common/meta"
 )
+
+// testScheme returns a scheme with corev1 + cocoonv1alpha1 types
+// registered, matching what the operator's main wires up so the
+// pod builders can resolve the controller reference.
+func testScheme(t *testing.T) *runtime.Scheme {
+	t.Helper()
+	scheme := runtime.NewScheme()
+	utilruntime.Must(clientgoscheme.AddToScheme(scheme))
+	utilruntime.Must(cocoonv1alpha1.AddToScheme(scheme))
+	return scheme
+}
 
 func newCocoonSet(name string, modifiers ...func(*cocoonv1alpha1.CocoonSet)) *cocoonv1alpha1.CocoonSet {
 	cs := &cocoonv1alpha1.CocoonSet{
@@ -28,7 +42,7 @@ func newCocoonSet(name string, modifiers ...func(*cocoonv1alpha1.CocoonSet)) *co
 
 func TestBuildAgentPodSlot0IsMain(t *testing.T) {
 	cs := newCocoonSet("demo")
-	pod := buildAgentPod(cs, 0, "")
+	pod := buildAgentPod(cs, 0, "", testScheme(t))
 
 	if pod.Name != "demo-0" {
 		t.Errorf("pod name: %q, want demo-0", pod.Name)
@@ -52,7 +66,7 @@ func TestBuildAgentPodSubAgentForksFromMain(t *testing.T) {
 		cs.Spec.Agent.Replicas = 2
 	})
 	mainVMName := "vk-ns-demo-0"
-	pod := buildAgentPod(cs, 1, mainVMName)
+	pod := buildAgentPod(cs, 1, mainVMName, testScheme(t))
 
 	if pod.Labels[meta.LabelRole] != meta.RoleSubAgent {
 		t.Errorf("role: %q, want sub-agent", pod.Labels[meta.LabelRole])
@@ -64,7 +78,7 @@ func TestBuildAgentPodSubAgentForksFromMain(t *testing.T) {
 
 func TestBuildAgentPodAppliesAgentDefaults(t *testing.T) {
 	cs := newCocoonSet("demo")
-	pod := buildAgentPod(cs, 0, "")
+	pod := buildAgentPod(cs, 0, "", testScheme(t))
 	if pod.Annotations[meta.AnnotationMode] != string(cocoonv1alpha1.AgentModeClone) {
 		t.Errorf("mode default: %q", pod.Annotations[meta.AnnotationMode])
 	}
@@ -81,7 +95,7 @@ func TestBuildAgentPodPropagatesStorage(t *testing.T) {
 	cs := newCocoonSet("demo", func(cs *cocoonv1alpha1.CocoonSet) {
 		cs.Spec.Agent.Storage = &q
 	})
-	pod := buildAgentPod(cs, 0, "")
+	pod := buildAgentPod(cs, 0, "", testScheme(t))
 	if pod.Annotations[meta.AnnotationStorage] != "100Gi" {
 		t.Errorf("storage: %q", pod.Annotations[meta.AnnotationStorage])
 	}
@@ -96,7 +110,7 @@ func TestBuildToolboxPodStaticCarriesRuntimeHints(t *testing.T) {
 		StaticVMID: "qemu-1",
 		VNCPort:    5901,
 	}
-	pod := buildToolboxPod(cs, tb)
+	pod := buildToolboxPod(cs, tb, testScheme(t))
 
 	if pod.Annotations[meta.AnnotationManaged] == "true" {
 		t.Errorf("static toolbox should not be marked managed")
@@ -119,7 +133,7 @@ func TestBuildToolboxPodNonStaticIsManaged(t *testing.T) {
 		Mode:  cocoonv1alpha1.ToolboxModeRun,
 		Image: "ghcr.io/cocoonstack/cocoon/toolbox:latest",
 	}
-	pod := buildToolboxPod(cs, tb)
+	pod := buildToolboxPod(cs, tb, testScheme(t))
 	if pod.Annotations[meta.AnnotationManaged] != "true" {
 		t.Errorf("non-static toolbox should be managed")
 	}
@@ -127,10 +141,11 @@ func TestBuildToolboxPodNonStaticIsManaged(t *testing.T) {
 
 func TestClassifyPodsGroupsByRole(t *testing.T) {
 	cs := newCocoonSet("demo")
-	main := buildAgentPod(cs, 0, "")
-	sub1 := buildAgentPod(cs, 1, "vk-ns-demo-0")
-	sub2 := buildAgentPod(cs, 2, "vk-ns-demo-0")
-	tb := buildToolboxPod(cs, cocoonv1alpha1.ToolboxSpec{Name: "tb", Image: "x"})
+	scheme := testScheme(t)
+	main := buildAgentPod(cs, 0, "", scheme)
+	sub1 := buildAgentPod(cs, 1, "vk-ns-demo-0", scheme)
+	sub2 := buildAgentPod(cs, 2, "vk-ns-demo-0", scheme)
+	tb := buildToolboxPod(cs, cocoonv1alpha1.ToolboxSpec{Name: "tb", Image: "x"}, scheme)
 
 	pods := []corev1.Pod{*main, *sub1, *sub2, *tb}
 	got := classifyPods(pods)
@@ -167,7 +182,7 @@ func TestClassifyPodsUnknownsBucket(t *testing.T) {
 
 func TestNewManagedPodHasOwnerReference(t *testing.T) {
 	cs := newCocoonSet("demo")
-	pod := newManagedPod(cs, "demo-0", meta.RoleMain, "0")
+	pod := newManagedPod(cs, "demo-0", meta.RoleMain, "0", testScheme(t))
 	if len(pod.OwnerReferences) != 1 {
 		t.Fatalf("expected 1 owner ref, got %d", len(pod.OwnerReferences))
 	}
@@ -182,7 +197,7 @@ func TestNewManagedPodHasOwnerReference(t *testing.T) {
 
 func TestNewManagedPodCarriesCocoonToleration(t *testing.T) {
 	cs := newCocoonSet("demo")
-	pod := newManagedPod(cs, "demo-0", meta.RoleMain, "0")
+	pod := newManagedPod(cs, "demo-0", meta.RoleMain, "0", testScheme(t))
 	found := false
 	for _, tol := range pod.Spec.Tolerations {
 		if tol.Key == meta.TolerationKey {
