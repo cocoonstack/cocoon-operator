@@ -285,6 +285,44 @@ func TestAnnotationPatchValue(t *testing.T) {
 	}
 }
 
+// TestBuildAgentPodMirrorsLegacyAnnotations exercises the cocoon.cis →
+// cocoonstack.io migration helper: every canonical annotation written by
+// the agent builder must also appear under its `cocoon.cis/*` legacy key
+// so providers that have not yet caught up keep reading the same value.
+func TestBuildAgentPodMirrorsLegacyAnnotations(t *testing.T) {
+	cs := &cocoonSet{
+		ObjectMeta: metav1.ObjectMeta{Name: "demo", Namespace: "dev"},
+		Spec: cocoonSetSpec{
+			Agent: cocoonSetAgentSpec{
+				Image:   "ghcr.io/cocoonstack/cocoon/ubuntu:24.04",
+				Storage: "100G",
+				Network: "cocoon",
+			},
+		},
+	}
+	pod := buildAgentPod(context.Background(), cs, 0, "")
+
+	pairs := map[string]string{
+		"cocoon.cis/mode":            "clone",
+		"cocoon.cis/image":           "ghcr.io/cocoonstack/cocoon/ubuntu:24.04",
+		"cocoon.cis/managed":         "true",
+		"cocoon.cis/os":              "linux",
+		"cocoon.cis/storage":         "100G",
+		"cocoon.cis/snapshot-policy": "always",
+		"cocoon.cis/network":         "cocoon",
+		"cocoon.cis/vm-name":         "vk-dev-demo-0",
+	}
+	for legacy, want := range pairs {
+		if got := pod.Annotations[legacy]; got != want {
+			t.Errorf("legacy annotation %q = %q, want %q", legacy, got, want)
+		}
+	}
+	// Spot-check a canonical key remains set too — dual-write, not replace.
+	if got := pod.Annotations[meta.AnnotationMode]; got != "clone" {
+		t.Errorf("canonical AnnotationMode lost: got %q", got)
+	}
+}
+
 func TestApplyResourcesSkipsInvalidQuantities(t *testing.T) {
 	container := &corev1.Container{}
 	applyResources(context.Background(), container, resourceHints{

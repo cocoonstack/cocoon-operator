@@ -212,7 +212,7 @@ func (c *controller) reconcileHibernate(ctx context.Context, ns, hibName, podNam
 		return
 	}
 
-	vmName := pod.Annotations[meta.AnnotationVMName]
+	vmName := meta.ReadAnnotation(pod.Annotations, meta.AnnotationVMName)
 
 	// If vk-cocoon already saved a snapshot for this VM, hibernation is complete.
 	if vmName != "" && c.hasSnapshot(ctx, ns, vmName) {
@@ -221,7 +221,7 @@ func (c *controller) reconcileHibernate(ctx context.Context, ns, hibName, podNam
 	}
 
 	// Annotate pod to trigger vk-cocoon hibernate.
-	if pod.Annotations[meta.AnnotationHibernate] != valTrue {
+	if meta.ReadAnnotation(pod.Annotations, meta.AnnotationHibernate) != valTrue {
 		c.patchPodAnnotation(ctx, ns, hibName, podName, meta.AnnotationHibernate, valTrue, "hibernate")
 	}
 
@@ -241,16 +241,16 @@ func (c *controller) reconcileWake(ctx context.Context, ns, hibName, podName, ph
 		return
 	}
 
-	vmName := pod.Annotations[meta.AnnotationVMName]
+	vmName := meta.ReadAnnotation(pod.Annotations, meta.AnnotationVMName)
 
 	// Pod is awake when the hibernate annotation is gone and the snapshot is consumed.
-	if pod.Annotations[meta.AnnotationHibernate] != valTrue && vmName != "" && !c.hasSnapshot(ctx, ns, vmName) {
+	if meta.ReadAnnotation(pod.Annotations, meta.AnnotationHibernate) != valTrue && vmName != "" && !c.hasSnapshot(ctx, ns, vmName) {
 		c.updateStatus(ctx, ns, hibName, phaseActive, "VM restored and running", vmName)
 		return
 	}
 
 	// Remove hibernate annotation to trigger vk-cocoon wake.
-	if pod.Annotations[meta.AnnotationHibernate] == valTrue {
+	if meta.ReadAnnotation(pod.Annotations, meta.AnnotationHibernate) == valTrue {
 		c.patchPodAnnotation(ctx, ns, hibName, podName, meta.AnnotationHibernate, "", "wake")
 	}
 

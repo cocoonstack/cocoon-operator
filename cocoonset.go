@@ -96,7 +96,7 @@ func (c *controller) reconcileCocoonSet(ctx context.Context, ns, name string) er
 	if suspend {
 		for i := range ownedPods {
 			pod := &ownedPods[i]
-			if pod.Annotations[meta.AnnotationHibernate] != valTrue {
+			if meta.ReadAnnotation(pod.Annotations, meta.AnnotationHibernate) != valTrue {
 				c.patchPodAnnotation(ctx, ns, name, pod.Name, meta.AnnotationHibernate, valTrue, "suspended")
 			}
 		}
@@ -109,7 +109,7 @@ func (c *controller) reconcileCocoonSet(ctx context.Context, ns, name string) er
 	// Not suspended: remove hibernate annotation from all pods.
 	for i := range ownedPods {
 		pod := &ownedPods[i]
-		if pod.Annotations[meta.AnnotationHibernate] == valTrue {
+		if meta.ReadAnnotation(pod.Annotations, meta.AnnotationHibernate) == valTrue {
 			c.patchPodAnnotation(ctx, ns, name, pod.Name, meta.AnnotationHibernate, "", "unsuspended")
 		}
 	}
@@ -190,7 +190,7 @@ func (c *controller) reconcileCocoonSet(ctx context.Context, ns, name string) er
 // Returns true if any pods were created or deleted.
 func (c *controller) scaleSubAgents(ctx context.Context, cs *cocoonSet, ns, name string, agentPods map[int]*corev1.Pod, replicas int64) bool {
 	logger := log.WithFunc("controller.scaleSubAgents")
-	mainVMName := agentPods[0].Annotations[meta.AnnotationVMName]
+	mainVMName := meta.ReadAnnotation(agentPods[0].Annotations, meta.AnnotationVMName)
 	changed := false
 
 	// Scale up: create missing sub-agents.
@@ -317,11 +317,15 @@ func buildAgentPod(ctx context.Context, cs *cocoonSet, slot int, forkFrom string
 		meta.AnnotationOS:             agentSpec.osType(),
 		meta.AnnotationStorage:        storage,
 		meta.AnnotationSnapshotPolicy: snapshotPolicy,
-		"cocoon.cis/network":          agentSpec.Network,
+		meta.AnnotationNetwork:        agentSpec.Network,
 	})
 	if forkFrom != "" && slot > 0 {
 		annotations[meta.AnnotationForkFrom] = forkFrom
 	}
+	// Mirror canonical cocoonset.cocoonstack.io/* and vm.cocoonstack.io/*
+	// keys onto their legacy `cocoon.cis/*` equivalents so providers that
+	// haven't caught up to the rename keep reading the same values.
+	meta.AddLegacyAnnotations(annotations)
 
 	pod := newManagedPod(cs, podName, role, image, nodeName, annotations)
 	pod.Labels[meta.LabelSlot] = strconv.Itoa(slot)
@@ -376,6 +380,10 @@ func buildToolboxPod(ctx context.Context, cs *cocoonSet, tb cocoonToolboxSpec) *
 	if tbMode == modeStatic {
 		applyStaticHints(annotations, tb, statusHints)
 	}
+	// Mirror canonical keys onto their legacy `cocoon.cis/*` equivalents
+	// so providers still pinned to the old prefix keep working. Run last
+	// so applyStaticHints / Managed writes are picked up too.
+	meta.AddLegacyAnnotations(annotations)
 
 	pod := newManagedPod(cs, podName, meta.RoleToolbox, tbImage, nodeName, annotations)
 
@@ -395,7 +403,7 @@ func podIP(pod *corev1.Pod) string {
 	if ip := pod.Status.PodIP; ip != "" {
 		return ip
 	}
-	return pod.Annotations[meta.AnnotationIP]
+	return meta.ReadAnnotation(pod.Annotations, meta.AnnotationIP)
 }
 
 // buildCocoonSetStatus builds a status map from current pod state.
@@ -427,16 +435,16 @@ func buildCocoonSetStatus(phase string, pods []corev1.Pod, csName string, desire
 				Slot:    int64(slot),
 				Role:    role,
 				PodName: pod.Name,
-				VMName:  pod.Annotations[meta.AnnotationVMName],
+				VMName:  meta.ReadAnnotation(pod.Annotations, meta.AnnotationVMName),
 				Phase:   podPhase,
 			}
-			if vmID, ok := pod.Annotations[meta.AnnotationVMID]; ok {
+			if vmID := meta.ReadAnnotation(pod.Annotations, meta.AnnotationVMID); vmID != "" {
 				agent.VMID = vmID
 			}
 			if ip := podIP(pod); ip != "" {
 				agent.IP = ip
 			}
-			if forkFrom, ok := pod.Annotations[meta.AnnotationForkFrom]; ok && forkFrom != "" {
+			if forkFrom := meta.ReadAnnotation(pod.Annotations, meta.AnnotationForkFrom); forkFrom != "" {
 				agent.ForkedFrom = forkFrom
 			}
 			agents = append(agents, agent)
@@ -449,19 +457,19 @@ func buildCocoonSetStatus(phase string, pods []corev1.Pod, csName string, desire
 			tb := cocoonSetToolboxStatus{
 				Name:    tbName,
 				PodName: pod.Name,
-				VMName:  pod.Annotations[meta.AnnotationVMName],
+				VMName:  meta.ReadAnnotation(pod.Annotations, meta.AnnotationVMName),
 				Phase:   podPhase,
 			}
 			if ip := podIP(pod); ip != "" {
 				tb.IP = ip
 			}
-			if vmID, ok := pod.Annotations[meta.AnnotationVMID]; ok && vmID != "" {
+			if vmID := meta.ReadAnnotation(pod.Annotations, meta.AnnotationVMID); vmID != "" {
 				tb.VMID = vmID
 			}
-			_, hasVNCPort := pod.Annotations[meta.AnnotationVNCPort]
-			tb.ConnType = toolboxConnType(pod.Annotations[meta.AnnotationOS], hasVNCPort)
-			if hasVNCPort {
-				if port, err := strconv.Atoi(pod.Annotations[meta.AnnotationVNCPort]); err == nil {
+			vncPortStr := meta.ReadAnnotation(pod.Annotations, meta.AnnotationVNCPort)
+			tb.ConnType = toolboxConnType(meta.ReadAnnotation(pod.Annotations, meta.AnnotationOS), vncPortStr != "")
+			if vncPortStr != "" {
+				if port, err := strconv.Atoi(vncPortStr); err == nil {
 					tb.VNCPort = int64(port)
 				}
 			}
@@ -485,11 +493,21 @@ func buildCocoonSetStatus(phase string, pods []corev1.Pod, csName string, desire
 
 // ---------- Helpers ----------
 
-// patchPodAnnotation sets or removes an annotation on a pod.
-// Pass a non-empty value to set, or an empty string to remove the annotation.
+// patchPodAnnotation sets or removes an annotation on a pod. Pass a
+// non-empty value to set, or an empty string to remove the annotation.
+//
+// During the cocoon.cis → cocoonstack.io rename, every patch also writes
+// the legacy mirror key in the same merge patch so providers that still
+// read the old key see the update atomically. The mirror is dropped when
+// [meta.LegacyAnnotationKey] returns "" for keys with no legacy form.
 func (c *controller) patchPodAnnotation(ctx context.Context, ns, csName, podName, key, value, verb string) { //nolint:unparam // key is parameterized for reuse across annotation types
 	logger := log.WithFunc("controller.patchPodAnnotation")
-	patch, err := commonk8s.AnnotationsMergePatch(map[string]any{key: annotationPatchValue(value)})
+	patchValue := annotationPatchValue(value)
+	patchKeys := map[string]any{key: patchValue}
+	if legacy := meta.LegacyAnnotationKey(key); legacy != "" {
+		patchKeys[legacy] = patchValue
+	}
+	patch, err := commonk8s.AnnotationsMergePatch(patchKeys)
 	if err != nil {
 		logger.Errorf(ctx, err, "cocoonset %s/%s: marshal patch for pod %s", ns, csName, podName)
 		return

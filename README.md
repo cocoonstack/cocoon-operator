@@ -4,7 +4,7 @@ Kubernetes operator that manages VM-backed pod lifecycles through two CRDs: **Hi
 
 ## Overview
 
-- **Hibernation controller** -- watches `Hibernation` CRDs and annotates pods with `cocoon.cis/hibernate=true` to trigger vk-cocoon snapshot and restore
+- **Hibernation controller** -- watches `Hibernation` CRDs and annotates pods with `vm.cocoonstack.io/hibernate=true` (also mirrored to the legacy `cocoon.cis/hibernate` key during the rename window) to trigger vk-cocoon snapshot and restore
 - **CocoonSet controller** -- watches `CocoonSet` CRDs, creates and deletes agent and toolbox pods, manages suspend and unsuspend, and reports aggregate status
 - **Pod watcher** -- detects pod changes owned by CocoonSets and triggers reconciliation
 
@@ -67,6 +67,19 @@ kubectl get pods -l app=cocoon-operator
 |---|---|---|
 | `KUBECONFIG` | `~/.kube/config` | Path to kubeconfig when running outside the cluster |
 | `LOG_LEVEL` | `info` | Log level for the operator process |
+
+### Annotation namespace
+
+The operator writes managed-Pod annotations under two cocoonstack.io subdomains:
+
+| Prefix | Meaning | Examples |
+|---|---|---|
+| `cocoonset.cocoonstack.io/` | Declarative fields mirrored from a CocoonSet spec | `mode`, `image`, `os`, `storage`, `snapshot-policy`, `network`, `managed` |
+| `vm.cocoonstack.io/` | Runtime state observed about the VM backing a Pod | `id`, `name`, `ip`, `vnc-port`, `hibernate`, `fork-from` |
+
+For the duration of the legacy `cocoon.cis/*` migration the operator **dual-writes** every annotation: the canonical key under cocoonstack.io plus its `cocoon.cis/*` mirror, in the same merge patch. Providers (like vk-cocoon) that have not yet caught up to the rename keep reading the legacy key; providers that have caught up read the canonical key. Both stay in sync because every reconcile rewrites both keys to the same value. The legacy mirror will be retired once every consumer is on the new prefix; see [cocoon-common's `meta` package docs](https://github.com/cocoonstack/cocoon-common#meta) for the helper API.
+
+The CRD API group (`cocoon.cis/v1alpha1`) and the selector labels (`cocoon.cis/cocoonset` etc.) stay on the legacy prefix in this round — renaming the API group requires migrating every existing CocoonSet CR, and renaming the selector labels requires a coordinated cutover so in-flight Pods are not orphaned by their owner controllers. Both will move under cocoonstack.io in dedicated follow-ups.
 
 ## Usage
 
