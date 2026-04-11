@@ -1,6 +1,7 @@
 package cocoonset
 
 import (
+	"cmp"
 	"context"
 	"fmt"
 	"maps"
@@ -332,21 +333,34 @@ func (r *Reconciler) applySuspend(ctx context.Context, classified classifiedPods
 // CocoonHibernation status would still read Hibernated, and the user
 // would observe a phantom-running pod.
 //
-// The cheap path (no in-flight CRs in the namespace) only walks the
-// owned pods and skips ones whose hibernate annotation is already
-// absent — PatchHibernateState(false) is a no-op there.
+// Fast path: the steady-state non-suspended CocoonSet has no pod
+// carrying the hibernate annotation, so we skip the CocoonHibernation
+// List entirely. One pass over classified.allByName collects the
+// hibernated subset; if it's empty we return without touching the
+// API. Otherwise we sort just that subset (for deterministic patch
+// order under test) and consult the CR list to decide which ones to
+// leave alone.
 func (r *Reconciler) applyUnsuspend(ctx context.Context, namespace string, classified classifiedPods) error {
+	var hibernated []*corev1.Pod
+	for _, pod := range classified.allByName {
+		if bool(meta.ReadHibernateState(pod)) {
+			hibernated = append(hibernated, pod)
+		}
+	}
+	if len(hibernated) == 0 {
+		return nil
+	}
+	slices.SortFunc(hibernated, func(a, b *corev1.Pod) int {
+		return cmp.Compare(a.Name, b.Name)
+	})
+
 	hibernatedByCR, err := r.podsHibernatedByCR(ctx, namespace)
 	if err != nil {
 		return err
 	}
-	for _, name := range slices.Sorted(maps.Keys(classified.allByName)) {
+	for _, pod := range hibernated {
 		if ctxErr := ctx.Err(); ctxErr != nil {
 			return ctxErr
-		}
-		pod := classified.allByName[name]
-		if !bool(meta.ReadHibernateState(pod)) {
-			continue
 		}
 		if _, ownedByCR := hibernatedByCR[pod.Name]; ownedByCR {
 			continue

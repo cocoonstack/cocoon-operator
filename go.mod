@@ -5,6 +5,7 @@ go 1.25.0
 require (
 	github.com/cocoonstack/cocoon-common v0.1.4-0.20260411114436-0cf2e26e5798
 	github.com/cocoonstack/epoch v0.1.8-0.20260411050236-353f65a833f9
+	github.com/go-logr/logr v1.4.3
 	github.com/projecteru2/core v0.0.0-20241016125006-ff909eefe04c
 	k8s.io/api v0.35.3
 	k8s.io/apimachinery v0.35.3
@@ -25,7 +26,6 @@ require (
 	github.com/fsnotify/fsnotify v1.9.0 // indirect
 	github.com/fxamacker/cbor/v2 v2.9.0 // indirect
 	github.com/getsentry/sentry-go v0.20.0 // indirect
-	github.com/go-logr/logr v1.4.3 // indirect
 	github.com/go-openapi/jsonpointer v0.21.0 // indirect
 	github.com/go-openapi/jsonreference v0.20.2 // indirect
 	github.com/go-openapi/swag v0.23.0 // indirect
