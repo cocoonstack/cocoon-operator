@@ -8,6 +8,7 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	ctrlfake "sigs.k8s.io/controller-runtime/pkg/client/fake"
 
+	cocoonv1 "github.com/cocoonstack/cocoon-common/apis/v1"
 	"github.com/cocoonstack/cocoon-common/meta"
 )
 
@@ -47,7 +48,7 @@ func TestApplyUnsuspendClearsHibernateAnnotation(t *testing.T) {
 		allByName: map[string]*corev1.Pod{"demo-0": mainPod, "demo-1": subPod, "demo-tb": tbPod},
 	}
 
-	if err := r.applyUnsuspend(t.Context(), classified); err != nil {
+	if err := r.applyUnsuspend(t.Context(), "ns", classified); err != nil {
 		t.Fatalf("applyUnsuspend: %v", err)
 	}
 
@@ -100,7 +101,68 @@ func TestApplyUnsuspendNoopOnCleanSet(t *testing.T) {
 		allByName: map[string]*corev1.Pod{mainPod.Name: mainPod, subPod.Name: subPod},
 	}
 
-	if err := r.applyUnsuspend(t.Context(), classified); err != nil {
+	if err := r.applyUnsuspend(t.Context(), "default", classified); err != nil {
 		t.Errorf("applyUnsuspend on clean set: %v", err)
+	}
+}
+
+// TestApplyUnsuspendSkipsPodHibernatedByCR proves the per-pod
+// CocoonHibernation path coexists with CocoonSet's spec.suspend
+// machinery: a pod that is the target of an in-flight Hibernate CR
+// must NOT be cleared by applyUnsuspend, otherwise vk-cocoon would
+// wake the VM seconds after the hibernation reconciler finishes
+// snapshotting and the operator would observe a phantom-running pod.
+func TestApplyUnsuspendSkipsPodHibernatedByCR(t *testing.T) {
+	scheme := testScheme(t)
+
+	hibernated := &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{Name: "demo-0", Namespace: "ns"},
+	}
+	(meta.HibernateState(true)).Apply(hibernated)
+
+	// A second pod, also hibernated, but NOT named in any CR. This
+	// proves the skip is selective rather than a blanket bypass.
+	leftover := &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{Name: "demo-1", Namespace: "ns"},
+	}
+	(meta.HibernateState(true)).Apply(leftover)
+
+	hibCR := &cocoonv1.CocoonHibernation{
+		ObjectMeta: metav1.ObjectMeta{Name: "demo-hib", Namespace: "ns"},
+		Spec: cocoonv1.CocoonHibernationSpec{
+			Desire: cocoonv1.HibernationDesireHibernate,
+			PodRef: corev1.LocalObjectReference{Name: "demo-0"},
+		},
+	}
+
+	cli := ctrlfake.NewClientBuilder().
+		WithScheme(scheme).
+		WithObjects(hibernated, leftover, hibCR).
+		Build()
+	r := &Reconciler{Client: cli, Scheme: scheme}
+	classified := classifiedPods{
+		main:      hibernated,
+		sub:       map[int32]*corev1.Pod{1: leftover},
+		toolbox:   map[string]*corev1.Pod{},
+		allByName: map[string]*corev1.Pod{"demo-0": hibernated, "demo-1": leftover},
+	}
+
+	if err := r.applyUnsuspend(t.Context(), "ns", classified); err != nil {
+		t.Fatalf("applyUnsuspend: %v", err)
+	}
+
+	var got corev1.Pod
+	if err := cli.Get(t.Context(), types.NamespacedName{Namespace: "ns", Name: "demo-0"}, &got); err != nil {
+		t.Fatalf("get demo-0: %v", err)
+	}
+	if !bool(meta.ReadHibernateState(&got)) {
+		t.Errorf("demo-0 was hibernated by CR; applyUnsuspend must leave it set")
+	}
+
+	if err := cli.Get(t.Context(), types.NamespacedName{Namespace: "ns", Name: "demo-1"}, &got); err != nil {
+		t.Fatalf("get demo-1: %v", err)
+	}
+	if bool(meta.ReadHibernateState(&got)) {
+		t.Errorf("demo-1 had no CR; applyUnsuspend must clear it")
 	}
 }

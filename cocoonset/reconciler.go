@@ -131,7 +131,7 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 	// hibernated forever after Spec.Suspend flips back to false,
 	// because vk-cocoon only wakes on a hibernate=false transition
 	// and the annotation is only written by this reconciler.
-	if err := r.applyUnsuspend(ctx, classified); err != nil {
+	if err := r.applyUnsuspend(ctx, cs.Namespace, classified); err != nil {
 		return ctrl.Result{}, err
 	}
 
@@ -324,13 +324,22 @@ func (r *Reconciler) applySuspend(ctx context.Context, classified classifiedPods
 }
 
 // applyUnsuspend clears HibernateState from every owned pod that
-// still carries it. PatchHibernateState(false) is a no-op when the
-// annotation is absent, so this is cheap on the common "never
-// suspended" path — we walk the owned list, skip pods whose
-// hibernate annotation already reads false, and issue a patch only
-// for the stragglers. vk-cocoon reacts to the cleared annotation
-// by restoring the VM from the hibernate snapshot.
-func (r *Reconciler) applyUnsuspend(ctx context.Context, classified classifiedPods) error {
+// still carries it, EXCEPT pods that are currently the target of an
+// active CocoonHibernation CR with desire=Hibernate. Those have been
+// hibernated by the per-pod path (not by spec.suspend) and clearing
+// the annotation here would race the hibernation reconciler: vk-cocoon
+// would wake the VM seconds after it finished snapshotting, the
+// CocoonHibernation status would still read Hibernated, and the user
+// would observe a phantom-running pod.
+//
+// The cheap path (no in-flight CRs in the namespace) only walks the
+// owned pods and skips ones whose hibernate annotation is already
+// absent — PatchHibernateState(false) is a no-op there.
+func (r *Reconciler) applyUnsuspend(ctx context.Context, namespace string, classified classifiedPods) error {
+	hibernatedByCR, err := r.podsHibernatedByCR(ctx, namespace)
+	if err != nil {
+		return err
+	}
 	for _, name := range slices.Sorted(maps.Keys(classified.allByName)) {
 		if ctxErr := ctx.Err(); ctxErr != nil {
 			return ctxErr
@@ -339,9 +348,34 @@ func (r *Reconciler) applyUnsuspend(ctx context.Context, classified classifiedPo
 		if !bool(meta.ReadHibernateState(pod)) {
 			continue
 		}
+		if _, ownedByCR := hibernatedByCR[pod.Name]; ownedByCR {
+			continue
+		}
 		if err := commonk8s.PatchHibernateState(ctx, r.Client, pod, false); err != nil {
 			return fmt.Errorf("clear hibernate annotation on %s/%s: %w", pod.Namespace, pod.Name, err)
 		}
 	}
 	return nil
+}
+
+// podsHibernatedByCR returns the set of pod names in `namespace` that
+// are the target of a CocoonHibernation CR with desire=Hibernate.
+// Used by applyUnsuspend to leave per-pod hibernations alone.
+func (r *Reconciler) podsHibernatedByCR(ctx context.Context, namespace string) (map[string]struct{}, error) {
+	var hibList cocoonv1.CocoonHibernationList
+	if err := r.List(ctx, &hibList, client.InNamespace(namespace)); err != nil {
+		return nil, fmt.Errorf("list cocoonhibernations in %s: %w", namespace, err)
+	}
+	out := make(map[string]struct{}, len(hibList.Items))
+	for i := range hibList.Items {
+		hib := &hibList.Items[i]
+		if hib.Spec.Desire != cocoonv1.HibernationDesireHibernate {
+			continue
+		}
+		if hib.Spec.PodRef.Name == "" {
+			continue
+		}
+		out[hib.Spec.PodRef.Name] = struct{}{}
+	}
+	return out, nil
 }
