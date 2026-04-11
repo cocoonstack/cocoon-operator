@@ -18,12 +18,14 @@ import (
 	"os/signal"
 	"syscall"
 
+	"github.com/go-logr/logr"
 	"github.com/projecteru2/core/log"
 	"k8s.io/apimachinery/pkg/runtime"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/healthz"
+	crlog "sigs.k8s.io/controller-runtime/pkg/log"
 	metricsserver "sigs.k8s.io/controller-runtime/pkg/metrics/server"
 
 	cocoonv1 "github.com/cocoonstack/cocoon-common/apis/v1"
@@ -59,6 +61,12 @@ func main() {
 
 	ctx := context.Background()
 	commonlog.Setup(ctx, "OPERATOR_LOG_LEVEL")
+	// controller-runtime emits a goroutine-stack warning at startup if no
+	// global logr backend was set. We log through projecteru2/core/log
+	// (commonlog above), not logr, so silence controller-runtime's own
+	// logger with logr.Discard. Reconciler-level errors are still surfaced
+	// via the per-reconciler `log.WithFunc(...).Errorf` calls.
+	crlog.SetLogger(logr.Discard())
 	logger := log.WithFunc("main")
 
 	logger.Infof(ctx, "cocoon-operator %s starting (rev=%s built=%s)",
