@@ -10,14 +10,13 @@ import (
 	"k8s.io/apimachinery/pkg/api/equality"
 	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	cocoonv1 "github.com/cocoonstack/cocoon-common/apis/v1"
+	commonk8s "github.com/cocoonstack/cocoon-common/k8s"
 	"github.com/cocoonstack/cocoon-common/meta"
 )
 
 const (
-	conditionTypeReady       = "Ready"
 	conditionTypeProgressing = "Progressing"
 
 	conditionReasonAllReady    = "AllAgentsReady"
@@ -37,9 +36,9 @@ func (r *Reconciler) patchStatus(ctx context.Context, cs *cocoonv1.CocoonSet, st
 	if equality.Semantic.DeepEqual(cs.Status, status) {
 		return nil
 	}
-	patch := client.MergeFrom(cs.DeepCopy())
-	cs.Status = status
-	if err := r.Status().Patch(ctx, cs, patch); err != nil {
+	if err := commonk8s.PatchStatus(ctx, r.Client, cs, func(cs *cocoonv1.CocoonSet) {
+		cs.Status = status
+	}); err != nil {
 		return fmt.Errorf("patch status %s/%s: %w", cs.Namespace, cs.Name, err)
 	}
 	return nil
@@ -73,7 +72,7 @@ func buildStatus(cs *cocoonv1.CocoonSet, classified classifiedPods, phase cocoon
 
 	agents := make([]cocoonv1.AgentStatus, 0, desired)
 	if classified.main != nil {
-		if isPodReady(classified.main) {
+		if meta.IsPodReady(classified.main) {
 			ready++
 		}
 		mainVMName = meta.ParseVMSpec(classified.main).VMName
@@ -82,7 +81,7 @@ func buildStatus(cs *cocoonv1.CocoonSet, classified classifiedPods, phase cocoon
 
 	for _, slot := range slices.Sorted(maps.Keys(classified.sub)) {
 		sub := classified.sub[slot]
-		if isPodReady(sub) {
+		if meta.IsPodReady(sub) {
 			ready++
 		}
 		agents = append(agents, agentStatusFromPod(sub, slot, meta.RoleSubAgent, mainVMName))
@@ -158,17 +157,18 @@ func toolboxStatusFromPod(pod *corev1.Pod, name string) cocoonv1.ToolboxStatus {
 // mergeConditions on the patchStatus path) preserves the existing
 // LastTransitionTime when nothing else changed.
 func buildConditions(cs *cocoonv1.CocoonSet, ready, desired int32, phase cocoonv1.CocoonSetPhase) []metav1.Condition {
-	readyCond := metav1.Condition{
-		Type:               conditionTypeReady,
-		Status:             metav1.ConditionFalse,
-		Reason:             conditionReasonNotReady,
-		Message:            fmt.Sprintf("%d/%d agents ready", ready, desired),
-		ObservedGeneration: cs.Generation,
-	}
+	readyStatus := metav1.ConditionFalse
+	readyReason := conditionReasonNotReady
 	if ready == desired && desired > 0 {
-		readyCond.Status = metav1.ConditionTrue
-		readyCond.Reason = conditionReasonAllReady
+		readyStatus = metav1.ConditionTrue
+		readyReason = conditionReasonAllReady
 	}
+	readyCond := commonk8s.NewReadyCondition(
+		cs.Generation,
+		readyStatus,
+		readyReason,
+		fmt.Sprintf("%d/%d agents ready", ready, desired),
+	)
 
 	progressing := metav1.Condition{
 		Type:               conditionTypeProgressing,

@@ -8,6 +8,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	cocoonv1 "github.com/cocoonstack/cocoon-common/apis/v1"
+	commonk8s "github.com/cocoonstack/cocoon-common/k8s"
 	"github.com/cocoonstack/cocoon-common/meta"
 )
 
@@ -141,7 +142,7 @@ func TestBuildConditionsAllReady(t *testing.T) {
 	conds := buildConditions(cs, 1, 1, cocoonv1.CocoonSetPhaseRunning)
 	var ready *metav1.Condition
 	for i := range conds {
-		if conds[i].Type == conditionTypeReady {
+		if conds[i].Type == commonk8s.ConditionTypeReady {
 			ready = &conds[i]
 		}
 	}

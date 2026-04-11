@@ -4,13 +4,34 @@ import (
 	"context"
 	"errors"
 	"testing"
+	"time"
 
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/types"
+	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
+	ctrl "sigs.k8s.io/controller-runtime"
+	ctrlfake "sigs.k8s.io/controller-runtime/pkg/client/fake"
 
 	cocoonv1 "github.com/cocoonstack/cocoon-common/apis/v1"
+	commonk8s "github.com/cocoonstack/cocoon-common/k8s"
 	"github.com/cocoonstack/cocoon-common/meta"
 )
+
+// testScheme assembles the runtime.Scheme the reconciler fake
+// client needs: core k8s types plus the cocoon CRDs.
+func testScheme(t *testing.T) *runtime.Scheme {
+	t.Helper()
+	sch := runtime.NewScheme()
+	if err := clientgoscheme.AddToScheme(sch); err != nil {
+		t.Fatalf("add client-go scheme: %v", err)
+	}
+	if err := cocoonv1.AddToScheme(sch); err != nil {
+		t.Fatalf("add cocoonv1 scheme: %v", err)
+	}
+	return sch
+}
 
 // fakeRegistry is a SnapshotRegistry stand-in for the hibernation
 // tests. The behaviour of HasManifest / DeleteManifest is fully
@@ -57,30 +78,6 @@ func TestReadyConditionMaps(t *testing.T) {
 				t.Errorf("observedGeneration: %d", cond.ObservedGeneration)
 			}
 		})
-	}
-}
-
-func TestIsContainerRunning(t *testing.T) {
-	pod := &corev1.Pod{
-		Status: corev1.PodStatus{
-			ContainerStatuses: []corev1.ContainerStatus{{
-				State: corev1.ContainerState{Running: &corev1.ContainerStateRunning{}},
-			}},
-		},
-	}
-	if !isContainerRunning(pod) {
-		t.Errorf("expected running")
-	}
-
-	waiting := &corev1.Pod{
-		Status: corev1.PodStatus{
-			ContainerStatuses: []corev1.ContainerStatus{{
-				State: corev1.ContainerState{Waiting: &corev1.ContainerStateWaiting{}},
-			}},
-		},
-	}
-	if isContainerRunning(waiting) {
-		t.Errorf("expected not running")
 	}
 }
 
@@ -134,4 +131,279 @@ func TestPodVMNameRoundtrip(t *testing.T) {
 	if got := meta.ParseVMSpec(pod).VMName; got != "vk-ns-demo-0" {
 		t.Errorf("vmName roundtrip: %q", got)
 	}
+}
+
+// TestReconcileHibernateSurfacesProbeError verifies the end-to-end
+// contract the epoch ErrManifestNotFound sentinel enables: a real
+// transport / server failure from HasManifest now bubbles out of
+// Reconcile instead of being folded into (false, nil) and polled
+// forever with the CR stuck at Hibernating.
+func TestReconcileHibernateSurfacesProbeError(t *testing.T) {
+	hib := &cocoonv1.CocoonHibernation{
+		ObjectMeta: metav1.ObjectMeta{Name: "hib", Namespace: "ns"},
+		Spec: cocoonv1.CocoonHibernationSpec{
+			Desire: cocoonv1.HibernationDesireHibernate,
+			PodRef: corev1.LocalObjectReference{Name: "demo-0"},
+		},
+	}
+	pod := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "demo-0", Namespace: "ns"}}
+	(&meta.VMSpec{VMName: "vk-ns-demo-0", Managed: true}).Apply(pod)
+	// The pod must already be in the Hibernate state so
+	// PatchHibernateState short-circuits — otherwise the fake client
+	// would try to issue a no-op Patch against a newly mutated
+	// object before the interesting HasManifest call.
+	(meta.HibernateState(true)).Apply(pod)
+
+	scheme := testScheme(t)
+	cli := ctrlfake.NewClientBuilder().
+		WithScheme(scheme).
+		WithObjects(hib, pod).
+		WithStatusSubresource(&cocoonv1.CocoonHibernation{}).
+		Build()
+
+	r := &Reconciler{
+		Client: cli,
+		Scheme: scheme,
+		Epoch:  &fakeRegistry{manifestErr: errors.New("transport boom")},
+	}
+
+	res, err := r.Reconcile(t.Context(), ctrl.Request{
+		NamespacedName: types.NamespacedName{Namespace: "ns", Name: "hib"},
+	})
+	if err == nil {
+		t.Fatalf("expected probe error to surface from Reconcile, got nil")
+	}
+	if !errors.Is(err, r.Epoch.(*fakeRegistry).manifestErr) {
+		t.Errorf("Reconcile err = %v, want wrap of transport boom", err)
+	}
+	if res.RequeueAfter != 0 {
+		t.Errorf("error return should leave Result zero-valued (let backoff drive requeue), got %+v", res)
+	}
+}
+
+// TestReconcileHibernateFoldsAbsenceToRequeue verifies the happy
+// "not yet pushed" path still keeps polling. Absence -> (false, nil)
+// is the fakeRegistry default and must not fail Reconcile.
+func TestReconcileHibernateFoldsAbsenceToRequeue(t *testing.T) {
+	hib := &cocoonv1.CocoonHibernation{
+		ObjectMeta: metav1.ObjectMeta{Name: "hib", Namespace: "ns"},
+		Spec: cocoonv1.CocoonHibernationSpec{
+			Desire: cocoonv1.HibernationDesireHibernate,
+			PodRef: corev1.LocalObjectReference{Name: "demo-0"},
+		},
+	}
+	pod := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "demo-0", Namespace: "ns"}}
+	(&meta.VMSpec{VMName: "vk-ns-demo-0", Managed: true}).Apply(pod)
+	(meta.HibernateState(true)).Apply(pod)
+
+	scheme := testScheme(t)
+	cli := ctrlfake.NewClientBuilder().
+		WithScheme(scheme).
+		WithObjects(hib, pod).
+		WithStatusSubresource(&cocoonv1.CocoonHibernation{}).
+		Build()
+
+	r := &Reconciler{
+		Client: cli,
+		Scheme: scheme,
+		Epoch:  &fakeRegistry{}, // absent, no error
+	}
+	res, err := r.Reconcile(t.Context(), ctrl.Request{
+		NamespacedName: types.NamespacedName{Namespace: "ns", Name: "hib"},
+	})
+	if err != nil {
+		t.Fatalf("Reconcile: %v", err)
+	}
+	if res.RequeueAfter != requeueInterval {
+		t.Errorf("RequeueAfter = %v, want %v", res.RequeueAfter, requeueInterval)
+	}
+}
+
+// TestWakeDeadlineExceeded covers the three interesting states for
+// the wake-timeout helper: freshly-entered Waking (fresh budget),
+// Waking past the deadline (should fail), and any non-Waking phase
+// (trivially ok regardless of timestamp).
+func TestWakeDeadlineExceeded(t *testing.T) {
+	oldReady := metav1.Condition{
+		Type:               commonk8s.ConditionTypeReady,
+		Status:             metav1.ConditionFalse,
+		Reason:             conditionReasonPending,
+		LastTransitionTime: metav1.NewTime(time.Now().Add(-2 * wakeTimeout)),
+	}
+	freshReady := metav1.Condition{
+		Type:               commonk8s.ConditionTypeReady,
+		Status:             metav1.ConditionFalse,
+		Reason:             conditionReasonPending,
+		LastTransitionTime: metav1.NewTime(time.Now()),
+	}
+	cases := []struct {
+		name string
+		hib  *cocoonv1.CocoonHibernation
+		want bool
+	}{
+		{
+			name: "not-waking-yet",
+			hib:  &cocoonv1.CocoonHibernation{},
+			want: false,
+		},
+		{
+			name: "waking-within-budget",
+			hib: &cocoonv1.CocoonHibernation{
+				Status: cocoonv1.CocoonHibernationStatus{
+					Phase:      cocoonv1.CocoonHibernationPhaseWaking,
+					Conditions: []metav1.Condition{freshReady},
+				},
+			},
+			want: false,
+		},
+		{
+			name: "waking-past-budget",
+			hib: &cocoonv1.CocoonHibernation{
+				Status: cocoonv1.CocoonHibernationStatus{
+					Phase:      cocoonv1.CocoonHibernationPhaseWaking,
+					Conditions: []metav1.Condition{oldReady},
+				},
+			},
+			want: true,
+		},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			if got := wakeDeadlineExceeded(c.hib); got != c.want {
+				t.Errorf("wakeDeadlineExceeded = %v, want %v", got, c.want)
+			}
+		})
+	}
+}
+
+// TestReconcileWakeFailsOnTimeout drives reconcileWake end-to-end
+// against a CR that has been Waking for longer than wakeTimeout
+// and asserts the reconciler transitions it to Failed. Before this
+// fix a persistently broken wake (vk-cocoon never marks the
+// container running) would stay at Waking forever.
+func TestReconcileWakeFailsOnTimeout(t *testing.T) {
+	hib := &cocoonv1.CocoonHibernation{
+		ObjectMeta: metav1.ObjectMeta{Name: "hib", Namespace: "ns"},
+		Spec: cocoonv1.CocoonHibernationSpec{
+			Desire: cocoonv1.HibernationDesireWake,
+			PodRef: corev1.LocalObjectReference{Name: "demo-0"},
+		},
+		Status: cocoonv1.CocoonHibernationStatus{
+			Phase: cocoonv1.CocoonHibernationPhaseWaking,
+			Conditions: []metav1.Condition{{
+				Type:               commonk8s.ConditionTypeReady,
+				Status:             metav1.ConditionFalse,
+				Reason:             conditionReasonPending,
+				LastTransitionTime: metav1.NewTime(time.Now().Add(-2 * wakeTimeout)),
+			}},
+		},
+	}
+	pod := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "demo-0", Namespace: "ns"}}
+	(&meta.VMSpec{VMName: "vk-ns-demo-0", Managed: true}).Apply(pod)
+	// Container is NOT running — the stuck state we are testing.
+
+	scheme := testScheme(t)
+	cli := ctrlfake.NewClientBuilder().
+		WithScheme(scheme).
+		WithObjects(hib, pod).
+		WithStatusSubresource(&cocoonv1.CocoonHibernation{}).
+		Build()
+	r := &Reconciler{Client: cli, Scheme: scheme, Epoch: &fakeRegistry{}}
+
+	if _, err := r.Reconcile(t.Context(), ctrl.Request{
+		NamespacedName: types.NamespacedName{Namespace: "ns", Name: "hib"},
+	}); err != nil {
+		t.Fatalf("Reconcile: %v", err)
+	}
+
+	var out cocoonv1.CocoonHibernation
+	if err := cli.Get(t.Context(), types.NamespacedName{Namespace: "ns", Name: "hib"}, &out); err != nil {
+		t.Fatalf("get hib: %v", err)
+	}
+	if out.Status.Phase != cocoonv1.CocoonHibernationPhaseFailed {
+		t.Errorf("phase = %q, want Failed", out.Status.Phase)
+	}
+}
+
+// TestReconcileWakeRecoversFromFailed proves the Failed→Waking
+// re-entry path refreshes the Ready condition's LastTransitionTime.
+// SetStatusCondition preserves the old timestamp across Status=False
+// → Status=False transitions (both Failed and Waking carry
+// Ready=False), so without an explicit override the first reconcile
+// after recovery would inherit an already-expired deadline and
+// markFailed again on the next tick — making recovery from a wake
+// timeout impossible. The regression test drives a stale-Failed CR
+// through Reconcile and asserts the new phase is Waking with a
+// fresh LastTransitionTime.
+func TestReconcileWakeRecoversFromFailed(t *testing.T) {
+	staleTime := metav1.NewTime(time.Now().Add(-2 * wakeTimeout))
+	hib := &cocoonv1.CocoonHibernation{
+		ObjectMeta: metav1.ObjectMeta{Name: "hib", Namespace: "ns"},
+		Spec: cocoonv1.CocoonHibernationSpec{
+			Desire: cocoonv1.HibernationDesireWake,
+			PodRef: corev1.LocalObjectReference{Name: "demo-0"},
+		},
+		Status: cocoonv1.CocoonHibernationStatus{
+			Phase: cocoonv1.CocoonHibernationPhaseFailed,
+			Conditions: []metav1.Condition{{
+				Type:               commonk8s.ConditionTypeReady,
+				Status:             metav1.ConditionFalse,
+				Reason:             conditionReasonFailed,
+				LastTransitionTime: staleTime,
+			}},
+		},
+	}
+	pod := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "demo-0", Namespace: "ns"}}
+	(&meta.VMSpec{VMName: "vk-ns-demo-0", Managed: true}).Apply(pod)
+
+	scheme := testScheme(t)
+	cli := ctrlfake.NewClientBuilder().
+		WithScheme(scheme).
+		WithObjects(hib, pod).
+		WithStatusSubresource(&cocoonv1.CocoonHibernation{}).
+		Build()
+	r := &Reconciler{Client: cli, Scheme: scheme, Epoch: &fakeRegistry{}}
+
+	if _, err := r.Reconcile(t.Context(), ctrl.Request{
+		NamespacedName: types.NamespacedName{Namespace: "ns", Name: "hib"},
+	}); err != nil {
+		t.Fatalf("Reconcile: %v", err)
+	}
+
+	var out cocoonv1.CocoonHibernation
+	if err := cli.Get(t.Context(), types.NamespacedName{Namespace: "ns", Name: "hib"}, &out); err != nil {
+		t.Fatalf("get hib: %v", err)
+	}
+	if out.Status.Phase != cocoonv1.CocoonHibernationPhaseWaking {
+		t.Fatalf("phase = %q, want Waking (recovery path)", out.Status.Phase)
+	}
+	ready := findReadyCondition(out.Status.Conditions)
+	if ready == nil {
+		t.Fatalf("Ready condition missing after recovery reconcile")
+	}
+	if !ready.LastTransitionTime.Time.After(staleTime.Time) {
+		t.Errorf("LastTransitionTime = %v (stale = %v), want refreshed", ready.LastTransitionTime.Time, staleTime.Time)
+	}
+	// Second reconcile must not re-fail: the fresh timestamp means
+	// wakeDeadlineExceeded stays false and the CR keeps polling.
+	if _, err := r.Reconcile(t.Context(), ctrl.Request{
+		NamespacedName: types.NamespacedName{Namespace: "ns", Name: "hib"},
+	}); err != nil {
+		t.Fatalf("second Reconcile: %v", err)
+	}
+	if err := cli.Get(t.Context(), types.NamespacedName{Namespace: "ns", Name: "hib"}, &out); err != nil {
+		t.Fatalf("get hib (second): %v", err)
+	}
+	if out.Status.Phase != cocoonv1.CocoonHibernationPhaseWaking {
+		t.Errorf("phase after second reconcile = %q, want Waking (deadline must not re-trip)", out.Status.Phase)
+	}
+}
+
+func findReadyCondition(conds []metav1.Condition) *metav1.Condition {
+	for i := range conds {
+		if conds[i].Type == commonk8s.ConditionTypeReady {
+			return &conds[i]
+		}
+	}
+	return nil
 }

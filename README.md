@@ -44,14 +44,15 @@ cocoon-operator/
 ### CocoonSet reconcile loop
 
 1. Fetch the CocoonSet (return early on NotFound).
-2. If `DeletionTimestamp` is set, walk owned pods, delete them, optionally `epoch.DeleteManifest` for each VM, then drop the finalizer.
+2. If `DeletionTimestamp` is set, walk owned pods, delete them, optionally `epoch.DeleteManifest` each VM (per-pod, gated on `meta.ShouldSnapshotVM(spec)` so `main-only` does not issue DeleteManifest against sub-agent / toolbox tags vk-cocoon never pushed), then drop the finalizer.
 3. Ensure the `cocoonset.cocoonstack.io/finalizer` is in place.
 4. List owned pods by `cocoonset.cocoonstack.io/name=<cs.Name>` and classify by role label.
 5. **Suspend short-circuit**: if `spec.suspend == true`, write `meta.HibernateState(true)` onto every pod and report `Phase=Suspended`.
-6. Ensure the **main agent** (slot 0). If it is not yet `Ready`, requeue in 5 seconds and report `Phase=Pending`.
-7. Ensure sub-agents `[1..Replicas]`; delete extras above the requested count.
-8. Ensure toolboxes by name; delete extras.
-9. Re-list and patch `/status` (with structural diff so unchanged status patches are no-ops).
+6. **Un-suspend**: if `spec.suspend == false` and any owned pod still carries the hibernate annotation from a prior suspend, clear it via `PatchHibernateState(false)` so vk-cocoon wakes the VMs. `PatchHibernateState(false)` is a no-op on pods whose annotation is already absent, so this is cheap in the common "never suspended" case.
+7. Ensure the **main agent** (slot 0). If it is not yet `Ready`, requeue in 5 seconds and report `Phase=Pending`.
+8. Ensure sub-agents `[1..Replicas]`; delete extras above the requested count.
+9. Ensure toolboxes by name; delete extras.
+10. Re-list and patch `/status` (with structural diff so unchanged status patches are no-ops).
 
 Pods are constructed via `meta.VMSpec.Apply` so the operator never touches the annotation map directly. The `For` watch uses `predicate.GenerationChangedPredicate` so reconciles only fire when the spec actually changes — status-only patches the operator makes itself never loop back. The `Owns` side keeps the unfiltered pod-event firehose because pod status changes are exactly what drives the readyAgents diff.
 
@@ -59,10 +60,10 @@ Pods are constructed via `meta.VMSpec.Apply` so the operator never touches the a
 
 | Spec.Desire | What the reconciler does | Terminal phase |
 |---|---|---|
-| `Hibernate` | `meta.HibernateState(true).Apply` on the target pod, then poll `epoch.HasManifest(vmName, "hibernate")` until the snapshot lands | `Hibernated` |
-| `Wake` | Clear `meta.HibernateState`, wait for the pod's container to be `Running`, then drop the hibernation snapshot tag from epoch | `Active` |
+| `Hibernate` | `meta.HibernateState(true).Apply` on the target pod, then poll `epoch.HasManifest(vmName, meta.HibernateSnapshotTag)` until the snapshot lands. A probe error (transport / 5xx / auth) surfaces as a returned error so controller-runtime logs + retries with backoff. | `Hibernated` |
+| `Wake` | Clear `meta.HibernateState`, wait for the pod's container to be `Running`, then drop the hibernation snapshot tag from epoch. A wake that does not complete within `wakeTimeout` (5 minutes) is escalated to `Phase=Failed` with a dated message in the `Ready` condition instead of polling forever — `IsContainerRunning` is a local pod-status probe with no error channel, so only a timeout can surface a silently broken wake to the user. | `Active` |
 
-There is no `cocoon-vm-snapshots` ConfigMap bridge — epoch is the single source of truth for hibernation state. Failure paths set `Phase=Failed` with a one-shot message in the `Ready` condition instead of looping forever on a bad reference.
+There is no `cocoon-vm-snapshots` ConfigMap bridge — epoch is the single source of truth for hibernation state. Failure paths set `Phase=Failed` with a one-shot message in the `Ready` condition instead of looping forever on a bad reference. A `Failed` wake is recoverable: on re-entry into `Waking` from a non-Waking phase the reconciler explicitly refreshes the Ready condition's `LastTransitionTime` so the wake budget resets cleanly (without the override, `apimeta.SetStatusCondition` would preserve the stale timestamp across the `False → False` transition and the recovered wake would trip the deadline on the next reconcile).
 
 ## Configuration
 

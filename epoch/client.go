@@ -8,6 +8,7 @@ package epoch
 
 import (
 	"context"
+	"errors"
 
 	"github.com/cocoonstack/epoch/registryclient"
 )
@@ -17,10 +18,10 @@ import (
 // without importing anything from epoch.
 type SnapshotRegistry interface {
 	// HasManifest reports whether (name, tag) currently exists in
-	// the registry. A missing manifest is not an error: the
-	// hibernation reconciler polls in a loop and treats absence as
-	// "not yet pushed", so any error from the underlying probe is
-	// folded into a (false, nil) response.
+	// the registry. A missing manifest returns (false, nil); any
+	// other failure (transport, server error, auth) surfaces as a
+	// non-nil error so the caller can decide whether to requeue or
+	// mark the parent CR as Failed.
 	HasManifest(ctx context.Context, name, tag string) (bool, error)
 
 	// DeleteManifest removes the manifest pointer at (name, tag).
@@ -53,16 +54,22 @@ func New(baseURL, token string) *Client {
 	return &Client{inner: registryclient.New(baseURL, token)}
 }
 
-// HasManifest implements SnapshotRegistry. epoch's GetManifest folds
-// HTTP-level not-found into the same error channel as transport
-// failures, so this implementation cannot distinguish them and
-// returns (false, nil) for any error — see the SnapshotRegistry doc
-// for the polling rationale.
+// HasManifest implements SnapshotRegistry. It uses
+// errors.Is(err, registryclient.ErrManifestNotFound) to recognize
+// the "not yet pushed" case and fold it into (false, nil); every
+// other error — transport failures, auth errors, 5xx — propagates
+// so the hibernation reconciler can surface it on the parent CR's
+// status instead of silently retrying forever.
 func (c *Client) HasManifest(ctx context.Context, name, tag string) (bool, error) {
-	if _, _, err := c.inner.GetManifest(ctx, name, tag); err != nil {
+	_, _, err := c.inner.GetManifest(ctx, name, tag)
+	switch {
+	case err == nil:
+		return true, nil
+	case errors.Is(err, registryclient.ErrManifestNotFound):
 		return false, nil
+	default:
+		return false, err
 	}
-	return true, nil
 }
 
 // DeleteManifest removes a tag from the registry. The upstream

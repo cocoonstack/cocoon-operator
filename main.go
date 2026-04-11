@@ -22,12 +22,12 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
-	"k8s.io/utils/env"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/healthz"
 	metricsserver "sigs.k8s.io/controller-runtime/pkg/metrics/server"
 
 	cocoonv1 "github.com/cocoonstack/cocoon-common/apis/v1"
+	commonk8s "github.com/cocoonstack/cocoon-common/k8s"
 	commonlog "github.com/cocoonstack/cocoon-common/log"
 	"github.com/cocoonstack/cocoon-operator/cocoonset"
 	"github.com/cocoonstack/cocoon-operator/epoch"
@@ -45,15 +45,15 @@ func main() {
 	// LEADER_ELECT defaults to true; an unparseable value silently
 	// falls back to the default — same lenient semantics as
 	// flag-defined env-var fallbacks elsewhere in cocoon.
-	leaderDefault, _ := env.GetBool("LEADER_ELECT", true)
+	leaderDefault := commonk8s.EnvBool("LEADER_ELECT", true)
 
 	var (
 		metricsAddr          string
 		probeAddr            string
 		enableLeaderElection bool
 	)
-	flag.StringVar(&metricsAddr, "metrics-bind-address", env.GetString("METRICS_ADDR", defaultMetricsAddr), "The address the metric endpoint binds to.")
-	flag.StringVar(&probeAddr, "health-probe-bind-address", env.GetString("PROBE_ADDR", defaultProbeAddr), "The address the probe endpoint binds to.")
+	flag.StringVar(&metricsAddr, "metrics-bind-address", commonk8s.EnvOrDefault("METRICS_ADDR", defaultMetricsAddr), "The address the metric endpoint binds to.")
+	flag.StringVar(&probeAddr, "health-probe-bind-address", commonk8s.EnvOrDefault("PROBE_ADDR", defaultProbeAddr), "The address the probe endpoint binds to.")
 	flag.BoolVar(&enableLeaderElection, "leader-elect", leaderDefault, "Enable leader election so only one operator instance reconciles at a time.")
 	flag.Parse()
 
@@ -86,7 +86,7 @@ func main() {
 		logger.Fatalf(ctx, err, "add readyz check: %v", err)
 	}
 
-	epochClient := epoch.New(env.GetString("EPOCH_URL", "http://epoch.cocoon-system.svc:8080"), os.Getenv("EPOCH_TOKEN"))
+	epochClient := epoch.New(commonk8s.EnvOrDefault("EPOCH_URL", "http://epoch.cocoon-system.svc:8080"), os.Getenv("EPOCH_TOKEN"))
 
 	if err := (&cocoonset.Reconciler{
 		Client: mgr.GetClient(),

@@ -3,6 +3,8 @@ package cocoonset
 import (
 	"context"
 	"fmt"
+	"maps"
+	"slices"
 	"time"
 
 	"github.com/projecteru2/core/log"
@@ -16,6 +18,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/predicate"
 
 	cocoonv1 "github.com/cocoonstack/cocoon-common/apis/v1"
+	commonk8s "github.com/cocoonstack/cocoon-common/k8s"
 	"github.com/cocoonstack/cocoon-common/meta"
 	"github.com/cocoonstack/cocoon-operator/epoch"
 )
@@ -96,7 +99,7 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 	// stop the reconcile loop with a Failed phase. Without this we
 	// would requeue every 5 seconds forever, hiding the wedge from
 	// status consumers.
-	if classified.main != nil && isPodTerminal(classified.main) {
+	if classified.main != nil && meta.IsPodTerminal(classified.main) {
 		return ctrl.Result{}, r.patchStatus(ctx, &cs,
 			buildStatus(&cs, classified, cocoonv1.CocoonSetPhaseFailed))
 	}
@@ -122,6 +125,16 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 			buildStatus(&cs, classified, cocoonv1.CocoonSetPhaseSuspended))
 	}
 
+	// Un-suspend handling: if any owned pod still carries the
+	// hibernate annotation from a prior Suspend=true pass, clear it
+	// here before the ensure loops. Without this the pods remain
+	// hibernated forever after Spec.Suspend flips back to false,
+	// because vk-cocoon only wakes on a hibernate=false transition
+	// and the annotation is only written by this reconciler.
+	if err := r.applyUnsuspend(ctx, classified); err != nil {
+		return ctrl.Result{}, err
+	}
+
 	// Ensure the main agent (slot 0) exists.
 	if classified.main == nil {
 		mainPod := buildAgentPod(&cs, 0, "", "", r.Scheme)
@@ -134,7 +147,7 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 
 	// Until the main agent is Ready we hold off on creating any
 	// sub-agents — they fork from the main VM and need it to be live.
-	if !isPodReady(classified.main) {
+	if !meta.IsPodReady(classified.main) {
 		return ctrl.Result{RequeueAfter: requeueWaitForMain},
 			r.patchStatus(ctx, &cs, buildStatus(&cs, classified, cocoonv1.CocoonSetPhasePending))
 	}
@@ -190,10 +203,11 @@ func (r *Reconciler) ensureSubAgents(ctx context.Context, cs *cocoonv1.CocoonSet
 		logger.Infof(ctx, "created sub-agent %s/%s", subPod.Namespace, subPod.Name)
 		changed = true
 	}
-	for slot, pod := range classified.sub {
+	for _, slot := range slices.Sorted(maps.Keys(classified.sub)) {
 		if slot <= cs.Spec.Agent.Replicas {
 			continue
 		}
+		pod := classified.sub[slot]
 		if err := r.Delete(ctx, pod); err != nil {
 			if apierrors.IsNotFound(err) {
 				continue
@@ -229,10 +243,11 @@ func (r *Reconciler) ensureToolboxes(ctx context.Context, cs *cocoonv1.CocoonSet
 		logger.Infof(ctx, "created toolbox %s/%s", tbPod.Namespace, tbPod.Name)
 		changed = true
 	}
-	for name, pod := range classified.toolbox {
+	for _, name := range slices.Sorted(maps.Keys(classified.toolbox)) {
 		if desired[name] {
 			continue
 		}
+		pod := classified.toolbox[name]
 		if err := r.Delete(ctx, pod); err != nil {
 			if apierrors.IsNotFound(err) {
 				continue
@@ -261,19 +276,24 @@ func (r *Reconciler) reconcileDelete(ctx context.Context, cs *cocoonv1.CocoonSet
 		return ctrl.Result{}, fmt.Errorf("list owned pods for delete: %w", err)
 	}
 
-	gcSnapshots := cs.Spec.SnapshotPolicy.Default() != cocoonv1.SnapshotPolicyNever && r.Epoch != nil
+	// Per-pod GC decision mirrors meta.ShouldSnapshotVM so the delete
+	// loop never issues a DeleteManifest against a tag vk-cocoon
+	// never pushed. Under main-only that spares sub-agents and
+	// toolboxes the 404-warn noise; under always/never the behavior
+	// matches what the registry would return anyway.
 	for i := range podList.Items {
-		pod := &podList.Items[i]
-		var vmName string
-		if gcSnapshots {
-			vmName = meta.ParseVMSpec(pod).VMName
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return ctrl.Result{}, ctxErr
 		}
+		pod := &podList.Items[i]
+		spec := meta.ParseVMSpec(pod)
+		shouldGC := r.Epoch != nil && meta.ShouldSnapshotVM(spec)
 		if err := client.IgnoreNotFound(r.Delete(ctx, pod)); err != nil {
 			return ctrl.Result{}, fmt.Errorf("delete pod %s/%s: %w", pod.Namespace, pod.Name, err)
 		}
-		if gcSnapshots && vmName != "" {
-			if err := r.Epoch.DeleteManifest(ctx, vmName, "latest"); err != nil {
-				logger.Warnf(ctx, "delete snapshot %s: %v", vmName, err)
+		if shouldGC && spec.VMName != "" {
+			if err := r.Epoch.DeleteManifest(ctx, spec.VMName, meta.DefaultSnapshotTag); err != nil {
+				logger.Warnf(ctx, "delete snapshot %s: %v", spec.VMName, err)
 			}
 		}
 	}
@@ -291,44 +311,37 @@ func (r *Reconciler) reconcileDelete(ctx context.Context, cs *cocoonv1.CocoonSet
 // vk-cocoon picks up the annotation and snapshots / tears down the
 // VM while keeping the container alive.
 func (r *Reconciler) applySuspend(ctx context.Context, classified classifiedPods) error {
-	for _, pod := range classified.allByName {
+	for _, name := range slices.Sorted(maps.Keys(classified.allByName)) {
 		if ctxErr := ctx.Err(); ctxErr != nil {
 			return ctxErr
 		}
-		if meta.ReadHibernateState(pod) {
-			continue
-		}
-		patch := client.MergeFrom(pod.DeepCopy())
-		meta.HibernateState(true).Apply(pod)
-		if err := r.Patch(ctx, pod, patch); err != nil {
+		pod := classified.allByName[name]
+		if err := commonk8s.PatchHibernateState(ctx, r.Client, pod, true); err != nil {
 			return fmt.Errorf("patch hibernate annotation on %s/%s: %w", pod.Namespace, pod.Name, err)
 		}
 	}
 	return nil
 }
 
-// isPodReady returns true if the pod has a Ready condition set to
-// True. The reconciler uses this to gate sub-agent creation on the
-// main agent's liveness.
-func isPodReady(pod *corev1.Pod) bool {
-	if pod == nil {
-		return false
-	}
-	for _, c := range pod.Status.Conditions {
-		if c.Type == corev1.PodReady && c.Status == corev1.ConditionTrue {
-			return true
+// applyUnsuspend clears HibernateState from every owned pod that
+// still carries it. PatchHibernateState(false) is a no-op when the
+// annotation is absent, so this is cheap on the common "never
+// suspended" path — we walk the owned list, skip pods whose
+// hibernate annotation already reads false, and issue a patch only
+// for the stragglers. vk-cocoon reacts to the cleared annotation
+// by restoring the VM from the hibernate snapshot.
+func (r *Reconciler) applyUnsuspend(ctx context.Context, classified classifiedPods) error {
+	for _, name := range slices.Sorted(maps.Keys(classified.allByName)) {
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return ctxErr
+		}
+		pod := classified.allByName[name]
+		if !bool(meta.ReadHibernateState(pod)) {
+			continue
+		}
+		if err := commonk8s.PatchHibernateState(ctx, r.Client, pod, false); err != nil {
+			return fmt.Errorf("clear hibernate annotation on %s/%s: %w", pod.Namespace, pod.Name, err)
 		}
 	}
-	return false
-}
-
-// isPodTerminal reports whether the pod has reached a phase that
-// will not progress without operator intervention. The reconciler
-// surfaces this as CocoonSetPhaseFailed so users see the wedge in
-// status instead of an indefinite Pending.
-func isPodTerminal(pod *corev1.Pod) bool {
-	if pod == nil {
-		return false
-	}
-	return pod.Status.Phase == corev1.PodFailed
+	return nil
 }
