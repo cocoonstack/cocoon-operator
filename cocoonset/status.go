@@ -46,13 +46,12 @@ func (r *Reconciler) patchStatus(ctx context.Context, cs *cocoonv1.CocoonSet, st
 }
 
 // mergeConditions takes the freshly-built conditions on next and
-// runs them through apimeta.SetStatusCondition against a copy of
+// runs them through apimeta.SetStatusCondition against a clone of
 // prev. The result is that timestamps survive when nothing else
 // about a condition changed, so equality.Semantic.DeepEqual can
 // catch the no-op case without a hand-rolled comparator.
 func mergeConditions(next *cocoonv1.CocoonSetStatus, prev []metav1.Condition) {
-	merged := make([]metav1.Condition, 0, len(prev))
-	merged = append(merged, prev...)
+	merged := slices.Clone(prev)
 	for _, c := range next.Conditions {
 		apimeta.SetStatusCondition(&merged, c)
 	}
@@ -70,19 +69,17 @@ func mergeConditions(next *cocoonv1.CocoonSetStatus, prev []metav1.Condition) {
 func buildStatus(cs *cocoonv1.CocoonSet, classified classifiedPods, phase cocoonv1.CocoonSetPhase) cocoonv1.CocoonSetStatus {
 	desired := int32(1) + cs.Spec.Agent.Replicas
 	ready := int32(0)
+	mainVMName := ""
 
 	agents := make([]cocoonv1.AgentStatus, 0, desired)
 	if classified.main != nil {
 		if isPodReady(classified.main) {
 			ready++
 		}
+		mainVMName = meta.ParseVMSpec(classified.main).VMName
 		agents = append(agents, agentStatusFromPod(classified.main, 0, meta.RoleMain, ""))
 	}
 
-	mainVMName := ""
-	if classified.main != nil {
-		mainVMName = meta.ParseVMSpec(classified.main).VMName
-	}
 	for _, slot := range slices.Sorted(maps.Keys(classified.sub)) {
 		sub := classified.sub[slot]
 		if isPodReady(sub) {

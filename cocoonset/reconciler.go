@@ -268,7 +268,7 @@ func (r *Reconciler) reconcileDelete(ctx context.Context, cs *cocoonv1.CocoonSet
 		if gcSnapshots {
 			vmName = meta.ParseVMSpec(pod).VMName
 		}
-		if err := r.Delete(ctx, pod); err != nil && !apierrors.IsNotFound(err) {
+		if err := client.IgnoreNotFound(r.Delete(ctx, pod)); err != nil {
 			return ctrl.Result{}, fmt.Errorf("delete pod %s/%s: %w", pod.Namespace, pod.Name, err)
 		}
 		if gcSnapshots && vmName != "" {

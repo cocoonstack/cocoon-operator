@@ -126,6 +126,7 @@ func (r *Reconciler) reconcileHibernate(ctx context.Context, hib *cocoonv1.Cocoo
 // reconcileWake removes the hibernate annotation and waits for the
 // pod's container to be running again.
 func (r *Reconciler) reconcileWake(ctx context.Context, hib *cocoonv1.CocoonHibernation, pod *corev1.Pod, vmName string) (ctrl.Result, error) {
+	logger := log.WithFunc("hibernation.Reconciler.reconcileWake")
 	if meta.ReadHibernateState(pod) {
 		patch := client.MergeFrom(pod.DeepCopy())
 		meta.HibernateState(false).Apply(pod)
@@ -141,8 +142,7 @@ func (r *Reconciler) reconcileWake(ctx context.Context, hib *cocoonv1.CocoonHibe
 		// hibernate, and surfacing the error would block wake on a
 		// transient registry hiccup.
 		if err := r.Epoch.DeleteManifest(ctx, vmName, meta.HibernateSnapshotTag); err != nil {
-			log.WithFunc("hibernation.Reconciler.reconcileWake").Warnf(ctx,
-				"delete hibernation snapshot %s: %v", vmName, err)
+			logger.Warnf(ctx, "delete hibernation snapshot %s: %v", vmName, err)
 		}
 		return ctrl.Result{}, r.setPhase(ctx, hib, cocoonv1.CocoonHibernationPhaseActive, vmName)
 	}
