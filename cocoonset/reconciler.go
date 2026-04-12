@@ -29,6 +29,8 @@ const (
 	requeueWaitForMain = 5 * time.Second
 )
 
+// Reconciler watches CocoonSet resources and manages the lifecycle of agent
+// and toolbox pods to match the declared spec.
 type Reconciler struct {
 	client.Client
 	Scheme *runtime.Scheme
@@ -44,6 +46,8 @@ func (r *Reconciler) SetupWithManager(mgr ctrl.Manager) error {
 		Complete(r)
 }
 
+// Reconcile drives a single CocoonSet toward its desired state by ensuring
+// the correct set of agent and toolbox pods exist.
 func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	logger := log.WithFunc("cocoonset.Reconciler.Reconcile")
 

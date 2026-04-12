@@ -23,6 +23,7 @@ type Client struct {
 	inner *registryclient.Client
 }
 
+// New creates a Client that talks to the epoch registry at baseURL.
 func New(baseURL, token string) *Client {
 	return &Client{inner: registryclient.New(baseURL, token)}
 }
@@ -40,6 +41,7 @@ func (c *Client) HasManifest(ctx context.Context, name, tag string) (bool, error
 	}
 }
 
+// DeleteManifest removes the manifest identified by (name, tag).
 func (c *Client) DeleteManifest(ctx context.Context, name, tag string) error {
 	return c.inner.DeleteManifest(ctx, name, tag)
 }

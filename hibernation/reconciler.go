@@ -32,12 +32,15 @@ const (
 	conditionReasonFailed  = "Failed"
 )
 
+// Reconciler watches CocoonHibernation resources and drives hibernate/wake
+// transitions by toggling pod annotations and polling the snapshot registry.
 type Reconciler struct {
 	client.Client
 	Scheme *runtime.Scheme
 	Epoch  epoch.SnapshotRegistry
 }
 
+// SetupWithManager registers the reconciler with the controller manager.
 func (r *Reconciler) SetupWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&cocoonv1.CocoonHibernation{}).
@@ -108,16 +111,18 @@ func (r *Reconciler) reconcileHibernate(ctx context.Context, hib *cocoonv1.Cocoo
 // reconcileWake clears the hibernate annotation and waits for the container to run.
 func (r *Reconciler) reconcileWake(ctx context.Context, hib *cocoonv1.CocoonHibernation, pod *corev1.Pod, vmName string) (ctrl.Result, error) {
 	logger := log.WithFunc("hibernation.Reconciler.reconcileWake")
-	if err := commonk8s.PatchHibernateState(ctx, r.Client, pod, false); err != nil {
-		return ctrl.Result{}, fmt.Errorf("clear hibernate annotation: %w", err)
-	}
-
 	if meta.IsContainerRunning(pod) {
 		// Drop snapshot tag (non-fatal; stale tag gets overwritten on next hibernate).
 		if err := r.Epoch.DeleteManifest(ctx, vmName, meta.HibernateSnapshotTag); err != nil {
 			logger.Warnf(ctx, "delete hibernation snapshot %s: %v", vmName, err)
 		}
 		return ctrl.Result{}, r.setPhase(ctx, hib, cocoonv1.CocoonHibernationPhaseActive, vmName)
+	}
+
+	if bool(meta.ReadHibernateState(pod)) {
+		if err := commonk8s.PatchHibernateState(ctx, r.Client, pod, false); err != nil {
+			return ctrl.Result{}, fmt.Errorf("clear hibernate annotation: %w", err)
+		}
 	}
 
 	if wakeDeadlineExceeded(hib) {
