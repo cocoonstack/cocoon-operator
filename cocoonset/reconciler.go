@@ -25,32 +25,18 @@ import (
 )
 
 const (
-	// finalizerName is added to every CocoonSet so the reconciler
-	// gets a chance to delete owned pods (and optionally garbage
-	// collect snapshots) before the API server actually removes the
-	// object.
-	finalizerName = "cocoonset.cocoonstack.io/finalizer"
-
-	// requeueWaitForMain is how long the reconciler waits before
-	// re-checking whether the main agent has come up. The wait is
-	// short on purpose: scaling sub-agents is gated on the main
-	// agent being Ready.
+	finalizerName      = "cocoonset.cocoonstack.io/finalizer"
 	requeueWaitForMain = 5 * time.Second
 )
 
-// Reconciler reconciles a CocoonSet object.
 type Reconciler struct {
 	client.Client
 	Scheme *runtime.Scheme
 	Epoch  epoch.SnapshotRegistry
 }
 
-// SetupWithManager registers the reconciler against the supplied
-// controller-runtime manager. The For predicate is
-// GenerationChangedPredicate so reconciles only fire when the spec
-// actually changes — status-only patches we make ourselves do not
-// loop back. The Owns side keeps the pod-event firehose because
-// pod status updates are exactly what drives the readyAgents diff.
+// SetupWithManager registers the reconciler. For uses GenerationChangedPredicate
+// to avoid status-update loops; Owns keeps pod events to drive readyAgents diffs.
 func (r *Reconciler) SetupWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&cocoonv1.CocoonSet{}, builder.WithPredicates(predicate.GenerationChangedPredicate{})).
@@ -58,8 +44,6 @@ func (r *Reconciler) SetupWithManager(mgr ctrl.Manager) error {
 		Complete(r)
 }
 
-// Reconcile is the entry point invoked by controller-runtime each
-// time a watched event lands.
 func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	logger := log.WithFunc("cocoonset.Reconciler.Reconcile")
 
@@ -71,12 +55,10 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 		return ctrl.Result{}, fmt.Errorf("get cocoonset %s: %w", req.NamespacedName, err)
 	}
 
-	// Deletion path: drop owned resources, then remove the finalizer.
 	if !cs.DeletionTimestamp.IsZero() {
 		return r.reconcileDelete(ctx, &cs)
 	}
 
-	// Ensure the finalizer is in place before doing anything else.
 	if !controllerutil.ContainsFinalizer(&cs, finalizerName) {
 		controllerutil.AddFinalizer(&cs, finalizerName)
 		if err := r.Update(ctx, &cs); err != nil {
@@ -85,7 +67,6 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 		return ctrl.Result{Requeue: true}, nil
 	}
 
-	// List every pod the operator owns for this CocoonSet by label.
 	var podList corev1.PodList
 	if err := r.List(ctx, &podList,
 		client.InNamespace(cs.Namespace),
@@ -96,20 +77,13 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 
 	classified := classifyPods(podList.Items)
 
-	// Detect a wedged main agent (terminal phase like Failed) and
-	// stop the reconcile loop with a Failed phase. Without this we
-	// would requeue every 5 seconds forever, hiding the wedge from
-	// status consumers.
+	// Stop reconciling if main agent is in a terminal phase (e.g. Failed).
 	if classified.main != nil && meta.IsPodTerminal(classified.main) {
 		return ctrl.Result{}, r.patchStatus(ctx, &cs,
 			buildStatus(&cs, classified, cocoonv1.CocoonSetPhaseFailed))
 	}
 
-	// Suspend handling. We always ensure the main agent first
-	// (suspend on a CocoonSet that never had a main pod would
-	// otherwise produce a phantom Suspended phase with zero ready
-	// agents). Once main exists we apply HibernateState(true) to
-	// every owned pod and short-circuit the rest of the loop.
+	// Suspend: ensure main exists first, then hibernate all owned pods.
 	if cs.Spec.Suspend {
 		if classified.main == nil {
 			mainPod := buildAgentPod(&cs, 0, "", "", r.Scheme)
@@ -126,17 +100,11 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 			buildStatus(&cs, classified, cocoonv1.CocoonSetPhaseSuspended))
 	}
 
-	// Un-suspend handling: if any owned pod still carries the
-	// hibernate annotation from a prior Suspend=true pass, clear it
-	// here before the ensure loops. Without this the pods remain
-	// hibernated forever after Spec.Suspend flips back to false,
-	// because vk-cocoon only wakes on a hibernate=false transition
-	// and the annotation is only written by this reconciler.
+	// Clear stale hibernate annotations from a prior suspend pass.
 	if err := r.applyUnsuspend(ctx, cs.Namespace, classified); err != nil {
 		return ctrl.Result{}, err
 	}
 
-	// Ensure the main agent (slot 0) exists.
 	if classified.main == nil {
 		mainPod := buildAgentPod(&cs, 0, "", "", r.Scheme)
 		if err := r.Create(ctx, mainPod); err != nil {
@@ -146,8 +114,7 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 		return ctrl.Result{Requeue: true}, nil
 	}
 
-	// Until the main agent is Ready we hold off on creating any
-	// sub-agents — they fork from the main VM and need it to be live.
+	// Sub-agents fork from main and need it live before creation.
 	if !meta.IsPodReady(classified.main) {
 		return ctrl.Result{RequeueAfter: requeueWaitForMain},
 			r.patchStatus(ctx, &cs, buildStatus(&cs, classified, cocoonv1.CocoonSetPhasePending))
@@ -156,11 +123,6 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 	mainVMName := meta.ParseVMSpec(classified.main).VMName
 	mainNodeName := classified.main.Spec.NodeName
 
-	// Track whether the ensure loops actually changed cluster
-	// state. The status patch only needs a re-list when something
-	// moved; otherwise the in-memory classified snapshot is fresh
-	// enough and the next pod-event reconcile will pick up any
-	// drift through the Owns watch.
 	subChanged, err := r.ensureSubAgents(ctx, &cs, classified, mainVMName, mainNodeName)
 	if err != nil {
 		return ctrl.Result{}, err
@@ -170,9 +132,6 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 		return ctrl.Result{}, err
 	}
 
-	// Skip the second list when no creates / deletes happened.
-	// The Owns watch on Pod will fire a fresh reconcile as soon as
-	// the API server commits any of our writes anyway.
 	if subChanged || tbChanged {
 		return ctrl.Result{Requeue: true}, nil
 	}
@@ -180,13 +139,8 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 	return ctrl.Result{}, r.patchStatus(ctx, &cs, buildStatus(&cs, classified, ""))
 }
 
-// ensureSubAgents creates missing sub-agent pods for slots
-// [1..Replicas] and deletes any slot beyond Replicas. Returns true
-// when at least one create or delete actually happened.
-//
-// IsAlreadyExists / IsNotFound from a previous reconcile race are
-// suppressed but do not flip `changed`, so the success log only fires
-// when we actually mutated cluster state.
+// ensureSubAgents creates/deletes sub-agent pods to match [1..Replicas].
+// Returns true when cluster state was mutated.
 func (r *Reconciler) ensureSubAgents(ctx context.Context, cs *cocoonv1.CocoonSet, classified classifiedPods, mainVMName, mainNodeName string) (bool, error) {
 	logger := log.WithFunc("cocoonset.Reconciler.ensureSubAgents")
 	changed := false
@@ -221,10 +175,8 @@ func (r *Reconciler) ensureSubAgents(ctx context.Context, cs *cocoonv1.CocoonSet
 	return changed, nil
 }
 
-// ensureToolboxes creates missing toolbox pods for every spec entry
-// and deletes any toolbox not in spec. Returns true when at least
-// one create or delete actually happened. Same suppress-but-don't-log
-// rule as ensureSubAgents.
+// ensureToolboxes creates/deletes toolbox pods to match spec.
+// Returns true when cluster state was mutated.
 func (r *Reconciler) ensureToolboxes(ctx context.Context, cs *cocoonv1.CocoonSet, classified classifiedPods) (bool, error) {
 	logger := log.WithFunc("cocoonset.Reconciler.ensureToolboxes")
 	changed := false
@@ -261,10 +213,7 @@ func (r *Reconciler) ensureToolboxes(ctx context.Context, cs *cocoonv1.CocoonSet
 	return changed, nil
 }
 
-// reconcileDelete tears down everything the CocoonSet owns and then
-// removes the finalizer so the API server can finalize the delete.
-// Pod deletion and snapshot GC happen in a single pass — VM names are
-// collected before each Delete call so we never need a second walk.
+// reconcileDelete deletes all owned pods, GCs snapshots, and removes the finalizer.
 func (r *Reconciler) reconcileDelete(ctx context.Context, cs *cocoonv1.CocoonSet) (ctrl.Result, error) {
 	logger := log.WithFunc("cocoonset.Reconciler.reconcileDelete")
 	logger.Infof(ctx, "deleting cocoonset %s/%s", cs.Namespace, cs.Name)
@@ -277,11 +226,6 @@ func (r *Reconciler) reconcileDelete(ctx context.Context, cs *cocoonv1.CocoonSet
 		return ctrl.Result{}, fmt.Errorf("list owned pods for delete: %w", err)
 	}
 
-	// Per-pod GC decision mirrors meta.ShouldSnapshotVM so the delete
-	// loop never issues a DeleteManifest against a tag vk-cocoon
-	// never pushed. Under main-only that spares sub-agents and
-	// toolboxes the 404-warn noise; under always/never the behavior
-	// matches what the registry would return anyway.
 	for i := range podList.Items {
 		if ctxErr := ctx.Err(); ctxErr != nil {
 			return ctrl.Result{}, ctxErr
@@ -309,8 +253,6 @@ func (r *Reconciler) reconcileDelete(ctx context.Context, cs *cocoonv1.CocoonSet
 }
 
 // applySuspend writes HibernateState(true) onto every owned pod.
-// vk-cocoon picks up the annotation and snapshots / tears down the
-// VM while keeping the container alive.
 func (r *Reconciler) applySuspend(ctx context.Context, classified classifiedPods) error {
 	for _, name := range slices.Sorted(maps.Keys(classified.allByName)) {
 		if ctxErr := ctx.Err(); ctxErr != nil {
@@ -324,22 +266,8 @@ func (r *Reconciler) applySuspend(ctx context.Context, classified classifiedPods
 	return nil
 }
 
-// applyUnsuspend clears HibernateState from every owned pod that
-// still carries it, EXCEPT pods that are currently the target of an
-// active CocoonHibernation CR with desire=Hibernate. Those have been
-// hibernated by the per-pod path (not by spec.suspend) and clearing
-// the annotation here would race the hibernation reconciler: vk-cocoon
-// would wake the VM seconds after it finished snapshotting, the
-// CocoonHibernation status would still read Hibernated, and the user
-// would observe a phantom-running pod.
-//
-// Fast path: the steady-state non-suspended CocoonSet has no pod
-// carrying the hibernate annotation, so we skip the CocoonHibernation
-// List entirely. One pass over classified.allByName collects the
-// hibernated subset; if it's empty we return without touching the
-// API. Otherwise we sort just that subset (for deterministic patch
-// order under test) and consult the CR list to decide which ones to
-// leave alone.
+// applyUnsuspend clears HibernateState from owned pods, skipping pods that are
+// targets of an active CocoonHibernation CR to avoid racing the hibernation reconciler.
 func (r *Reconciler) applyUnsuspend(ctx context.Context, namespace string, classified classifiedPods) error {
 	var hibernated []*corev1.Pod
 	for _, pod := range classified.allByName {
@@ -372,9 +300,7 @@ func (r *Reconciler) applyUnsuspend(ctx context.Context, namespace string, class
 	return nil
 }
 
-// podsHibernatedByCR returns the set of pod names in `namespace` that
-// are the target of a CocoonHibernation CR with desire=Hibernate.
-// Used by applyUnsuspend to leave per-pod hibernations alone.
+// podsHibernatedByCR returns pod names targeted by a desire=Hibernate CR.
 func (r *Reconciler) podsHibernatedByCR(ctx context.Context, namespace string) (map[string]struct{}, error) {
 	var hibList cocoonv1.CocoonHibernationList
 	if err := r.List(ctx, &hibList, client.InNamespace(namespace)); err != nil {

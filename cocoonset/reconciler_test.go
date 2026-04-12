@@ -12,11 +12,6 @@ import (
 	"github.com/cocoonstack/cocoon-common/meta"
 )
 
-// TestApplyUnsuspendClearsHibernateAnnotation verifies that the
-// un-suspend path patches HibernateState(false) onto pods that were
-// previously suspended, and leaves untouched pods alone. Without
-// this patch path, flipping Spec.Suspend back to false would leave
-// owned pods stuck with hibernate=true annotations forever.
 func TestApplyUnsuspendClearsHibernateAnnotation(t *testing.T) {
 	scheme := testScheme(t)
 
@@ -33,7 +28,7 @@ func TestApplyUnsuspendClearsHibernateAnnotation(t *testing.T) {
 	tbPod := &corev1.Pod{
 		ObjectMeta: metav1.ObjectMeta{Name: "demo-tb", Namespace: "ns"},
 	}
-	// tbPod was never suspended — applyUnsuspend must skip it.
+	// tbPod was never suspended; must be skipped.
 
 	cli := ctrlfake.NewClientBuilder().
 		WithScheme(scheme).
@@ -52,8 +47,6 @@ func TestApplyUnsuspendClearsHibernateAnnotation(t *testing.T) {
 		t.Fatalf("applyUnsuspend: %v", err)
 	}
 
-	// Re-fetch and assert the annotation was cleared on both
-	// hibernated pods and untouched on the toolbox.
 	for _, tc := range []struct {
 		name        string
 		wantCleared bool
@@ -72,17 +65,12 @@ func TestApplyUnsuspendClearsHibernateAnnotation(t *testing.T) {
 				t.Errorf("%s: hibernate annotation should be cleared", tc.name)
 			}
 			if !tc.wantCleared && hibernated {
-				// Toolbox was never hibernated so this should also be false;
-				// asserting the same thing but keeping the branch explicit.
 				t.Errorf("%s: hibernate annotation unexpectedly set", tc.name)
 			}
 		})
 	}
 }
 
-// TestApplyUnsuspendNoopOnCleanSet confirms the un-suspend walk is a
-// pure read on a CocoonSet that was never suspended — no Patch calls
-// fire when every pod's hibernate annotation is already absent.
 func TestApplyUnsuspendNoopOnCleanSet(t *testing.T) {
 	scheme := testScheme(t)
 	cs := newCocoonSet("demo")
@@ -106,12 +94,8 @@ func TestApplyUnsuspendNoopOnCleanSet(t *testing.T) {
 	}
 }
 
-// TestApplyUnsuspendSkipsPodHibernatedByCR proves the per-pod
-// CocoonHibernation path coexists with CocoonSet's spec.suspend
-// machinery: a pod that is the target of an in-flight Hibernate CR
-// must NOT be cleared by applyUnsuspend, otherwise vk-cocoon would
-// wake the VM seconds after the hibernation reconciler finishes
-// snapshotting and the operator would observe a phantom-running pod.
+// TestApplyUnsuspendSkipsPodHibernatedByCR ensures pods targeted by an active
+// Hibernate CR are not cleared, avoiding a race with the hibernation reconciler.
 func TestApplyUnsuspendSkipsPodHibernatedByCR(t *testing.T) {
 	scheme := testScheme(t)
 
@@ -120,8 +104,7 @@ func TestApplyUnsuspendSkipsPodHibernatedByCR(t *testing.T) {
 	}
 	(meta.HibernateState(true)).Apply(hibernated)
 
-	// A second pod, also hibernated, but NOT named in any CR. This
-	// proves the skip is selective rather than a blanket bypass.
+	// Also hibernated but not named in any CR -- proves skip is selective.
 	leftover := &corev1.Pod{
 		ObjectMeta: metav1.ObjectMeta{Name: "demo-1", Namespace: "ns"},
 	}

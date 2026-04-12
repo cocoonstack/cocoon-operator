@@ -25,12 +25,7 @@ const (
 	conditionReasonReconciling = "Reconciling"
 )
 
-// patchStatus writes the supplied status onto the CocoonSet via the
-// /status subresource. It diff-checks first so reconciles that did
-// not actually change anything stay no-ops at the API server. The
-// timestamps inside Conditions survive the diff because buildStatus
-// builds them through apimeta.SetStatusCondition, which preserves
-// the existing LastTransitionTime when nothing else changed.
+// patchStatus writes status via the /status subresource, skipping no-op updates.
 func (r *Reconciler) patchStatus(ctx context.Context, cs *cocoonv1.CocoonSet, status cocoonv1.CocoonSetStatus) error {
 	mergeConditions(&status, cs.Status.Conditions)
 	if equality.Semantic.DeepEqual(cs.Status, status) {
@@ -44,11 +39,7 @@ func (r *Reconciler) patchStatus(ctx context.Context, cs *cocoonv1.CocoonSet, st
 	return nil
 }
 
-// mergeConditions takes the freshly-built conditions on next and
-// runs them through apimeta.SetStatusCondition against a clone of
-// prev. The result is that timestamps survive when nothing else
-// about a condition changed, so equality.Semantic.DeepEqual can
-// catch the no-op case without a hand-rolled comparator.
+// mergeConditions preserves condition timestamps across no-op updates.
 func mergeConditions(next *cocoonv1.CocoonSetStatus, prev []metav1.Condition) {
 	merged := slices.Clone(prev)
 	for _, c := range next.Conditions {
@@ -57,14 +48,7 @@ func mergeConditions(next *cocoonv1.CocoonSetStatus, prev []metav1.Condition) {
 	next.Conditions = merged
 }
 
-// buildStatus rebuilds the CocoonSetStatus from the supplied
-// classified-pods snapshot. When phase is empty the running-state
-// phase is auto-derived from the (ready, desired) counts; the suspend
-// short-circuit and pending-main paths pass an explicit override.
-//
-// One pass over classified.sub computes the ready count and the
-// AgentStatus list together so the reconcile path never walks the
-// same map twice on the stable path.
+// buildStatus rebuilds CocoonSetStatus from classified pods. Empty phase is auto-derived.
 func buildStatus(cs *cocoonv1.CocoonSet, classified classifiedPods, phase cocoonv1.CocoonSetPhase) cocoonv1.CocoonSetStatus {
 	desired := int32(1) + cs.Spec.Agent.Replicas
 	ready := int32(0)
@@ -107,9 +91,6 @@ func buildStatus(cs *cocoonv1.CocoonSet, classified classifiedPods, phase cocoon
 	}
 }
 
-// derivePhase reports the running-state phase implied by the
-// (main, ready, desired) triple. Used by buildStatus on the no-override
-// path.
 func derivePhase(main *corev1.Pod, ready, desired int32) cocoonv1.CocoonSetPhase {
 	switch {
 	case main == nil:
@@ -151,11 +132,8 @@ func toolboxStatusFromPod(pod *corev1.Pod, name string) cocoonv1.ToolboxStatus {
 	}
 }
 
-// buildConditions returns the freshly-computed Ready and
-// Progressing conditions for the supplied phase. Timestamps are
-// left zero so apimeta.SetStatusCondition (called from
-// mergeConditions on the patchStatus path) preserves the existing
-// LastTransitionTime when nothing else changed.
+// buildConditions returns Ready and Progressing conditions.
+// Timestamps are left zero so mergeConditions preserves existing LastTransitionTime.
 func buildConditions(cs *cocoonv1.CocoonSet, ready, desired int32, phase cocoonv1.CocoonSetPhase) []metav1.Condition {
 	readyStatus := metav1.ConditionFalse
 	readyReason := conditionReasonNotReady

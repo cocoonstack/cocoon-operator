@@ -1,7 +1,4 @@
-// Package hibernation hosts the CocoonHibernation reconciler. It
-// drives a single hibernate / wake transition per CocoonHibernation
-// CR by toggling the hibernate annotation on the target pod and
-// polling epoch for the snapshot tag.
+// Package hibernation drives hibernate/wake transitions for CocoonHibernation CRs.
 package hibernation
 
 import (
@@ -26,18 +23,8 @@ import (
 )
 
 const (
-	// requeueInterval is how long the reconciler waits between
-	// probes to epoch / pod status while a hibernation or wake
-	// transition is in flight.
 	requeueInterval = 5 * time.Second
-
-	// wakeTimeout bounds how long a CocoonHibernation can stay at
-	// Waking before the reconciler gives up and marks it Failed.
-	// Without this budget a silently broken wake (e.g. vk-cocoon
-	// unable to pull the snapshot, or cocoon clone looping) would
-	// leave the CR stuck at Waking forever — IsContainerRunning is
-	// a local probe with no error channel, so only a timeout can
-	// surface the failure to the user.
+	// wakeTimeout bounds how long Waking can last before marking Failed.
 	wakeTimeout = 5 * time.Minute
 
 	conditionReasonPending = "Pending"
@@ -45,26 +32,19 @@ const (
 	conditionReasonFailed  = "Failed"
 )
 
-// Reconciler reconciles a CocoonHibernation object.
 type Reconciler struct {
 	client.Client
 	Scheme *runtime.Scheme
 	Epoch  epoch.SnapshotRegistry
 }
 
-// SetupWithManager registers the reconciler against the supplied
-// controller-runtime manager.
 func (r *Reconciler) SetupWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&cocoonv1.CocoonHibernation{}).
 		Complete(r)
 }
 
-// Reconcile drives a single hibernate or wake transition for one
-// pod. Each invocation either completes the transition (no requeue)
-// or schedules another probe a few seconds later. A previous Failed
-// phase is recoverable: a successful path through the switch below
-// will overwrite the failure with the new in-flight state.
+// Reconcile drives a single hibernate or wake transition. Failed phases are recoverable.
 func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	logger := log.WithFunc("hibernation.Reconciler.Reconcile")
 
@@ -76,7 +56,6 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 		return ctrl.Result{}, fmt.Errorf("get hibernation %s: %w", req.NamespacedName, err)
 	}
 
-	// Resolve the target pod from spec.podRef.
 	if hib.Spec.PodRef.Name == "" {
 		return ctrl.Result{}, r.markFailed(ctx, &hib, "spec.podRef.name is required")
 	}
@@ -106,12 +85,7 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 	}
 }
 
-// reconcileHibernate writes HibernateState(true) onto the pod and
-// probes epoch for the snapshot tag. On success the hibernation is
-// marked Hibernated; otherwise the reconciler requeues. A probe
-// error (transport failure, 5xx, auth) surfaces as a returned error
-// so controller-runtime logs + requeues with backoff instead of
-// silently retrying every requeueInterval.
+// reconcileHibernate sets hibernate annotation and polls epoch for the snapshot tag.
 func (r *Reconciler) reconcileHibernate(ctx context.Context, hib *cocoonv1.CocoonHibernation, pod *corev1.Pod, vmName string) (ctrl.Result, error) {
 	if err := commonk8s.PatchHibernateState(ctx, r.Client, pod, true); err != nil {
 		return ctrl.Result{}, fmt.Errorf("patch hibernate annotation: %w", err)
@@ -119,9 +93,6 @@ func (r *Reconciler) reconcileHibernate(ctx context.Context, hib *cocoonv1.Cocoo
 
 	present, err := r.Epoch.HasManifest(ctx, vmName, meta.HibernateSnapshotTag)
 	if err != nil {
-		// HasManifest folds 404 into (false, nil); any error here
-		// is transport / auth / 5xx and must surface so the CR
-		// does not stay stuck at Hibernating.
 		return ctrl.Result{}, fmt.Errorf("probe hibernate snapshot %s: %w", vmName, err)
 	}
 	if present {
@@ -134,8 +105,7 @@ func (r *Reconciler) reconcileHibernate(ctx context.Context, hib *cocoonv1.Cocoo
 	return ctrl.Result{RequeueAfter: requeueInterval}, nil
 }
 
-// reconcileWake removes the hibernate annotation and waits for the
-// pod's container to be running again.
+// reconcileWake clears the hibernate annotation and waits for the container to run.
 func (r *Reconciler) reconcileWake(ctx context.Context, hib *cocoonv1.CocoonHibernation, pod *corev1.Pod, vmName string) (ctrl.Result, error) {
 	logger := log.WithFunc("hibernation.Reconciler.reconcileWake")
 	if err := commonk8s.PatchHibernateState(ctx, r.Client, pod, false); err != nil {
@@ -143,22 +113,13 @@ func (r *Reconciler) reconcileWake(ctx context.Context, hib *cocoonv1.CocoonHibe
 	}
 
 	if meta.IsContainerRunning(pod) {
-		// vk-cocoon has restored the VM. Drop the snapshot tag so a
-		// future hibernate has a clean slate. A failure here is
-		// non-fatal: a stale tag will be overwritten by the next
-		// hibernate, and surfacing the error would block wake on a
-		// transient registry hiccup.
+		// Drop snapshot tag (non-fatal; stale tag gets overwritten on next hibernate).
 		if err := r.Epoch.DeleteManifest(ctx, vmName, meta.HibernateSnapshotTag); err != nil {
 			logger.Warnf(ctx, "delete hibernation snapshot %s: %v", vmName, err)
 		}
 		return ctrl.Result{}, r.setPhase(ctx, hib, cocoonv1.CocoonHibernationPhaseActive, vmName)
 	}
 
-	// Enforce the wake budget. The Ready condition's
-	// LastTransitionTime is set the first time setPhase advances
-	// into Waking and preserved on every subsequent no-op update,
-	// so it survives controller restarts and gives us a stable
-	// reference for how long we have been stuck.
 	if wakeDeadlineExceeded(hib) {
 		return ctrl.Result{}, r.markFailed(ctx, hib,
 			fmt.Sprintf("wake timed out after %s; vk-cocoon never reported the container running", wakeTimeout))
@@ -170,15 +131,9 @@ func (r *Reconciler) reconcileWake(ctx context.Context, hib *cocoonv1.CocoonHibe
 	return ctrl.Result{RequeueAfter: requeueInterval}, nil
 }
 
-// wakeDeadlineExceeded reports whether the CocoonHibernation has
-// been at Waking long enough that we should give up and fail the
-// transition. It reads the transition timestamp from the Ready
-// condition so the deadline is persisted in Status and survives
-// operator restarts.
+// wakeDeadlineExceeded checks whether the Waking phase has exceeded wakeTimeout.
 func wakeDeadlineExceeded(hib *cocoonv1.CocoonHibernation) bool {
 	if hib.Status.Phase != cocoonv1.CocoonHibernationPhaseWaking {
-		// Haven't even observed the Waking phase yet — the first
-		// reconcile in this wake transition is free by definition.
 		return false
 	}
 	ready := apimeta.FindStatusCondition(hib.Status.Conditions, commonk8s.ConditionTypeReady)
@@ -188,18 +143,9 @@ func wakeDeadlineExceeded(hib *cocoonv1.CocoonHibernation) bool {
 	return time.Since(ready.LastTransitionTime.Time) > wakeTimeout
 }
 
-// setPhase patches the CocoonHibernation status with the supplied
-// phase and uses apimeta.SetStatusCondition so the existing
-// LastTransitionTime survives a no-op update. A previous Failed
-// phase will be cleared as the recovery transition flows through.
-//
-// Failed→Waking re-entry needs a manual timestamp refresh:
-// SetStatusCondition only bumps LastTransitionTime when the Ready
-// Status field flips, and both Failed and Waking map to
-// Ready=False. Without the override below, a recovered wake would
-// inherit the stale timestamp from the previous failure and
-// wakeDeadlineExceeded would trip immediately on the next
-// reconcile, making recovery from a Failed wake impossible.
+// setPhase patches status, preserving timestamps on no-op updates.
+// On Failed->Waking re-entry, it refreshes LastTransitionTime so the wake deadline
+// does not inherit the stale timestamp from the previous failure.
 func (r *Reconciler) setPhase(ctx context.Context, hib *cocoonv1.CocoonHibernation, phase cocoonv1.CocoonHibernationPhase, vmName string) error {
 	if hib.Status.Phase == phase && hib.Status.VMName == vmName {
 		return nil
@@ -222,11 +168,7 @@ func (r *Reconciler) setPhase(ctx context.Context, hib *cocoonv1.CocoonHibernati
 	return nil
 }
 
-// markFailed marks the hibernation as Failed with a one-shot
-// message. A subsequent pass through Reconcile that finds the
-// failure preconditions cleared (e.g. the pod now exists) will land
-// in setPhase and overwrite the Failed condition with the new
-// in-flight state.
+// markFailed sets the Failed phase. A subsequent reconcile can recover by overwriting it.
 func (r *Reconciler) markFailed(ctx context.Context, hib *cocoonv1.CocoonHibernation, msg string) error {
 	if err := commonk8s.PatchStatus(ctx, r.Client, hib, func(h *cocoonv1.CocoonHibernation) {
 		h.Status.ObservedGeneration = h.Generation
@@ -240,9 +182,7 @@ func (r *Reconciler) markFailed(ctx context.Context, hib *cocoonv1.CocoonHiberna
 	return nil
 }
 
-// readyCondition returns the Ready condition that mirrors a phase.
-// LastTransitionTime is left zero so apimeta.SetStatusCondition
-// preserves the existing timestamp on no-op updates.
+// readyCondition maps a phase to a Ready condition with zero timestamp for merge safety.
 func readyCondition(phase cocoonv1.CocoonHibernationPhase, generation int64) metav1.Condition {
 	switch phase {
 	case cocoonv1.CocoonHibernationPhaseHibernated, cocoonv1.CocoonHibernationPhaseActive:

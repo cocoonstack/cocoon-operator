@@ -96,8 +96,6 @@ func TestStatusEqualIgnoresConditionTimestamps(t *testing.T) {
 	b := buildStatus(cs, classifiedPods{
 		sub: map[int32]*corev1.Pod{}, toolbox: map[string]*corev1.Pod{}, allByName: map[string]*corev1.Pod{},
 	}, cocoonv1.CocoonSetPhasePending)
-	// Conditions carry zero timestamps from buildStatus; semantic
-	// deep-equal must agree two identical builds are equivalent.
 	if !equality.Semantic.DeepEqual(a, b) {
 		t.Errorf("equality.Semantic.DeepEqual must accept identical builds")
 	}

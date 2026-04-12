@@ -14,9 +14,6 @@ import (
 	"github.com/cocoonstack/cocoon-common/meta"
 )
 
-// testScheme returns a scheme with corev1 + cocoonv1 types
-// registered, matching what the operator's main wires up so the
-// pod builders can resolve the controller reference.
 func testScheme(t *testing.T) *runtime.Scheme {
 	t.Helper()
 	scheme := runtime.NewScheme()

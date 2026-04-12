@@ -19,8 +19,6 @@ import (
 	"github.com/cocoonstack/cocoon-common/meta"
 )
 
-// testScheme assembles the runtime.Scheme the reconciler fake
-// client needs: core k8s types plus the cocoon CRDs.
 func testScheme(t *testing.T) *runtime.Scheme {
 	t.Helper()
 	sch := runtime.NewScheme()
@@ -33,10 +31,6 @@ func testScheme(t *testing.T) *runtime.Scheme {
 	return sch
 }
 
-// fakeRegistry is a SnapshotRegistry stand-in for the hibernation
-// tests. The behaviour of HasManifest / DeleteManifest is fully
-// driven by the bool fields so each test can simulate a particular
-// epoch state without standing up a real client.
 type fakeRegistry struct {
 	manifestPresent bool
 	manifestErr     error
@@ -120,11 +114,6 @@ func TestFakeRegistryDeleteRecords(t *testing.T) {
 	}
 }
 
-// TestPodVMNameRoundtrip exercises the meta.VMSpec annotation
-// roundtrip on the same shape of pod the cocoonset reconciler
-// produces. Building it inline (rather than reaching across into
-// the cocoonset package) keeps the hibernation tests free of any
-// reverse dependency on cocoonset.
 func TestPodVMNameRoundtrip(t *testing.T) {
 	pod := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "demo-0", Namespace: "ns"}}
 	(&meta.VMSpec{VMName: "vk-ns-demo-0", Managed: true}).Apply(pod)
@@ -133,11 +122,8 @@ func TestPodVMNameRoundtrip(t *testing.T) {
 	}
 }
 
-// TestReconcileHibernateSurfacesProbeError verifies the end-to-end
-// contract the epoch ErrManifestNotFound sentinel enables: a real
-// transport / server failure from HasManifest now bubbles out of
-// Reconcile instead of being folded into (false, nil) and polled
-// forever with the CR stuck at Hibernating.
+// TestReconcileHibernateSurfacesProbeError verifies that transport/server errors
+// from HasManifest bubble out instead of being silently polled forever.
 func TestReconcileHibernateSurfacesProbeError(t *testing.T) {
 	hib := &cocoonv1.CocoonHibernation{
 		ObjectMeta: metav1.ObjectMeta{Name: "hib", Namespace: "ns"},
@@ -148,10 +134,7 @@ func TestReconcileHibernateSurfacesProbeError(t *testing.T) {
 	}
 	pod := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "demo-0", Namespace: "ns"}}
 	(&meta.VMSpec{VMName: "vk-ns-demo-0", Managed: true}).Apply(pod)
-	// The pod must already be in the Hibernate state so
-	// PatchHibernateState short-circuits — otherwise the fake client
-	// would try to issue a no-op Patch against a newly mutated
-	// object before the interesting HasManifest call.
+	// Pre-set so PatchHibernateState short-circuits before the interesting HasManifest call.
 	(meta.HibernateState(true)).Apply(pod)
 
 	scheme := testScheme(t)
@@ -181,9 +164,6 @@ func TestReconcileHibernateSurfacesProbeError(t *testing.T) {
 	}
 }
 
-// TestReconcileHibernateFoldsAbsenceToRequeue verifies the happy
-// "not yet pushed" path still keeps polling. Absence -> (false, nil)
-// is the fakeRegistry default and must not fail Reconcile.
 func TestReconcileHibernateFoldsAbsenceToRequeue(t *testing.T) {
 	hib := &cocoonv1.CocoonHibernation{
 		ObjectMeta: metav1.ObjectMeta{Name: "hib", Namespace: "ns"},
@@ -219,10 +199,6 @@ func TestReconcileHibernateFoldsAbsenceToRequeue(t *testing.T) {
 	}
 }
 
-// TestWakeDeadlineExceeded covers the three interesting states for
-// the wake-timeout helper: freshly-entered Waking (fresh budget),
-// Waking past the deadline (should fail), and any non-Waking phase
-// (trivially ok regardless of timestamp).
 func TestWakeDeadlineExceeded(t *testing.T) {
 	oldReady := metav1.Condition{
 		Type:               commonk8s.ConditionTypeReady,
@@ -276,11 +252,6 @@ func TestWakeDeadlineExceeded(t *testing.T) {
 	}
 }
 
-// TestReconcileWakeFailsOnTimeout drives reconcileWake end-to-end
-// against a CR that has been Waking for longer than wakeTimeout
-// and asserts the reconciler transitions it to Failed. Before this
-// fix a persistently broken wake (vk-cocoon never marks the
-// container running) would stay at Waking forever.
 func TestReconcileWakeFailsOnTimeout(t *testing.T) {
 	hib := &cocoonv1.CocoonHibernation{
 		ObjectMeta: metav1.ObjectMeta{Name: "hib", Namespace: "ns"},
@@ -300,7 +271,6 @@ func TestReconcileWakeFailsOnTimeout(t *testing.T) {
 	}
 	pod := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "demo-0", Namespace: "ns"}}
 	(&meta.VMSpec{VMName: "vk-ns-demo-0", Managed: true}).Apply(pod)
-	// Container is NOT running — the stuck state we are testing.
 
 	scheme := testScheme(t)
 	cli := ctrlfake.NewClientBuilder().
@@ -325,16 +295,8 @@ func TestReconcileWakeFailsOnTimeout(t *testing.T) {
 	}
 }
 
-// TestReconcileWakeRecoversFromFailed proves the Failed→Waking
-// re-entry path refreshes the Ready condition's LastTransitionTime.
-// SetStatusCondition preserves the old timestamp across Status=False
-// → Status=False transitions (both Failed and Waking carry
-// Ready=False), so without an explicit override the first reconcile
-// after recovery would inherit an already-expired deadline and
-// markFailed again on the next tick — making recovery from a wake
-// timeout impossible. The regression test drives a stale-Failed CR
-// through Reconcile and asserts the new phase is Waking with a
-// fresh LastTransitionTime.
+// TestReconcileWakeRecoversFromFailed verifies that Failed->Waking re-entry
+// refreshes LastTransitionTime so the wake deadline does not trip immediately.
 func TestReconcileWakeRecoversFromFailed(t *testing.T) {
 	staleTime := metav1.NewTime(time.Now().Add(-2 * wakeTimeout))
 	hib := &cocoonv1.CocoonHibernation{
@@ -384,8 +346,7 @@ func TestReconcileWakeRecoversFromFailed(t *testing.T) {
 	if !ready.LastTransitionTime.Time.After(staleTime.Time) {
 		t.Errorf("LastTransitionTime = %v (stale = %v), want refreshed", ready.LastTransitionTime.Time, staleTime.Time)
 	}
-	// Second reconcile must not re-fail: the fresh timestamp means
-	// wakeDeadlineExceeded stays false and the CR keeps polling.
+	// Second reconcile must not re-fail with the fresh timestamp.
 	if _, err := r.Reconcile(t.Context(), ctrl.Request{
 		NamespacedName: types.NamespacedName{Namespace: "ns", Name: "hib"},
 	}); err != nil {

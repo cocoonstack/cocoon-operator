@@ -1,14 +1,4 @@
 // cocoon-operator runs the CocoonSet and CocoonHibernation controllers.
-//
-// CocoonSet manages a group of VM-backed pods (one main agent + N
-// sub-agents + M toolboxes); CocoonHibernation drives per-pod
-// hibernate / wake transitions through vk-cocoon. Both reconcilers
-// are built on controller-runtime and consume the typed CRD shapes
-// shipped from cocoon-common/apis/v1.
-//
-// This file is the binary entry point. The reconcilers themselves
-// live in the cocoonset and hibernation packages; the epoch
-// SnapshotRegistry adapter lives in the epoch package.
 package main
 
 import (
@@ -44,9 +34,6 @@ const (
 )
 
 func main() {
-	// LEADER_ELECT defaults to true; an unparseable value silently
-	// falls back to the default — same lenient semantics as
-	// flag-defined env-var fallbacks elsewhere in cocoon.
 	leaderDefault := commonk8s.EnvBool("LEADER_ELECT", true)
 
 	var (
@@ -61,11 +48,7 @@ func main() {
 
 	ctx := context.Background()
 	commonlog.Setup(ctx, "OPERATOR_LOG_LEVEL")
-	// controller-runtime emits a goroutine-stack warning at startup if no
-	// global logr backend was set. We log through projecteru2/core/log
-	// (commonlog above), not logr, so silence controller-runtime's own
-	// logger with logr.Discard. Reconciler-level errors are still surfaced
-	// via the per-reconciler `log.WithFunc(...).Errorf` calls.
+	// Silence controller-runtime's own logger; we use core/log instead.
 	crlog.SetLogger(logr.Discard())
 	logger := log.WithFunc("main")
 
@@ -121,8 +104,6 @@ func main() {
 	}
 }
 
-// buildScheme returns a runtime.Scheme with the core kubernetes
-// types and the cocoon-common CRD types registered.
 func buildScheme() *runtime.Scheme {
 	scheme := runtime.NewScheme()
 	utilruntime.Must(clientgoscheme.AddToScheme(scheme))
