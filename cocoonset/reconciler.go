@@ -230,17 +230,31 @@ func (r *Reconciler) reconcileDelete(ctx context.Context, cs *cocoonv1.CocoonSet
 		return ctrl.Result{}, fmt.Errorf("list owned pods for delete: %w", err)
 	}
 
+	// Phase 1: delete all pods and let vk-cocoon finish snapshot push.
 	for i := range podList.Items {
 		if ctxErr := ctx.Err(); ctxErr != nil {
 			return ctrl.Result{}, ctxErr
 		}
 		pod := &podList.Items[i]
-		spec := meta.ParseVMSpec(pod)
-		shouldGC := r.Epoch != nil && meta.ShouldSnapshotVM(spec)
 		if err := client.IgnoreNotFound(r.Delete(ctx, pod)); err != nil {
 			return ctrl.Result{}, fmt.Errorf("delete pod %s/%s: %w", pod.Namespace, pod.Name, err)
 		}
-		if shouldGC && spec.VMName != "" {
+	}
+
+	// Phase 2: GC snapshot tags from epoch. Runs after all pod delete
+	// requests are issued, giving vk-cocoon time to finish any snapshot
+	// save/push during its DeletePod handler. This reduces the window
+	// for a race where DeleteManifest runs before vk-cocoon finishes pushing.
+	if r.Epoch != nil {
+		for i := range podList.Items {
+			if ctxErr := ctx.Err(); ctxErr != nil {
+				return ctrl.Result{}, ctxErr
+			}
+			pod := &podList.Items[i]
+			spec := meta.ParseVMSpec(pod)
+			if !meta.ShouldSnapshotVM(spec) || spec.VMName == "" {
+				continue
+			}
 			if err := r.Epoch.DeleteManifest(ctx, spec.VMName, meta.DefaultSnapshotTag); err != nil {
 				logger.Warnf(ctx, "delete snapshot %s: %v", spec.VMName, err)
 			}
