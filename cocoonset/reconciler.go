@@ -241,15 +241,24 @@ func (r *Reconciler) reconcileDelete(ctx context.Context, cs *cocoonv1.CocoonSet
 		}
 	}
 
-	// Phase 2: GC snapshot tags from epoch. Runs after all pod delete
-	// requests are issued, giving vk-cocoon time to finish any snapshot
-	// save/push during its DeletePod handler. This reduces the window
-	// for a race where DeleteManifest runs before vk-cocoon finishes pushing.
+	// Requeue if any pods still exist — vk-cocoon's DeletePod may still
+	// be running snapshot save/push. We only GC epoch tags and remove the
+	// finalizer once every pod is fully gone from the API server.
+	var remaining corev1.PodList
+	if err := r.List(ctx, &remaining,
+		client.InNamespace(cs.Namespace),
+		client.MatchingLabels{meta.LabelCocoonSet: cs.Name},
+	); err != nil {
+		return ctrl.Result{}, fmt.Errorf("re-list pods after delete: %w", err)
+	}
+	if len(remaining.Items) > 0 {
+		logger.Infof(ctx, "waiting for %d pods to terminate before GC", len(remaining.Items))
+		return ctrl.Result{RequeueAfter: requeueWaitForMain}, nil
+	}
+
+	// All pods gone — safe to GC snapshot tags from epoch.
 	if r.Epoch != nil {
 		for i := range podList.Items {
-			if ctxErr := ctx.Err(); ctxErr != nil {
-				return ctrl.Result{}, ctxErr
-			}
 			pod := &podList.Items[i]
 			spec := meta.ParseVMSpec(pod)
 			if !meta.ShouldSnapshotVM(spec) || spec.VMName == "" {
