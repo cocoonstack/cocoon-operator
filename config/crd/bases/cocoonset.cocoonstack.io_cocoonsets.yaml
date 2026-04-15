@@ -55,14 +55,13 @@ spec:
           metadata:
             type: object
           spec:
-            description: CocoonSetSpec is the desired state of a CocoonSet.
+            description: CocoonSetSpec defines the desired state of a CocoonSet.
             properties:
               agent:
-                description: Agent describes the main agent VM and any sub-agent replicas.
+                description: AgentSpec defines the configuration for agent VMs in
+                  a CocoonSet.
                 properties:
                   envFrom:
-                    description: EnvFrom is forwarded to the agent container's envFrom
-                      field.
                     items:
                       description: EnvFromSource represents the source of a set of
                         ConfigMaps or Secrets
@@ -108,24 +107,25 @@ spec:
                           x-kubernetes-map-type: atomic
                       type: object
                     type: array
+                  forcePull:
+                    description: ForcePull bypasses the image cache, forcing a fresh
+                      download from upstream.
+                    type: boolean
                   image:
-                    description: Image is the epoch reference or boot image URL.
                     minLength: 1
                     type: string
                   mode:
                     default: clone
-                    description: Mode controls how the VM is brought up.
+                    description: AgentMode defines the mode of an agent VM.
                     enum:
                     - clone
                     - run
                     type: string
                   network:
-                    description: Network is the CNI conflist name to use; empty means
-                      cocoon default.
                     type: string
                   os:
                     default: linux
-                    description: OS is the guest operating system.
+                    description: OSType defines the guest operating system type.
                     enum:
                     - linux
                     - windows
@@ -133,15 +133,14 @@ spec:
                     type: string
                   replicas:
                     default: 0
-                    description: |-
-                      Replicas is the number of sub-agents to fork from the main agent.
-                      The main agent is always created in addition to Replicas.
+                    description: Replicas is the number of sub-agents; the main agent
+                      is always created in addition.
                     format: int32
                     minimum: 0
                     type: integer
                   resources:
-                    description: Resources passes through CPU/memory hints to the
-                      underlying pod.
+                    description: ResourceRequirements describes the compute resource
+                      requirements.
                     properties:
                       claims:
                         description: |-
@@ -200,14 +199,11 @@ spec:
                         type: object
                     type: object
                   serviceAccountName:
-                    description: ServiceAccountName overrides the agent pod's serviceAccountName.
                     type: string
                   storage:
                     anyOf:
                     - type: integer
                     - type: string
-                    description: Storage is the COW disk size to allocate for each
-                      VM.
                     pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
                     x-kubernetes-int-or-string: true
                 required:
@@ -215,57 +211,47 @@ spec:
                 type: object
               nodePool:
                 default: default
-                description: |-
-                  NodePool selects the cocoon node pool that should host this CocoonSet.
-                  vk-cocoon nodes are labeled with cocoonstack.io/pool=<name>.
                 type: string
               snapshotPolicy:
                 default: always
-                description: SnapshotPolicy controls when vk-cocoon snapshots VMs
-                  before destroying them.
+                description: SnapshotPolicy defines when VM snapshots are taken.
                 enum:
                 - always
                 - main-only
                 - never
                 type: string
               suspend:
-                description: Suspend, when true, hibernates every managed pod.
                 type: boolean
               toolboxes:
-                description: Toolboxes are companion VMs scheduled alongside the agents.
                 items:
-                  description: ToolboxSpec describes a companion toolbox VM scheduled
-                    alongside agents.
+                  description: ToolboxSpec defines the configuration for a toolbox
+                    VM in a CocoonSet.
                   properties:
                     image:
-                      description: Image is the epoch reference or boot image URL.
-                        Required for non-static modes.
                       type: string
                     mode:
                       default: run
-                      description: Mode controls how the toolbox VM is brought up.
+                      description: ToolboxMode defines the mode of a toolbox VM.
                       enum:
                       - run
                       - clone
                       - static
                       type: string
                     name:
-                      description: Name is unique within the CocoonSet and must follow
-                        RFC 1123 label rules.
                       minLength: 1
                       pattern: ^[a-z0-9]([-a-z0-9]*[a-z0-9])?$
                       type: string
                     os:
                       default: linux
-                      description: OS is the guest operating system.
+                      description: OSType defines the guest operating system type.
                       enum:
                       - linux
                       - windows
                       - android
                       type: string
                     resources:
-                      description: Resources passes through CPU/memory hints to the
-                        underlying pod.
+                      description: ResourceRequirements describes the compute resource
+                        requirements.
                       properties:
                         claims:
                           description: |-
@@ -324,23 +310,16 @@ spec:
                           type: object
                       type: object
                     staticIP:
-                      description: StaticIP is the pre-assigned IP for static-mode
-                        toolboxes.
                       type: string
                     staticVMID:
-                      description: StaticVMID is the pre-assigned VM identifier for
-                        static-mode toolboxes.
                       type: string
                     storage:
                       anyOf:
                       - type: integer
                       - type: string
-                      description: Storage is the COW disk size to allocate.
                       pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
                       x-kubernetes-int-or-string: true
                     vncPort:
-                      description: VNCPort is the VNC port for graphical access (Windows,
-                        Android).
                       format: int32
                       maximum: 65535
                       minimum: 0
@@ -353,15 +332,12 @@ spec:
             - agent
             type: object
           status:
-            description: CocoonSetStatus is the observed state of a CocoonSet.
+            description: CocoonSetStatus represents the observed state of a CocoonSet.
             properties:
               agents:
-                description: Agents reports per-agent runtime state.
                 items:
-                  description: |-
-                    AgentStatus is the per-agent runtime state. Slot 0 is always the
-                    main agent; ForkedFrom is set only for sub-agents and points at
-                    the main VM they cloned from.
+                  description: AgentStatus represents the observed state of a single
+                    agent VM.
                   properties:
                     forkedFrom:
                       type: string
@@ -386,7 +362,6 @@ spec:
                   type: object
                 type: array
               conditions:
-                description: Conditions follow the standard Kubernetes condition pattern.
                 items:
                   description: Condition contains details for one aspect of the current
                     state of this API Resource.
@@ -446,17 +421,13 @@ spec:
                 - type
                 x-kubernetes-list-type: map
               desiredAgents:
-                description: DesiredAgents is the total number of agents requested
-                  by spec (1 + Replicas).
                 format: int32
                 type: integer
               observedGeneration:
-                description: ObservedGeneration is the .metadata.generation the controller
-                  last reconciled.
                 format: int64
                 type: integer
               phase:
-                description: Phase is the high-level lifecycle phase.
+                description: CocoonSetPhase represents the lifecycle phase of a CocoonSet.
                 enum:
                 - Pending
                 - Running
@@ -465,17 +436,12 @@ spec:
                 - Failed
                 type: string
               readyAgents:
-                description: ReadyAgents is the count of agent pods in the Running
-                  phase.
                 format: int32
                 type: integer
               toolboxes:
-                description: Toolboxes reports per-toolbox runtime state.
                 items:
-                  description: |-
-                    ToolboxStatus is the per-toolbox runtime state. ConnType is the
-                    preferred kubectl-style connection protocol picked by
-                    meta.ConnectionType (ssh / rdp / adb / vnc).
+                  description: ToolboxStatus represents the observed state of a single
+                    toolbox VM.
                   properties:
                     connType:
                       type: string
