@@ -6,7 +6,6 @@ import (
 	"strconv"
 
 	corev1 "k8s.io/api/core/v1"
-	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
@@ -74,20 +73,7 @@ func buildAgentPod(cs *cocoonv1.CocoonSet, slot int32, mainVMName, bindNodeName 
 
 	pod := newManagedPod(cs, podName, role, strconv.FormatInt(int64(slot), 10), scheme)
 
-	spec := meta.VMSpec{
-		VMName:         vmName,
-		Image:          cs.Spec.Agent.Image,
-		Mode:           string(cs.Spec.Agent.Mode.Default()),
-		OS:             string(cs.Spec.Agent.OS.Default()),
-		Network:        cs.Spec.Agent.Network,
-		Storage:        quantityString(cs.Spec.Agent.Storage),
-		SnapshotPolicy: string(cs.Spec.SnapshotPolicy.Default()),
-		ForkFrom:       forkFrom,
-		Managed:        true,
-		ForcePull:      cs.Spec.Agent.ForcePull,
-		ConnType:       string(cs.Spec.Agent.ConnType),
-	}
-	spec.Apply(pod)
+	meta.FromAgentSpec(cs.Spec.Agent, vmName, cs.Spec.SnapshotPolicy, forkFrom).Apply(pod)
 
 	pod.Spec.Containers[0].Resources = cs.Spec.Agent.Resources
 	pod.Spec.Containers[0].EnvFrom = cs.Spec.Agent.EnvFrom
@@ -106,17 +92,7 @@ func buildToolboxPod(cs *cocoonv1.CocoonSet, tb cocoonv1.ToolboxSpec, scheme *ru
 
 	pod := newManagedPod(cs, podName, meta.RoleToolbox, tb.Name, scheme)
 
-	managed := tb.Mode != cocoonv1.ToolboxModeStatic
-	spec := meta.VMSpec{
-		VMName:         vmName,
-		Image:          tb.Image,
-		Mode:           string(tb.Mode.Default()),
-		OS:             string(tb.OS.Default()),
-		Storage:        quantityString(tb.Storage),
-		SnapshotPolicy: string(cs.Spec.SnapshotPolicy.Default()),
-		Managed:        managed,
-	}
-	spec.Apply(pod)
+	meta.FromToolboxSpec(tb, vmName, cs.Spec.SnapshotPolicy).Apply(pod)
 
 	if tb.Mode == cocoonv1.ToolboxModeStatic {
 		vmRuntime := meta.VMRuntime{VMID: tb.StaticVMID, IP: tb.StaticIP, VNCPort: tb.VNCPort}
@@ -165,11 +141,4 @@ func newManagedPod(cs *cocoonv1.CocoonSet, podName, role, slotLabel string, sche
 		panic(fmt.Errorf("set controller reference: %w", err))
 	}
 	return pod
-}
-
-func quantityString(q *resource.Quantity) string {
-	if q == nil {
-		return ""
-	}
-	return q.String()
 }

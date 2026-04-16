@@ -61,11 +61,27 @@ spec:
                 description: AgentSpec defines the configuration for agent VMs in
                   a CocoonSet.
                 properties:
+                  backend:
+                    default: cloud-hypervisor
+                    description: |-
+                      Backend selects the hypervisor backend used to run a VM.
+                      Firecracker uses direct kernel boot and only supports OCI VM images
+                      (cloudimg URLs and Windows are rejected); the webhook and vk-cocoon
+                      enforce these constraints at admission and run time.
+                    enum:
+                    - cloud-hypervisor
+                    - firecracker
+                    type: string
                   connType:
                     description: |-
-                      ConnType overrides the auto-inferred connection protocol (ssh/rdp/vnc/adb).
-                      Leave empty to use the default inference based on the OS field.
-                      Useful for Linux images that expose RDP (e.g. xrdp).
+                      ConnType is the connection protocol advertised for a VM. Empty
+                      falls back to OS-based inference (Linux→ssh, Windows→rdp, Android→adb);
+                      set explicitly to override (e.g. Linux+xrdp→rdp).
+                    enum:
+                    - ssh
+                    - rdp
+                    - vnc
+                    - adb
                     type: string
                   envFrom:
                     items:
@@ -114,8 +130,8 @@ spec:
                       type: object
                     type: array
                   forcePull:
-                    description: ForcePull bypasses the image cache, forcing a fresh
-                      download from upstream.
+                    description: ForcePull bypasses the image cache and re-pulls from
+                      upstream.
                     type: boolean
                   image:
                     minLength: 1
@@ -128,6 +144,8 @@ spec:
                     - run
                     type: string
                   network:
+                    description: Network selects the cluster network to attach the
+                      VM to.
                     type: string
                   os:
                     default: linux
@@ -210,6 +228,7 @@ spec:
                     anyOf:
                     - type: integer
                     - type: string
+                    description: Storage sizes the VM root volume.
                     pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
                     x-kubernetes-int-or-string: true
                 required:
@@ -233,6 +252,32 @@ spec:
                   description: ToolboxSpec defines the configuration for a toolbox
                     VM in a CocoonSet.
                   properties:
+                    backend:
+                      default: cloud-hypervisor
+                      description: |-
+                        Backend selects the hypervisor backend used to run a VM.
+                        Firecracker uses direct kernel boot and only supports OCI VM images
+                        (cloudimg URLs and Windows are rejected); the webhook and vk-cocoon
+                        enforce these constraints at admission and run time.
+                      enum:
+                      - cloud-hypervisor
+                      - firecracker
+                      type: string
+                    connType:
+                      description: |-
+                        ConnType is the connection protocol advertised for a VM. Empty
+                        falls back to OS-based inference (Linux→ssh, Windows→rdp, Android→adb);
+                        set explicitly to override (e.g. Linux+xrdp→rdp).
+                      enum:
+                      - ssh
+                      - rdp
+                      - vnc
+                      - adb
+                      type: string
+                    forcePull:
+                      description: ForcePull bypasses the image cache and re-pulls
+                        from upstream.
+                      type: boolean
                     image:
                       type: string
                     mode:
@@ -246,6 +291,10 @@ spec:
                     name:
                       minLength: 1
                       pattern: ^[a-z0-9]([-a-z0-9]*[a-z0-9])?$
+                      type: string
+                    network:
+                      description: Network selects the cluster network to attach the
+                        VM to.
                       type: string
                     os:
                       default: linux
@@ -323,6 +372,7 @@ spec:
                       anyOf:
                       - type: integer
                       - type: string
+                      description: Storage sizes the VM root volume.
                       pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
                       x-kubernetes-int-or-string: true
                     vncPort:
@@ -450,6 +500,15 @@ spec:
                     toolbox VM.
                   properties:
                     connType:
+                      description: |-
+                        ConnType is the connection protocol advertised for a VM. Empty
+                        falls back to OS-based inference (Linux→ssh, Windows→rdp, Android→adb);
+                        set explicitly to override (e.g. Linux+xrdp→rdp).
+                      enum:
+                      - ssh
+                      - rdp
+                      - vnc
+                      - adb
                       type: string
                     ip:
                       type: string
