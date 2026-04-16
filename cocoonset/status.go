@@ -127,7 +127,7 @@ func toolboxStatusFromPod(pod *corev1.Pod, name string) cocoonv1.ToolboxStatus {
 		VMID:     vmRuntime.VMID,
 		IP:       vmRuntime.IP,
 		Phase:    string(pod.Status.Phase),
-		ConnType: meta.ConnectionType(spec.OS, vmRuntime.VNCPort > 0),
+		ConnType: cocoonv1.ConnType(meta.ConnectionType(spec.OS, vmRuntime.VNCPort > 0, spec.ConnType)),
 		VNCPort:  vmRuntime.VNCPort,
 	}
 }

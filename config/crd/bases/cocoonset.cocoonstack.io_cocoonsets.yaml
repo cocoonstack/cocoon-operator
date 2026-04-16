@@ -61,6 +61,12 @@ spec:
                 description: AgentSpec defines the configuration for agent VMs in
                   a CocoonSet.
                 properties:
+                  connType:
+                    description: |-
+                      ConnType overrides the auto-inferred connection protocol (ssh/rdp/vnc/adb).
+                      Leave empty to use the default inference based on the OS field.
+                      Useful for Linux images that expose RDP (e.g. xrdp).
+                    type: string
                   envFrom:
                     items:
                       description: EnvFromSource represents the source of a set of

@@ -85,6 +85,7 @@ func buildAgentPod(cs *cocoonv1.CocoonSet, slot int32, mainVMName, bindNodeName 
 		ForkFrom:       forkFrom,
 		Managed:        true,
 		ForcePull:      cs.Spec.Agent.ForcePull,
+		ConnType:       string(cs.Spec.Agent.ConnType),
 	}
 	spec.Apply(pod)
 
