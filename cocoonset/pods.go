@@ -6,6 +6,7 @@ import (
 	"strconv"
 
 	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
@@ -76,6 +77,7 @@ func buildAgentPod(cs *cocoonv1.CocoonSet, slot int32, mainVMName, bindNodeName 
 	meta.FromAgentSpec(cs.Spec.Agent, vmName, cs.Spec.SnapshotPolicy, forkFrom).Apply(pod)
 
 	pod.Spec.Containers[0].Resources = cs.Spec.Agent.Resources
+	applyStorageRequest(pod, cs.Spec.Agent.Storage)
 	pod.Spec.Containers[0].EnvFrom = cs.Spec.Agent.EnvFrom
 	if cs.Spec.Agent.ServiceAccountName != "" {
 		pod.Spec.ServiceAccountName = cs.Spec.Agent.ServiceAccountName
@@ -99,6 +101,7 @@ func buildToolboxPod(cs *cocoonv1.CocoonSet, tb cocoonv1.ToolboxSpec, scheme *ru
 		vmRuntime.Apply(pod)
 	}
 	pod.Spec.Containers[0].Resources = tb.Resources
+	applyStorageRequest(pod, tb.Storage)
 	return pod
 }
 
@@ -141,4 +144,18 @@ func newManagedPod(cs *cocoonv1.CocoonSet, podName, role, slotLabel string, sche
 		panic(fmt.Errorf("set controller reference: %w", err))
 	}
 	return pod
+}
+
+// applyStorageRequest propagates the VMOptions.Storage quantity into the
+// pod's ephemeral-storage resource request so the K8s scheduler can
+// account for VM disk usage. No-op when storage is nil.
+func applyStorageRequest(pod *corev1.Pod, storage *resource.Quantity) {
+	if storage == nil || storage.IsZero() {
+		return
+	}
+	c := &pod.Spec.Containers[0]
+	if c.Resources.Requests == nil {
+		c.Resources.Requests = corev1.ResourceList{}
+	}
+	c.Resources.Requests[corev1.ResourceEphemeralStorage] = *storage
 }
