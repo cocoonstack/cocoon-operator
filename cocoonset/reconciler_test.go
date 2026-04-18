@@ -114,7 +114,7 @@ func TestApplyUnsuspendSkipsPodHibernatedByCR(t *testing.T) {
 		ObjectMeta: metav1.ObjectMeta{Name: "demo-hib", Namespace: "ns"},
 		Spec: cocoonv1.CocoonHibernationSpec{
 			Desire: cocoonv1.HibernationDesireHibernate,
-			PodRef: corev1.LocalObjectReference{Name: "demo-0"},
+			PodRef: cocoonv1.HibernationPodRef{Name: "demo-0"},
 		},
 	}
 

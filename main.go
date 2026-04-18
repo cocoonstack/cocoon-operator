@@ -25,6 +25,7 @@ import (
 	"github.com/cocoonstack/cocoon-operator/epoch"
 	"github.com/cocoonstack/cocoon-operator/hibernation"
 	"github.com/cocoonstack/cocoon-operator/version"
+	"github.com/cocoonstack/epoch/registryclient"
 )
 
 const (
@@ -77,7 +78,11 @@ func main() {
 		logger.Fatalf(ctx, err, "add readyz check: %v", err)
 	}
 
-	epochClient := epoch.New(commonk8s.EnvOrDefault("EPOCH_URL", "http://epoch.cocoon-system.svc:8080"), os.Getenv("EPOCH_TOKEN"))
+	var epochOpts []registryclient.Option
+	if ca := os.Getenv("EPOCH_CA_CERT"); ca != "" {
+		epochOpts = append(epochOpts, registryclient.WithCACert(ca))
+	}
+	epochClient := epoch.New(commonk8s.EnvOrDefault("EPOCH_URL", "http://epoch.cocoon-system.svc:8080"), os.Getenv("EPOCH_TOKEN"), epochOpts...)
 
 	if err := (&cocoonset.Reconciler{
 		Client: mgr.GetClient(),

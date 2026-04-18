@@ -129,7 +129,7 @@ func TestReconcileHibernateSurfacesProbeError(t *testing.T) {
 		ObjectMeta: metav1.ObjectMeta{Name: "hib", Namespace: "ns"},
 		Spec: cocoonv1.CocoonHibernationSpec{
 			Desire: cocoonv1.HibernationDesireHibernate,
-			PodRef: corev1.LocalObjectReference{Name: "demo-0"},
+			PodRef: cocoonv1.HibernationPodRef{Name: "demo-0"},
 		},
 	}
 	pod := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "demo-0", Namespace: "ns"}}
@@ -169,7 +169,7 @@ func TestReconcileHibernateFoldsAbsenceToRequeue(t *testing.T) {
 		ObjectMeta: metav1.ObjectMeta{Name: "hib", Namespace: "ns"},
 		Spec: cocoonv1.CocoonHibernationSpec{
 			Desire: cocoonv1.HibernationDesireHibernate,
-			PodRef: corev1.LocalObjectReference{Name: "demo-0"},
+			PodRef: cocoonv1.HibernationPodRef{Name: "demo-0"},
 		},
 	}
 	pod := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "demo-0", Namespace: "ns"}}
@@ -257,7 +257,7 @@ func TestReconcileWakeFailsOnTimeout(t *testing.T) {
 		ObjectMeta: metav1.ObjectMeta{Name: "hib", Namespace: "ns"},
 		Spec: cocoonv1.CocoonHibernationSpec{
 			Desire: cocoonv1.HibernationDesireWake,
-			PodRef: corev1.LocalObjectReference{Name: "demo-0"},
+			PodRef: cocoonv1.HibernationPodRef{Name: "demo-0"},
 		},
 		Status: cocoonv1.CocoonHibernationStatus{
 			Phase: cocoonv1.CocoonHibernationPhaseWaking,
@@ -303,7 +303,7 @@ func TestReconcileWakeRecoversFromFailed(t *testing.T) {
 		ObjectMeta: metav1.ObjectMeta{Name: "hib", Namespace: "ns"},
 		Spec: cocoonv1.CocoonHibernationSpec{
 			Desire: cocoonv1.HibernationDesireWake,
-			PodRef: corev1.LocalObjectReference{Name: "demo-0"},
+			PodRef: cocoonv1.HibernationPodRef{Name: "demo-0"},
 		},
 		Status: cocoonv1.CocoonHibernationStatus{
 			Phase: cocoonv1.CocoonHibernationPhaseFailed,
