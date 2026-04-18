@@ -147,6 +147,12 @@ spec:
                     description: Network selects the cluster network to attach the
                       VM to.
                     type: string
+                  noDirectIO:
+                    description: |-
+                      NoDirectIO disables O_DIRECT on writable disks, using host page
+                      cache instead. Useful for dev/test with few VMs and abundant host
+                      memory. Cloud Hypervisor only; ignored by firecracker.
+                    type: boolean
                   os:
                     default: linux
                     description: OSType defines the guest operating system type.
@@ -296,6 +302,12 @@ spec:
                       description: Network selects the cluster network to attach the
                         VM to.
                       type: string
+                    noDirectIO:
+                      description: |-
+                        NoDirectIO disables O_DIRECT on writable disks, using host page
+                        cache instead. Useful for dev/test with few VMs and abundant host
+                        memory. Cloud Hypervisor only; ignored by firecracker.
+                      type: boolean
                     os:
                       default: linux
                       description: OSType defines the guest operating system type.
