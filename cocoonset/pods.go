@@ -89,8 +89,8 @@ func buildAgentPod(cs *cocoonv1.CocoonSet, slot int32, mainVMName, bindNodeName 
 }
 
 func buildToolboxPod(cs *cocoonv1.CocoonSet, tb cocoonv1.ToolboxSpec, scheme *runtime.Scheme) *corev1.Pod {
-	vmName := meta.VMNameForPod(cs.Namespace, tb.Name)
 	podName := fmt.Sprintf("%s-%s", cs.Name, tb.Name)
+	vmName := meta.VMNameForPod(cs.Namespace, podName)
 
 	pod := newManagedPod(cs, podName, meta.RoleToolbox, tb.Name, scheme)
 

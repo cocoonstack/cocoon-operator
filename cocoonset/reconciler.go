@@ -11,6 +11,7 @@ import (
 	"github.com/projecteru2/core/log"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/builder"
@@ -79,7 +80,12 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 		return ctrl.Result{}, fmt.Errorf("list owned pods: %w", err)
 	}
 
-	classified := classifyPods(podList.Items)
+	// Filter out pods not owned by this CocoonSet to prevent stale-label
+	// pods from being counted in status or affected by suspend/delete.
+	owned := slices.DeleteFunc(podList.Items, func(p corev1.Pod) bool {
+		return !metav1.IsControlledBy(&p, &cs)
+	})
+	classified := classifyPods(owned)
 
 	// Stop reconciling if main agent is in a terminal phase (e.g. Failed).
 	if classified.main != nil && meta.IsPodTerminal(classified.main) {
