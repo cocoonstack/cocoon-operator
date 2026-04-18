@@ -73,6 +73,7 @@ There is no `cocoon-vm-snapshots` ConfigMap bridge — epoch is the single sourc
 | `OPERATOR_LOG_LEVEL` | `info` | `projecteru2/core/log` level |
 | `EPOCH_URL` | `http://epoch.cocoon-system.svc:8080` | Base URL of the epoch registry |
 | `EPOCH_TOKEN` | unset | Bearer token (read-only is enough) |
+| `EPOCH_CA_CERT` | unset | Path to PEM-encoded CA certificate for TLS verification against epoch |
 | `METRICS_ADDR` | `:8080` | Prometheus listener |
 | `PROBE_ADDR` | `:8081` | healthz / readyz listener |
 | `LEADER_ELECT` | `true` | Enable leader election so only one replica reconciles |

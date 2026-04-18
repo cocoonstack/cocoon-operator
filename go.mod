@@ -3,8 +3,8 @@ module github.com/cocoonstack/cocoon-operator
 go 1.25.0
 
 require (
-	github.com/cocoonstack/cocoon-common v0.1.8-0.20260418171148-1a5832fd83f6
-	github.com/cocoonstack/epoch v0.1.8-0.20260412085751-8826f2f817ad
+	github.com/cocoonstack/cocoon-common v0.1.8-0.20260418181204-482d3745b26f
+	github.com/cocoonstack/epoch v0.1.9-0.20260418181627-019288d53a7c
 	github.com/go-logr/logr v1.4.3
 	github.com/projecteru2/core v0.0.0-20241016125006-ff909eefe04c
 	k8s.io/api v0.35.3
