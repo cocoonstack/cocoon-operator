@@ -54,7 +54,7 @@ cocoon-operator/
 9. Ensure toolboxes by name; delete extras.
 10. Re-list and patch `/status` (with structural diff so unchanged status patches are no-ops).
 
-Pods are constructed via `meta.FromAgentSpec` / `meta.FromToolboxSpec` factory helpers so the operator never touches the annotation map directly. These factories propagate the full `VMOptions` surface (OS, Backend, ConnType, Network, ForcePull, Storage, Resources) into the pod annotations that vk-cocoon consumes. The `For` watch uses `predicate.GenerationChangedPredicate` so reconciles only fire when the spec actually changes — status-only patches the operator makes itself never loop back. The `Owns` side keeps the unfiltered pod-event firehose because pod status changes are exactly what drives the readyAgents diff.
+Pods are constructed via `meta.FromAgentSpec` / `meta.FromToolboxSpec` factory helpers so the operator never touches the annotation map directly. These factories propagate the full `VMOptions` surface (OS, Backend, ConnType, Network, ForcePull, NoDirectIO, Storage, Resources) into the pod annotations that vk-cocoon consumes. The `For` watch uses `predicate.GenerationChangedPredicate` so reconciles only fire when the spec actually changes — status-only patches the operator makes itself never loop back. The `Owns` side keeps the unfiltered pod-event firehose because pod status changes are exactly what drives the readyAgents diff.
 
 ### CocoonHibernation reconcile loop
 
