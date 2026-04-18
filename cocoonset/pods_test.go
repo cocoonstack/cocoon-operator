@@ -208,3 +208,262 @@ func TestNewManagedPodCarriesCocoonToleration(t *testing.T) {
 		t.Errorf("toleration %s missing", meta.TolerationKey)
 	}
 }
+
+func TestPodSpecMatchesAgentIdenticalSpec(t *testing.T) {
+	cs := newCocoonSet("demo")
+	scheme := testScheme(t)
+	pod := buildAgentPod(cs, 0, "", "", scheme)
+	if !podSpecMatchesAgent(pod, cs, 0) {
+		t.Error("freshly built pod should match its own spec")
+	}
+}
+
+func TestPodSpecMatchesAgentDetectsImageDrift(t *testing.T) {
+	cs := newCocoonSet("demo")
+	scheme := testScheme(t)
+	pod := buildAgentPod(cs, 0, "", "", scheme)
+
+	updated := newCocoonSet("demo", func(cs *cocoonv1.CocoonSet) {
+		cs.Spec.Agent.Image = "ghcr.io/cocoonstack/cocoon/ubuntu:26.04"
+	})
+	if podSpecMatchesAgent(pod, updated, 0) {
+		t.Error("pod with old image should not match updated spec")
+	}
+}
+
+func TestPodSpecMatchesAgentDetectsBackendDrift(t *testing.T) {
+	cs := newCocoonSet("demo")
+	scheme := testScheme(t)
+	pod := buildAgentPod(cs, 0, "", "", scheme)
+
+	updated := newCocoonSet("demo", func(cs *cocoonv1.CocoonSet) {
+		cs.Spec.Agent.Backend = "firecracker"
+	})
+	if podSpecMatchesAgent(pod, updated, 0) {
+		t.Error("pod with old backend should not match updated spec")
+	}
+}
+
+func TestPodSpecMatchesAgentDetectsResourceDrift(t *testing.T) {
+	cs := newCocoonSet("demo", func(cs *cocoonv1.CocoonSet) {
+		cs.Spec.Agent.Resources = corev1.ResourceRequirements{
+			Requests: corev1.ResourceList{
+				corev1.ResourceCPU:    resource.MustParse("1"),
+				corev1.ResourceMemory: resource.MustParse("1Gi"),
+			},
+		}
+	})
+	scheme := testScheme(t)
+	pod := buildAgentPod(cs, 0, "", "", scheme)
+
+	updated := newCocoonSet("demo", func(cs *cocoonv1.CocoonSet) {
+		cs.Spec.Agent.Resources = corev1.ResourceRequirements{
+			Requests: corev1.ResourceList{
+				corev1.ResourceCPU:    resource.MustParse("2"),
+				corev1.ResourceMemory: resource.MustParse("2Gi"),
+			},
+		}
+	})
+	if podSpecMatchesAgent(pod, updated, 0) {
+		t.Error("pod with old resources should not match updated spec")
+	}
+}
+
+func TestPodSpecMatchesToolboxIdenticalSpec(t *testing.T) {
+	cs := newCocoonSet("demo")
+	scheme := testScheme(t)
+	tb := cocoonv1.ToolboxSpec{Name: "tb", Image: "ghcr.io/cocoonstack/cocoon/toolbox:latest", Mode: cocoonv1.ToolboxModeRun}
+	pod := buildToolboxPod(cs, tb, scheme)
+	if !podSpecMatchesToolbox(pod, cs, tb) {
+		t.Error("freshly built toolbox pod should match its own spec")
+	}
+}
+
+func TestPodSpecMatchesToolboxDetectsImageDrift(t *testing.T) {
+	cs := newCocoonSet("demo")
+	scheme := testScheme(t)
+	tb := cocoonv1.ToolboxSpec{Name: "tb", Image: "ghcr.io/cocoonstack/cocoon/toolbox:v1"}
+	pod := buildToolboxPod(cs, tb, scheme)
+
+	updatedTb := cocoonv1.ToolboxSpec{Name: "tb", Image: "ghcr.io/cocoonstack/cocoon/toolbox:v2"}
+	if podSpecMatchesToolbox(pod, cs, updatedTb) {
+		t.Error("toolbox pod with old image should not match updated spec")
+	}
+}
+
+func TestPodSpecMatchesSubAgentPreservesForkFrom(t *testing.T) {
+	cs := newCocoonSet("demo", func(cs *cocoonv1.CocoonSet) {
+		cs.Spec.Agent.Replicas = 1
+	})
+	scheme := testScheme(t)
+	pod := buildAgentPod(cs, 1, "vk-ns-demo-0", "", scheme)
+	if !podSpecMatchesAgent(pod, cs, 1) {
+		t.Error("sub-agent should match when spec is unchanged")
+	}
+}
+
+func TestPodSpecMatchesAgentDetectsServiceAccountDrift(t *testing.T) {
+	cs := newCocoonSet("demo", func(cs *cocoonv1.CocoonSet) {
+		cs.Spec.Agent.ServiceAccountName = "sa-old"
+	})
+	scheme := testScheme(t)
+	pod := buildAgentPod(cs, 0, "", "", scheme)
+
+	updated := newCocoonSet("demo", func(cs *cocoonv1.CocoonSet) {
+		cs.Spec.Agent.ServiceAccountName = "sa-new"
+	})
+	if podSpecMatchesAgent(pod, updated, 0) {
+		t.Error("pod with old service account should not match updated spec")
+	}
+}
+
+func TestPodSpecMatchesAgentDetectsEnvFromDrift(t *testing.T) {
+	cs := newCocoonSet("demo", func(cs *cocoonv1.CocoonSet) {
+		cs.Spec.Agent.EnvFrom = []corev1.EnvFromSource{
+			{ConfigMapRef: &corev1.ConfigMapEnvSource{
+				LocalObjectReference: corev1.LocalObjectReference{Name: "cm-a"},
+			}},
+		}
+	})
+	scheme := testScheme(t)
+	pod := buildAgentPod(cs, 0, "", "", scheme)
+
+	updated := newCocoonSet("demo", func(cs *cocoonv1.CocoonSet) {
+		cs.Spec.Agent.EnvFrom = []corev1.EnvFromSource{
+			{ConfigMapRef: &corev1.ConfigMapEnvSource{
+				LocalObjectReference: corev1.LocalObjectReference{Name: "cm-b"},
+			}},
+		}
+	})
+	if podSpecMatchesAgent(pod, updated, 0) {
+		t.Error("pod with old envFrom should not match updated spec")
+	}
+}
+
+func TestPodSpecMatchesAgentDetectsNodePoolDrift(t *testing.T) {
+	cs := newCocoonSet("demo", func(cs *cocoonv1.CocoonSet) {
+		cs.Spec.NodePool = "gpu"
+	})
+	scheme := testScheme(t)
+	pod := buildAgentPod(cs, 0, "", "", scheme)
+
+	updated := newCocoonSet("demo", func(cs *cocoonv1.CocoonSet) {
+		cs.Spec.NodePool = "cpu"
+	})
+	if podSpecMatchesAgent(pod, updated, 0) {
+		t.Error("pod with old node pool should not match updated spec")
+	}
+}
+
+func TestPodSpecMatchesAgentNodePoolDefaultFallback(t *testing.T) {
+	cs := newCocoonSet("demo") // NodePool empty -> DefaultNodePool
+	scheme := testScheme(t)
+	pod := buildAgentPod(cs, 0, "", "", scheme)
+	if !podSpecMatchesAgent(pod, cs, 0) {
+		t.Error("pod with default node pool should match spec without explicit pool")
+	}
+}
+
+func TestPodSpecMatchesToolboxDetectsStaticVMIDDrift(t *testing.T) {
+	cs := newCocoonSet("demo")
+	scheme := testScheme(t)
+	tb := cocoonv1.ToolboxSpec{
+		Name:       "tb",
+		Mode:       cocoonv1.ToolboxModeStatic,
+		StaticVMID: "qemu-1",
+		StaticIP:   "10.0.0.1",
+		VNCPort:    5901,
+	}
+	pod := buildToolboxPod(cs, tb, scheme)
+
+	updatedTb := cocoonv1.ToolboxSpec{
+		Name:       "tb",
+		Mode:       cocoonv1.ToolboxModeStatic,
+		StaticVMID: "qemu-2",
+		StaticIP:   "10.0.0.1",
+		VNCPort:    5901,
+	}
+	if podSpecMatchesToolbox(pod, cs, updatedTb) {
+		t.Error("toolbox pod with old static VMID should not match updated spec")
+	}
+}
+
+func TestPodSpecMatchesToolboxDetectsStaticIPDrift(t *testing.T) {
+	cs := newCocoonSet("demo")
+	scheme := testScheme(t)
+	tb := cocoonv1.ToolboxSpec{
+		Name:       "tb",
+		Mode:       cocoonv1.ToolboxModeStatic,
+		StaticVMID: "qemu-1",
+		StaticIP:   "10.0.0.1",
+		VNCPort:    5901,
+	}
+	pod := buildToolboxPod(cs, tb, scheme)
+
+	updatedTb := cocoonv1.ToolboxSpec{
+		Name:       "tb",
+		Mode:       cocoonv1.ToolboxModeStatic,
+		StaticVMID: "qemu-1",
+		StaticIP:   "10.0.0.2",
+		VNCPort:    5901,
+	}
+	if podSpecMatchesToolbox(pod, cs, updatedTb) {
+		t.Error("toolbox pod with old static IP should not match updated spec")
+	}
+}
+
+func TestPodSpecMatchesToolboxDetectsVNCPortDrift(t *testing.T) {
+	cs := newCocoonSet("demo")
+	scheme := testScheme(t)
+	tb := cocoonv1.ToolboxSpec{
+		Name:       "tb",
+		Mode:       cocoonv1.ToolboxModeStatic,
+		StaticVMID: "qemu-1",
+		StaticIP:   "10.0.0.1",
+		VNCPort:    5901,
+	}
+	pod := buildToolboxPod(cs, tb, scheme)
+
+	updatedTb := cocoonv1.ToolboxSpec{
+		Name:       "tb",
+		Mode:       cocoonv1.ToolboxModeStatic,
+		StaticVMID: "qemu-1",
+		StaticIP:   "10.0.0.1",
+		VNCPort:    5902,
+	}
+	if podSpecMatchesToolbox(pod, cs, updatedTb) {
+		t.Error("toolbox pod with old VNC port should not match updated spec")
+	}
+}
+
+func TestPodSpecMatchesToolboxStaticIdenticalSpec(t *testing.T) {
+	cs := newCocoonSet("demo")
+	scheme := testScheme(t)
+	tb := cocoonv1.ToolboxSpec{
+		Name:       "tb",
+		Mode:       cocoonv1.ToolboxModeStatic,
+		StaticVMID: "qemu-1",
+		StaticIP:   "10.0.0.1",
+		VNCPort:    5901,
+	}
+	pod := buildToolboxPod(cs, tb, scheme)
+	if !podSpecMatchesToolbox(pod, cs, tb) {
+		t.Error("freshly built static toolbox pod should match its own spec")
+	}
+}
+
+func TestPodSpecMatchesToolboxDetectsNodePoolDrift(t *testing.T) {
+	cs := newCocoonSet("demo", func(cs *cocoonv1.CocoonSet) {
+		cs.Spec.NodePool = "gpu"
+	})
+	scheme := testScheme(t)
+	tb := cocoonv1.ToolboxSpec{Name: "tb", Image: "ghcr.io/cocoonstack/cocoon/toolbox:latest", Mode: cocoonv1.ToolboxModeRun}
+	pod := buildToolboxPod(cs, tb, scheme)
+
+	updated := newCocoonSet("demo", func(cs *cocoonv1.CocoonSet) {
+		cs.Spec.NodePool = "cpu"
+	})
+	if podSpecMatchesToolbox(pod, updated, tb) {
+		t.Error("toolbox pod with old node pool should not match updated spec")
+	}
+}

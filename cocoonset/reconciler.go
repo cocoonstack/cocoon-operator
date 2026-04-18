@@ -115,6 +115,13 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 		return ctrl.Result{}, err
 	}
 
+	if classified.main != nil && !podSpecMatchesAgent(classified.main, &cs, 0) {
+		logger.Infof(ctx, "main agent %s/%s spec drifted, deleting for recreate", classified.main.Namespace, classified.main.Name)
+		if err := r.Delete(ctx, classified.main); err != nil && !apierrors.IsNotFound(err) {
+			return ctrl.Result{}, fmt.Errorf("delete drifted main agent: %w", err)
+		}
+		return ctrl.Result{Requeue: true}, nil
+	}
 	if classified.main == nil {
 		mainPod := buildAgentPod(&cs, 0, "", "", r.Scheme)
 		if err := r.Create(ctx, mainPod); err != nil {
@@ -155,7 +162,15 @@ func (r *Reconciler) ensureSubAgents(ctx context.Context, cs *cocoonv1.CocoonSet
 	logger := log.WithFunc("cocoonset.Reconciler.ensureSubAgents")
 	changed := false
 	for slot := int32(1); slot <= cs.Spec.Agent.Replicas; slot++ {
-		if _, exists := classified.sub[slot]; exists {
+		if pod, exists := classified.sub[slot]; exists {
+			if podSpecMatchesAgent(pod, cs, slot) {
+				continue
+			}
+			logger.Infof(ctx, "sub-agent %s/%s slot %d spec drifted, deleting for recreate", pod.Namespace, pod.Name, slot)
+			if err := r.Delete(ctx, pod); err != nil && !apierrors.IsNotFound(err) {
+				return changed, fmt.Errorf("delete drifted sub-agent slot %d: %w", slot, err)
+			}
+			changed = true
 			continue
 		}
 		subPod := buildAgentPod(cs, slot, mainVMName, mainNodeName, r.Scheme)
@@ -193,15 +208,26 @@ func (r *Reconciler) ensureToolboxes(ctx context.Context, cs *cocoonv1.CocoonSet
 	desired := map[string]bool{}
 	for _, tb := range cs.Spec.Toolboxes {
 		desired[tb.Name] = true
-		if _, exists := classified.toolbox[tb.Name]; exists {
+		if pod, exists := classified.toolbox[tb.Name]; exists {
+			if podSpecMatchesToolbox(pod, cs, tb) {
+				continue
+			}
+			logger.Infof(ctx, "toolbox %s/%s %q spec drifted, deleting for recreate", pod.Namespace, pod.Name, tb.Name)
+			if err := r.Delete(ctx, pod); err != nil && !apierrors.IsNotFound(err) {
+				return changed, fmt.Errorf("delete drifted toolbox %s: %w", tb.Name, err)
+			}
+			changed = true
 			continue
 		}
 		tbPod := buildToolboxPod(cs, tb, r.Scheme)
 		if err := r.Create(ctx, tbPod); err != nil {
-			if apierrors.IsAlreadyExists(err) {
-				continue
+			if !apierrors.IsAlreadyExists(err) {
+				return changed, fmt.Errorf("create toolbox %s: %w", tb.Name, err)
 			}
-			return changed, fmt.Errorf("create toolbox %s: %w", tb.Name, err)
+			if collisionErr := r.checkToolboxCollision(ctx, cs, tbPod, tb.Name); collisionErr != nil {
+				return changed, collisionErr
+			}
+			continue
 		}
 		logger.Infof(ctx, "created toolbox %s/%s", tbPod.Namespace, tbPod.Name)
 		changed = true
@@ -223,6 +249,19 @@ func (r *Reconciler) ensureToolboxes(ctx context.Context, cs *cocoonv1.CocoonSet
 	return changed, nil
 }
 
+func (r *Reconciler) checkToolboxCollision(ctx context.Context, cs *cocoonv1.CocoonSet, tbPod *corev1.Pod, tbName string) error {
+	logger := log.WithFunc("cocoonset.Reconciler.checkToolboxCollision")
+	var existing corev1.Pod
+	if err := r.Get(ctx, client.ObjectKeyFromObject(tbPod), &existing); err != nil {
+		return fmt.Errorf("get existing pod %s/%s: %w", tbPod.Namespace, tbPod.Name, err)
+	}
+	if existing.Labels[meta.LabelRole] == meta.RoleToolbox && metav1.IsControlledBy(&existing, cs) {
+		return nil
+	}
+	logger.Warnf(ctx, "toolbox %s/%s collides with existing pod (role=%s)", tbPod.Namespace, tbPod.Name, existing.Labels[meta.LabelRole])
+	return fmt.Errorf("create toolbox %s: name collision with existing pod %s/%s", tbName, tbPod.Namespace, tbPod.Name)
+}
+
 // reconcileDelete deletes all owned pods, GCs snapshots, and removes the finalizer.
 func (r *Reconciler) reconcileDelete(ctx context.Context, cs *cocoonv1.CocoonSet) (ctrl.Result, error) {
 	logger := log.WithFunc("cocoonset.Reconciler.reconcileDelete")
@@ -236,12 +275,16 @@ func (r *Reconciler) reconcileDelete(ctx context.Context, cs *cocoonv1.CocoonSet
 		return ctrl.Result{}, fmt.Errorf("list owned pods for delete: %w", err)
 	}
 
+	owned := slices.DeleteFunc(podList.Items, func(p corev1.Pod) bool {
+		return !metav1.IsControlledBy(&p, cs)
+	})
+
 	// Phase 1: delete all pods and let vk-cocoon finish snapshot push.
-	for i := range podList.Items {
+	for i := range owned {
 		if ctxErr := ctx.Err(); ctxErr != nil {
 			return ctrl.Result{}, ctxErr
 		}
-		pod := &podList.Items[i]
+		pod := &owned[i]
 		if err := client.IgnoreNotFound(r.Delete(ctx, pod)); err != nil {
 			return ctrl.Result{}, fmt.Errorf("delete pod %s/%s: %w", pod.Namespace, pod.Name, err)
 		}
@@ -257,15 +300,18 @@ func (r *Reconciler) reconcileDelete(ctx context.Context, cs *cocoonv1.CocoonSet
 	); err != nil {
 		return ctrl.Result{}, fmt.Errorf("re-list pods after delete: %w", err)
 	}
-	if len(remaining.Items) > 0 {
-		logger.Infof(ctx, "waiting for %d pods to terminate before GC", len(remaining.Items))
+	remainingOwned := slices.DeleteFunc(remaining.Items, func(p corev1.Pod) bool {
+		return !metav1.IsControlledBy(&p, cs)
+	})
+	if len(remainingOwned) > 0 {
+		logger.Infof(ctx, "waiting for %d pods to terminate before GC", len(remainingOwned))
 		return ctrl.Result{RequeueAfter: requeueWaitForMain}, nil
 	}
 
 	// All pods gone — safe to GC snapshot tags from epoch.
 	if r.Epoch != nil {
-		for i := range podList.Items {
-			pod := &podList.Items[i]
+		for i := range owned {
+			pod := &owned[i]
 			spec := meta.ParseVMSpec(pod)
 			if !meta.ShouldSnapshotVM(spec) || spec.VMName == "" {
 				continue

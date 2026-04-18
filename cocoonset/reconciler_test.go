@@ -94,8 +94,94 @@ func TestApplyUnsuspendNoopOnCleanSet(t *testing.T) {
 	}
 }
 
-// TestApplyUnsuspendSkipsPodHibernatedByCR ensures pods targeted by an active
-// Hibernate CR are not cleared, avoiding a race with the hibernation reconciler.
+func TestEnsureToolboxesCollisionReturnsError(t *testing.T) {
+	scheme := testScheme(t)
+	cs := newCocoonSet("demo", func(cs *cocoonv1.CocoonSet) {
+		cs.Spec.Toolboxes = []cocoonv1.ToolboxSpec{
+			{Name: "0", Image: "ghcr.io/cocoonstack/cocoon/toolbox:latest"},
+		}
+	})
+
+	agentPod := buildAgentPod(cs, 0, "", "", scheme)
+	cli := ctrlfake.NewClientBuilder().
+		WithScheme(scheme).
+		WithObjects(agentPod).
+		Build()
+	r := &Reconciler{Client: cli, Scheme: scheme}
+	classified := classifiedPods{
+		main:      agentPod,
+		sub:       map[int32]*corev1.Pod{},
+		toolbox:   map[string]*corev1.Pod{},
+		allByName: map[string]*corev1.Pod{agentPod.Name: agentPod},
+	}
+
+	_, err := r.ensureToolboxes(t.Context(), cs, classified)
+	if err == nil {
+		t.Fatal("ensureToolboxes should return error on name collision with agent pod")
+	}
+}
+
+func TestEnsureToolboxesIdempotentOnExistingToolbox(t *testing.T) {
+	scheme := testScheme(t)
+	cs := newCocoonSet("demo", func(cs *cocoonv1.CocoonSet) {
+		cs.Spec.Toolboxes = []cocoonv1.ToolboxSpec{
+			{Name: "tb", Image: "ghcr.io/cocoonstack/cocoon/toolbox:latest"},
+		}
+	})
+
+	tbPod := buildToolboxPod(cs, cs.Spec.Toolboxes[0], scheme)
+	cli := ctrlfake.NewClientBuilder().
+		WithScheme(scheme).
+		WithObjects(tbPod).
+		Build()
+	r := &Reconciler{Client: cli, Scheme: scheme}
+	classified := classifiedPods{
+		sub:       map[int32]*corev1.Pod{},
+		toolbox:   map[string]*corev1.Pod{},
+		allByName: map[string]*corev1.Pod{},
+	}
+
+	changed, err := r.ensureToolboxes(t.Context(), cs, classified)
+	if err != nil {
+		t.Fatalf("ensureToolboxes: %v", err)
+	}
+	if changed {
+		t.Error("should not report changed for idempotent create")
+	}
+}
+
+func TestReconcileDeleteSkipsUnownedPods(t *testing.T) {
+	scheme := testScheme(t)
+	cs := newCocoonSet("demo")
+	cs.Finalizers = []string{finalizerName}
+
+	ownedPod := buildAgentPod(cs, 0, "", "", scheme)
+
+	unownedPod := &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "demo-stale",
+			Namespace: cs.Namespace,
+			Labels:    map[string]string{meta.LabelCocoonSet: cs.Name},
+		},
+	}
+
+	cli := ctrlfake.NewClientBuilder().
+		WithScheme(scheme).
+		WithObjects(cs, ownedPod, unownedPod).
+		Build()
+	r := &Reconciler{Client: cli, Scheme: scheme}
+
+	_, err := r.reconcileDelete(t.Context(), cs)
+	if err != nil {
+		t.Fatalf("reconcileDelete: %v", err)
+	}
+
+	var got corev1.Pod
+	if err := cli.Get(t.Context(), types.NamespacedName{Namespace: cs.Namespace, Name: "demo-stale"}, &got); err != nil {
+		t.Fatalf("unowned pod should still exist: %v", err)
+	}
+}
+
 func TestApplyUnsuspendSkipsPodHibernatedByCR(t *testing.T) {
 	scheme := testScheme(t)
 

@@ -6,6 +6,7 @@ import (
 	"strconv"
 
 	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/api/equality"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -144,6 +145,78 @@ func newManagedPod(cs *cocoonv1.CocoonSet, podName, role, slotLabel string, sche
 		panic(fmt.Errorf("set controller reference: %w", err))
 	}
 	return pod
+}
+
+// podSpecMatchesAgent reports whether a running agent pod still matches what
+// buildAgentPod would produce from the current CocoonSet spec.
+func podSpecMatchesAgent(pod *corev1.Pod, cs *cocoonv1.CocoonSet, slot int32) bool {
+	current := meta.ParseVMSpec(pod)
+	forkFrom := ""
+	if slot > 0 {
+		forkFrom = current.ForkFrom
+	}
+	want := meta.FromAgentSpec(cs.Spec.Agent, current.VMName, cs.Spec.SnapshotPolicy, forkFrom)
+	if !vmSpecMatches(current, want) || !resourcesMatch(pod, cs.Spec.Agent.Resources) {
+		return false
+	}
+	if pod.Spec.ServiceAccountName != cs.Spec.Agent.ServiceAccountName {
+		return false
+	}
+	if !equality.Semantic.DeepEqual(pod.Spec.Containers[0].EnvFrom, cs.Spec.Agent.EnvFrom) {
+		return false
+	}
+	if !nodePoolMatches(pod, cs) {
+		return false
+	}
+	return true
+}
+
+// podSpecMatchesToolbox reports whether a running toolbox pod still matches
+// what buildToolboxPod would produce from the current CocoonSet spec.
+func podSpecMatchesToolbox(pod *corev1.Pod, cs *cocoonv1.CocoonSet, tb cocoonv1.ToolboxSpec) bool {
+	current := meta.ParseVMSpec(pod)
+	want := meta.FromToolboxSpec(tb, current.VMName, cs.Spec.SnapshotPolicy)
+	if !vmSpecMatches(current, want) || !resourcesMatch(pod, tb.Resources) {
+		return false
+	}
+	if !nodePoolMatches(pod, cs) {
+		return false
+	}
+	if tb.Mode == cocoonv1.ToolboxModeStatic {
+		got := meta.ParseVMRuntime(pod)
+		if got.VMID != tb.StaticVMID || got.IP != tb.StaticIP || got.VNCPort != tb.VNCPort {
+			return false
+		}
+	}
+	return true
+}
+
+func vmSpecMatches(got, want meta.VMSpec) bool {
+	return got.Image == want.Image &&
+		got.Backend == want.Backend &&
+		got.OS == want.OS &&
+		got.Mode == want.Mode &&
+		got.ConnType == want.ConnType &&
+		got.Network == want.Network &&
+		got.NoDirectIO == want.NoDirectIO &&
+		got.ForcePull == want.ForcePull &&
+		got.SnapshotPolicy == want.SnapshotPolicy &&
+		got.Storage == want.Storage
+}
+
+func resourcesMatch(pod *corev1.Pod, want corev1.ResourceRequirements) bool {
+	if len(pod.Spec.Containers) == 0 {
+		return false
+	}
+	return equality.Semantic.DeepEqual(pod.Spec.Containers[0].Resources, want)
+}
+
+func nodePoolMatches(pod *corev1.Pod, cs *cocoonv1.CocoonSet) bool {
+	wantPool := cs.Spec.NodePool
+	if wantPool == "" {
+		wantPool = meta.DefaultNodePool
+	}
+	return meta.PodNodePool(pod) == wantPool
 }
 
 // applyStorageRequest propagates the VMOptions.Storage quantity into the
