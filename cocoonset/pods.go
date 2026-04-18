@@ -39,6 +39,10 @@ func classifyPods(pods []corev1.Pod) classifiedPods {
 	}
 	for i := range pods {
 		p := &pods[i]
+		// Skip pods already being deleted to prevent re-delete loops.
+		if !p.DeletionTimestamp.IsZero() {
+			continue
+		}
 		out.allByName[p.Name] = p
 		role := p.Labels[meta.LabelRole]
 		switch role {
