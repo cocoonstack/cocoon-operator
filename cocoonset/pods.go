@@ -2,6 +2,7 @@
 package cocoonset
 
 import (
+	"cmp"
 	"fmt"
 	"strconv"
 
@@ -163,7 +164,11 @@ func podSpecMatchesAgent(pod *corev1.Pod, cs *cocoonv1.CocoonSet, slot int32) bo
 	if !vmSpecMatches(current, want) || !resourcesMatch(pod, cs.Spec.Agent.Resources) {
 		return false
 	}
-	if pod.Spec.ServiceAccountName != cs.Spec.Agent.ServiceAccountName {
+	// K8s fills ServiceAccountName with "default" when unset; normalize
+	// both sides so empty and "default" are treated as equivalent.
+	podSA := cmp.Or(pod.Spec.ServiceAccountName, "default")
+	wantSA := cmp.Or(cs.Spec.Agent.ServiceAccountName, "default")
+	if podSA != wantSA {
 		return false
 	}
 	if !equality.Semantic.DeepEqual(pod.Spec.Containers[0].EnvFrom, cs.Spec.Agent.EnvFrom) {
