@@ -125,6 +125,10 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 	if classified.main == nil {
 		mainPod := buildAgentPod(&cs, 0, "", "", r.Scheme)
 		if err := r.Create(ctx, mainPod); err != nil {
+			if apierrors.IsAlreadyExists(err) {
+				// Old pod still Terminating; requeue and wait.
+				return ctrl.Result{RequeueAfter: requeueWaitForMain}, nil
+			}
 			return ctrl.Result{}, fmt.Errorf("create main agent: %w", err)
 		}
 		logger.Infof(ctx, "created main agent %s/%s", mainPod.Namespace, mainPod.Name)
