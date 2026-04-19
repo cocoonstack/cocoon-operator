@@ -266,5 +266,10 @@ func applyStorageRequest(pod *corev1.Pod, storage *resource.Quantity) {
 	if c.Resources.Requests == nil {
 		c.Resources.Requests = corev1.ResourceList{}
 	}
+	if c.Resources.Limits == nil {
+		c.Resources.Limits = corev1.ResourceList{}
+	}
+	// Set both so Guaranteed QoS defaulting preserves the value.
 	c.Resources.Requests[corev1.ResourceEphemeralStorage] = *storage
+	c.Resources.Limits[corev1.ResourceEphemeralStorage] = *storage
 }
