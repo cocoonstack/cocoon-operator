@@ -218,15 +218,40 @@ func resourcesMatch(pod *corev1.Pod, want corev1.ResourceRequirements) bool {
 		return false
 	}
 	got := pod.Spec.Containers[0].Resources
-	// K8s defaulting fills Requests = Limits for Guaranteed QoS when
-	// only Limits are specified. Normalize the want side so that an
-	// empty Requests is treated as "same as Limits".
-	normalized := want.DeepCopy()
-	if len(normalized.Requests) == 0 && len(normalized.Limits) > 0 {
-		normalized.Requests = normalized.Limits.DeepCopy()
+	// Compare only CPU and memory. Ephemeral-storage is injected by
+	// applyStorageRequest and tracked via the Storage annotation; K8s
+	// defaulting copies it into both Limits and Requests, which would
+	// always mismatch the CocoonSet spec's Resources (which only has
+	// CPU and memory).
+	//
+	// K8s also fills Requests = Limits for Guaranteed QoS when only
+	// Limits are specified. Normalize: if want.Requests is empty,
+	// treat want.Limits as the expected Requests.
+	wantReq := want.Requests
+	if len(wantReq) == 0 {
+		wantReq = want.Limits
 	}
-	return equality.Semantic.DeepEqual(got.Limits, normalized.Limits) &&
-		equality.Semantic.DeepEqual(got.Requests, normalized.Requests)
+	for _, res := range []corev1.ResourceName{corev1.ResourceCPU, corev1.ResourceMemory} {
+		if !quantityEqual(got.Limits, want.Limits, res) {
+			return false
+		}
+		if !quantityEqual(got.Requests, wantReq, res) {
+			return false
+		}
+	}
+	return true
+}
+
+func quantityEqual(a, b corev1.ResourceList, name corev1.ResourceName) bool {
+	qa, oka := a[name]
+	qb, okb := b[name]
+	if !oka && !okb {
+		return true
+	}
+	if !oka || !okb {
+		return false
+	}
+	return qa.Cmp(qb) == 0
 }
 
 func nodePoolMatches(pod *corev1.Pod, cs *cocoonv1.CocoonSet) bool {
