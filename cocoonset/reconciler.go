@@ -82,9 +82,7 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 
 	// Filter out pods not owned by this CocoonSet to prevent stale-label
 	// pods from being counted in status or affected by suspend/delete.
-	owned := slices.DeleteFunc(podList.Items, func(p corev1.Pod) bool {
-		return !metav1.IsControlledBy(&p, &cs)
-	})
+	owned := filterOwnedPods(podList.Items, &cs)
 	classified := classifyPods(owned)
 
 	// Stop reconciling if main agent is in a terminal phase (e.g. Failed).
@@ -279,9 +277,7 @@ func (r *Reconciler) reconcileDelete(ctx context.Context, cs *cocoonv1.CocoonSet
 		return ctrl.Result{}, fmt.Errorf("list owned pods for delete: %w", err)
 	}
 
-	owned := slices.DeleteFunc(podList.Items, func(p corev1.Pod) bool {
-		return !metav1.IsControlledBy(&p, cs)
-	})
+	owned := filterOwnedPods(podList.Items, cs)
 
 	// Phase 1: delete all pods and let vk-cocoon finish snapshot push.
 	for i := range owned {
@@ -304,9 +300,7 @@ func (r *Reconciler) reconcileDelete(ctx context.Context, cs *cocoonv1.CocoonSet
 	); err != nil {
 		return ctrl.Result{}, fmt.Errorf("re-list pods after delete: %w", err)
 	}
-	remainingOwned := slices.DeleteFunc(remaining.Items, func(p corev1.Pod) bool {
-		return !metav1.IsControlledBy(&p, cs)
-	})
+	remainingOwned := filterOwnedPods(remaining.Items, cs)
 	if len(remainingOwned) > 0 {
 		logger.Infof(ctx, "waiting for %d pods to terminate before GC", len(remainingOwned))
 		return ctrl.Result{RequeueAfter: requeueWaitForMain}, nil
@@ -333,6 +327,14 @@ func (r *Reconciler) reconcileDelete(ctx context.Context, cs *cocoonv1.CocoonSet
 		}
 	}
 	return ctrl.Result{}, nil
+}
+
+// filterOwnedPods returns only pods controlled by the given owner,
+// filtering out pods with stale labels that belong to a different controller.
+func filterOwnedPods(pods []corev1.Pod, owner metav1.Object) []corev1.Pod {
+	return slices.DeleteFunc(pods, func(p corev1.Pod) bool {
+		return !metav1.IsControlledBy(&p, owner)
+	})
 }
 
 // applySuspend writes HibernateState(true) onto every owned pod.

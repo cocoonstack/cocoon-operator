@@ -115,10 +115,7 @@ func buildToolboxPod(cs *cocoonv1.CocoonSet, tb cocoonv1.ToolboxSpec, scheme *ru
 // toleration, and placeholder container. Panics on scheme mis-wiring.
 func newManagedPod(cs *cocoonv1.CocoonSet, podName, role, slotLabel string, scheme *runtime.Scheme) *corev1.Pod {
 	one := int64(1)
-	pool := cs.Spec.NodePool
-	if pool == "" {
-		pool = meta.DefaultNodePool
-	}
+	pool := cmp.Or(cs.Spec.NodePool, meta.DefaultNodePool)
 	pod := &corev1.Pod{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      podName,
@@ -255,11 +252,7 @@ func quantityEqual(a, b corev1.ResourceList, name corev1.ResourceName) bool {
 }
 
 func nodePoolMatches(pod *corev1.Pod, cs *cocoonv1.CocoonSet) bool {
-	wantPool := cs.Spec.NodePool
-	if wantPool == "" {
-		wantPool = meta.DefaultNodePool
-	}
-	return meta.PodNodePool(pod) == wantPool
+	return meta.PodNodePool(pod) == cmp.Or(cs.Spec.NodePool, meta.DefaultNodePool)
 }
 
 // applyStorageRequest propagates the VMOptions.Storage quantity into the
