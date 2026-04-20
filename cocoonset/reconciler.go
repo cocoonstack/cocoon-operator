@@ -210,6 +210,11 @@ func (r *Reconciler) ensureToolboxes(ctx context.Context, cs *cocoonv1.CocoonSet
 	desired := map[string]bool{}
 	for _, tb := range cs.Spec.Toolboxes {
 		desired[tb.Name] = true
+		podName := fmt.Sprintf("%s-%s", cs.Name, tb.Name)
+		if classified.allByName[podName] != nil && classified.toolbox[tb.Name] == nil {
+			logger.Warnf(ctx, "toolbox %q pod name %q collides with existing non-toolbox pod, skipping", tb.Name, podName)
+			continue
+		}
 		if pod, exists := classified.toolbox[tb.Name]; exists {
 			if podSpecMatchesToolbox(pod, cs, tb) {
 				continue
