@@ -29,6 +29,8 @@ github.com/cockroachdb/redact v1.1.3 h1:AKZds10rFSIj7qADf0g46UixK8NNLwWTNdCIGS5w
 github.com/cockroachdb/redact v1.1.3/go.mod h1:BVNblN9mBWFyMyqK1k3AAiSxhvhfK2oOZZ2lK+dpvRg=
 github.com/cocoonstack/cocoon-common v0.1.9 h1:WRPhYzO+X8fkpaOHRi+DzYOLinLbiCInaUyc8vyqrSg=
 github.com/cocoonstack/cocoon-common v0.1.9/go.mod h1:cjBGOeZvsw2J5X7RIQJ44PJx0QiwgypEJVdd5V38arU=
+github.com/cocoonstack/cocoon-common v0.1.10-0.20260420082925-c9faf86068fa h1:snlz5dka41vpVrxvt5JT2k5z2xOCgVaxXY/PUoWpbqQ=
+github.com/cocoonstack/cocoon-common v0.1.10-0.20260420082925-c9faf86068fa/go.mod h1:cjBGOeZvsw2J5X7RIQJ44PJx0QiwgypEJVdd5V38arU=
 github.com/cocoonstack/epoch v0.2.0 h1:MJpGS2A+/+K+Ih+QJNeTbZytKkrmOwCgA3yi5NIEeNY=
 github.com/cocoonstack/epoch v0.2.0/go.mod h1:sP9Yn9yvzXZdm19TTaK6jxYOMUB9FGhJgOFtH0COmgU=
 github.com/codegangsta/inject v0.0.0-20150114235600-33e0aa1cb7c0/go.mod h1:4Zcjuz89kmFXt9morQgcfYZAYZ5n8WHjt81YYWIwtTM=
