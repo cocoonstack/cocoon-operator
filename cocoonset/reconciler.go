@@ -37,7 +37,7 @@ type Reconciler struct {
 // SetupWithManager registers the reconciler. `For` uses GenerationChangedPredicate
 // to avoid status-update loops; Owns filters pod events to creation, deletion,
 // and readiness transitions to prevent reconcile storms from VK status churn.
-func (r *Reconciler) SetupWithManager(mgr ctrl.Manager) error {
+func (r *Reconciler) SetupWithManager(_ context.Context, mgr ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&cocoonv1.CocoonSet{}, builder.WithPredicates(predicate.GenerationChangedPredicate{})).
 		Owns(&corev1.Pod{}, builder.WithPredicates(podRelevantChange{})).

@@ -86,14 +86,14 @@ func main() {
 		Client: mgr.GetClient(),
 		Scheme: mgr.GetScheme(),
 		Epoch:  epochClient,
-	}).SetupWithManager(mgr); err != nil {
+	}).SetupWithManager(ctx, mgr); err != nil {
 		logger.Fatalf(ctx, err, "register cocoonset.Reconciler: %v", err)
 	}
 	if err = (&hibernation.Reconciler{
 		Client: mgr.GetClient(),
 		Scheme: mgr.GetScheme(),
 		Epoch:  epochClient,
-	}).SetupWithManager(mgr); err != nil {
+	}).SetupWithManager(ctx, mgr); err != nil {
 		logger.Fatalf(ctx, err, "register hibernation.Reconciler: %v", err)
 	}
 

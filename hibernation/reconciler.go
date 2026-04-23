@@ -51,9 +51,9 @@ type Reconciler struct {
 // SetupWithManager registers the reconciler with the controller manager.
 // An index on spec.podRef.name lets the pod watcher fan out events to every
 // CR targeting a given pod, so late-arriving pods self-heal without user edits.
-func (r *Reconciler) SetupWithManager(mgr ctrl.Manager) error {
+func (r *Reconciler) SetupWithManager(ctx context.Context, mgr ctrl.Manager) error {
 	if err := mgr.GetFieldIndexer().IndexField(
-		context.Background(), &cocoonv1.CocoonHibernation{}, indexPodRefName,
+		ctx, &cocoonv1.CocoonHibernation{}, indexPodRefName,
 		func(o client.Object) []string {
 			return []string{o.(*cocoonv1.CocoonHibernation).Spec.PodRef.Name}
 		},
