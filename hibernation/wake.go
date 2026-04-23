@@ -21,7 +21,7 @@ func (r *Reconciler) reconcileWake(ctx context.Context, hib *cocoonv1.CocoonHibe
 	if meta.IsContainerRunning(pod) {
 		// Drop snapshot tag (non-fatal; stale tag gets overwritten on next hibernate).
 		if err := r.Epoch.DeleteManifest(ctx, vmName, meta.HibernateSnapshotTag); err != nil {
-			logger.Errorf(ctx, err, "delete hibernation snapshot %s", vmName)
+			logger.Warnf(ctx, "delete hibernation snapshot %s: %v", vmName, err)
 		}
 		return ctrl.Result{}, r.setPhase(ctx, hib, cocoonv1.CocoonHibernationPhaseActive, vmName)
 	}

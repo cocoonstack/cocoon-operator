@@ -70,7 +70,6 @@ func (r *Reconciler) ensureToolboxes(ctx context.Context, cs *cocoonv1.CocoonSet
 }
 
 func (r *Reconciler) checkToolboxCollision(ctx context.Context, cs *cocoonv1.CocoonSet, tbPod *corev1.Pod, tbName string) error {
-	logger := log.WithFunc("cocoonset.Reconciler.checkToolboxCollision")
 	var existing corev1.Pod
 	if err := r.Get(ctx, client.ObjectKeyFromObject(tbPod), &existing); err != nil {
 		return fmt.Errorf("get existing pod %s/%s: %w", tbPod.Namespace, tbPod.Name, err)
@@ -78,6 +77,5 @@ func (r *Reconciler) checkToolboxCollision(ctx context.Context, cs *cocoonv1.Coc
 	if existing.Labels[meta.LabelRole] == meta.RoleToolbox && metav1.IsControlledBy(&existing, cs) {
 		return nil
 	}
-	logger.Warnf(ctx, "toolbox %s/%s collides with existing pod (role=%s)", tbPod.Namespace, tbPod.Name, existing.Labels[meta.LabelRole])
-	return fmt.Errorf("create toolbox %s: name collision with existing pod %s/%s", tbName, tbPod.Namespace, tbPod.Name)
+	return fmt.Errorf("create toolbox %s: name collision with existing pod %s/%s (role=%s)", tbName, tbPod.Namespace, tbPod.Name, existing.Labels[meta.LabelRole])
 }

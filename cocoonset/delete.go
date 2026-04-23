@@ -65,7 +65,7 @@ func (r *Reconciler) reconcileDelete(ctx context.Context, cs *cocoonv1.CocoonSet
 				continue
 			}
 			if err := r.Epoch.DeleteManifest(ctx, spec.VMName, meta.DefaultSnapshotTag); err != nil {
-				logger.Errorf(ctx, err, "delete snapshot %s", spec.VMName)
+				logger.Warnf(ctx, "delete snapshot %s: %v", spec.VMName, err)
 			}
 		}
 	}
