@@ -15,11 +15,16 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/handler"
 
 	cocoonv1 "github.com/cocoonstack/cocoon-common/apis/v1"
 	commonk8s "github.com/cocoonstack/cocoon-common/k8s"
 	"github.com/cocoonstack/cocoon-common/meta"
 )
+
+// indexPodRefName keys CocoonHibernation objects by spec.podRef.name so the
+// pod watcher can resolve a pod event back to the CRs that target it.
+const indexPodRefName = "spec.podRef.name"
 
 const (
 	requeueInterval = 5 * time.Second
@@ -49,10 +54,41 @@ type Reconciler struct {
 }
 
 // SetupWithManager registers the reconciler with the controller manager.
+// An index on spec.podRef.name lets the pod watcher fan out events to every
+// CR targeting a given pod, so late-arriving pods self-heal without user edits.
 func (r *Reconciler) SetupWithManager(mgr ctrl.Manager) error {
+	if err := mgr.GetFieldIndexer().IndexField(
+		context.Background(), &cocoonv1.CocoonHibernation{}, indexPodRefName,
+		func(o client.Object) []string {
+			return []string{o.(*cocoonv1.CocoonHibernation).Spec.PodRef.Name}
+		},
+	); err != nil {
+		return fmt.Errorf("index %s: %w", indexPodRefName, err)
+	}
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&cocoonv1.CocoonHibernation{}).
+		Watches(&corev1.Pod{}, handler.EnqueueRequestsFromMapFunc(r.hibernationsTargetingPod)).
 		Complete(r)
+}
+
+// hibernationsTargetingPod returns reconcile requests for every CocoonHibernation
+// whose PodRef points at the given pod. Called from the Pod watcher.
+func (r *Reconciler) hibernationsTargetingPod(ctx context.Context, obj client.Object) []ctrl.Request {
+	var list cocoonv1.CocoonHibernationList
+	if err := r.List(ctx, &list,
+		client.InNamespace(obj.GetNamespace()),
+		client.MatchingFields{indexPodRefName: obj.GetName()},
+	); err != nil {
+		log.WithFunc("hibernation.Reconciler.hibernationsTargetingPod").
+			Warnf(ctx, "list hibernations targeting %s/%s: %v", obj.GetNamespace(), obj.GetName(), err)
+		return nil
+	}
+	out := make([]ctrl.Request, 0, len(list.Items))
+	for i := range list.Items {
+		h := &list.Items[i]
+		out = append(out, ctrl.Request{NamespacedName: types.NamespacedName{Namespace: h.Namespace, Name: h.Name}})
+	}
+	return out
 }
 
 // Reconcile drives a single hibernate or wake transition. Failed phases are recoverable.
@@ -74,14 +110,17 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 	err := r.Get(ctx, types.NamespacedName{Namespace: hib.Namespace, Name: hib.Spec.PodRef.Name}, &pod)
 	if err != nil {
 		if apierrors.IsNotFound(err) {
-			return ctrl.Result{}, r.markFailed(ctx, &hib, fmt.Sprintf("pod %s/%s not found", hib.Namespace, hib.Spec.PodRef.Name))
+			// Pod may arrive after the CR; a pod Create event will reconcile us
+			// via Watches, but still requeue as a safety net.
+			return ctrl.Result{RequeueAfter: requeueInterval}, r.markPending(ctx, &hib, fmt.Sprintf("pod %s/%s not yet present", hib.Namespace, hib.Spec.PodRef.Name))
 		}
 		return ctrl.Result{}, fmt.Errorf("get target pod: %w", err)
 	}
 
 	vmName := meta.ParseVMSpec(&pod).VMName
 	if vmName == "" {
-		return ctrl.Result{}, r.markFailed(ctx, &hib, fmt.Sprintf("pod %s/%s has no %s annotation", pod.Namespace, pod.Name, meta.AnnotationVMName))
+		// VMName is filled by vk-cocoon once the VM is provisioned; wait.
+		return ctrl.Result{RequeueAfter: requeueInterval}, r.markPending(ctx, &hib, fmt.Sprintf("pod %s/%s has no %s annotation yet", pod.Namespace, pod.Name, meta.AnnotationVMName))
 	}
 
 	logger.Debugf(ctx, "reconcile hibernation %s/%s desire=%s vm=%s", hib.Namespace, hib.Name, hib.Spec.Desire, vmName)
@@ -131,6 +170,22 @@ func (r *Reconciler) markFailed(ctx context.Context, hib *cocoonv1.CocoonHiberna
 		))
 	}); err != nil {
 		return fmt.Errorf("patch failed status: %w", err)
+	}
+	return nil
+}
+
+// markPending records that the CR is waiting on external state (pod creation,
+// VMName annotation) without pinning the phase to Failed. Self-heals once the
+// pod watcher re-enqueues the CR.
+func (r *Reconciler) markPending(ctx context.Context, hib *cocoonv1.CocoonHibernation, msg string) error {
+	if err := commonk8s.PatchStatus(ctx, r.Client, hib, func(h *cocoonv1.CocoonHibernation) {
+		h.Status.ObservedGeneration = h.Generation
+		h.Status.Phase = cocoonv1.CocoonHibernationPhasePending
+		apimeta.SetStatusCondition(&h.Status.Conditions, commonk8s.NewReadyCondition(
+			h.Generation, metav1.ConditionFalse, conditionReasonPending, msg,
+		))
+	}); err != nil {
+		return fmt.Errorf("patch pending status: %w", err)
 	}
 	return nil
 }

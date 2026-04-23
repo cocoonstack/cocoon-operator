@@ -360,6 +360,78 @@ func TestReconcileWakeRecoversFromFailed(t *testing.T) {
 	}
 }
 
+func TestReconcilePendingWhenPodMissing(t *testing.T) {
+	hib := &cocoonv1.CocoonHibernation{
+		ObjectMeta: metav1.ObjectMeta{Name: "hib", Namespace: "ns"},
+		Spec: cocoonv1.CocoonHibernationSpec{
+			Desire: cocoonv1.HibernationDesireHibernate,
+			PodRef: cocoonv1.HibernationPodRef{Name: "demo-0"},
+		},
+	}
+	scheme := testScheme(t)
+	cli := ctrlfake.NewClientBuilder().
+		WithScheme(scheme).
+		WithObjects(hib).
+		WithStatusSubresource(&cocoonv1.CocoonHibernation{}).
+		Build()
+	r := &Reconciler{Client: cli, Scheme: scheme, Epoch: &fakeRegistry{}}
+
+	res, err := r.Reconcile(t.Context(), ctrl.Request{
+		NamespacedName: types.NamespacedName{Namespace: "ns", Name: "hib"},
+	})
+	if err != nil {
+		t.Fatalf("Reconcile: %v", err)
+	}
+	if res.RequeueAfter != requeueInterval {
+		t.Errorf("RequeueAfter = %v, want %v (missing pod must requeue)", res.RequeueAfter, requeueInterval)
+	}
+
+	var out cocoonv1.CocoonHibernation
+	if err := cli.Get(t.Context(), types.NamespacedName{Namespace: "ns", Name: "hib"}, &out); err != nil {
+		t.Fatalf("get hib: %v", err)
+	}
+	if out.Status.Phase != cocoonv1.CocoonHibernationPhasePending {
+		t.Errorf("phase = %q, want Pending (must not dead-end on Failed)", out.Status.Phase)
+	}
+}
+
+func TestReconcilePendingWhenPodMissingVMName(t *testing.T) {
+	hib := &cocoonv1.CocoonHibernation{
+		ObjectMeta: metav1.ObjectMeta{Name: "hib", Namespace: "ns"},
+		Spec: cocoonv1.CocoonHibernationSpec{
+			Desire: cocoonv1.HibernationDesireHibernate,
+			PodRef: cocoonv1.HibernationPodRef{Name: "demo-0"},
+		},
+	}
+	// Pod exists but vk-cocoon has not yet set the VMName annotation.
+	pod := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "demo-0", Namespace: "ns"}}
+	scheme := testScheme(t)
+	cli := ctrlfake.NewClientBuilder().
+		WithScheme(scheme).
+		WithObjects(hib, pod).
+		WithStatusSubresource(&cocoonv1.CocoonHibernation{}).
+		Build()
+	r := &Reconciler{Client: cli, Scheme: scheme, Epoch: &fakeRegistry{}}
+
+	res, err := r.Reconcile(t.Context(), ctrl.Request{
+		NamespacedName: types.NamespacedName{Namespace: "ns", Name: "hib"},
+	})
+	if err != nil {
+		t.Fatalf("Reconcile: %v", err)
+	}
+	if res.RequeueAfter != requeueInterval {
+		t.Errorf("RequeueAfter = %v, want %v (missing VMName must requeue)", res.RequeueAfter, requeueInterval)
+	}
+
+	var out cocoonv1.CocoonHibernation
+	if err := cli.Get(t.Context(), types.NamespacedName{Namespace: "ns", Name: "hib"}, &out); err != nil {
+		t.Fatalf("get hib: %v", err)
+	}
+	if out.Status.Phase != cocoonv1.CocoonHibernationPhasePending {
+		t.Errorf("phase = %q, want Pending", out.Status.Phase)
+	}
+}
+
 func findReadyCondition(conds []metav1.Condition) *metav1.Condition {
 	for i := range conds {
 		if conds[i].Type == commonk8s.ConditionTypeReady {
