@@ -19,7 +19,6 @@ import (
 	cocoonv1 "github.com/cocoonstack/cocoon-common/apis/v1"
 	commonk8s "github.com/cocoonstack/cocoon-common/k8s"
 	"github.com/cocoonstack/cocoon-common/meta"
-	"github.com/cocoonstack/cocoon-operator/epoch"
 )
 
 const (
@@ -32,12 +31,21 @@ const (
 	conditionReasonFailed  = "Failed"
 )
 
+// SnapshotRegistry is the subset of epoch's HTTP API this reconciler needs.
+// *registryclient.Client satisfies it natively; tests swap in fakes.
+type SnapshotRegistry interface {
+	// HasManifest reports whether (name, tag) exists. Missing returns (false, nil).
+	HasManifest(ctx context.Context, name, tag string) (bool, error)
+	// DeleteManifest removes the manifest at (name, tag).
+	DeleteManifest(ctx context.Context, name, tag string) error
+}
+
 // Reconciler watches CocoonHibernation resources and drives hibernate/wake
 // transitions by toggling pod annotations and polling the snapshot registry.
 type Reconciler struct {
 	client.Client
 	Scheme *runtime.Scheme
-	Epoch  epoch.SnapshotRegistry
+	Epoch  SnapshotRegistry
 }
 
 // SetupWithManager registers the reconciler with the controller manager.

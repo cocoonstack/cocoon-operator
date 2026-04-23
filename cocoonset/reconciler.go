@@ -17,7 +17,7 @@ import (
 
 	cocoonv1 "github.com/cocoonstack/cocoon-common/apis/v1"
 	"github.com/cocoonstack/cocoon-common/meta"
-	"github.com/cocoonstack/cocoon-operator/epoch"
+	"github.com/cocoonstack/epoch/registryclient"
 )
 
 const (
@@ -30,7 +30,7 @@ const (
 type Reconciler struct {
 	client.Client
 	Scheme *runtime.Scheme
-	Epoch  epoch.SnapshotRegistry
+	Epoch  *registryclient.Client
 }
 
 // SetupWithManager registers the reconciler. `For` uses GenerationChangedPredicate

@@ -22,7 +22,6 @@ import (
 	commonk8s "github.com/cocoonstack/cocoon-common/k8s"
 	commonlog "github.com/cocoonstack/cocoon-common/log"
 	"github.com/cocoonstack/cocoon-operator/cocoonset"
-	"github.com/cocoonstack/cocoon-operator/epoch"
 	"github.com/cocoonstack/cocoon-operator/hibernation"
 	"github.com/cocoonstack/cocoon-operator/version"
 	"github.com/cocoonstack/epoch/registryclient"
@@ -78,11 +77,7 @@ func main() {
 		logger.Fatalf(ctx, err, "add readyz check %v", err)
 	}
 
-	var epochOpts []registryclient.Option
-	if ca := os.Getenv("EPOCH_CA_CERT"); ca != "" {
-		epochOpts = append(epochOpts, registryclient.WithCACert(ca))
-	}
-	epochClient, err := epoch.New(commonk8s.EnvOrDefault("EPOCH_URL", "http://epoch.cocoon-system.svc:8080"), os.Getenv("EPOCH_TOKEN"), epochOpts...)
+	epochClient, err := registryclient.NewFromEnv(commonk8s.EnvOrDefault("EPOCH_URL", "http://epoch.cocoon-system.svc:8080"), os.Getenv("EPOCH_TOKEN"))
 	if err != nil {
 		logger.Fatalf(ctx, err, "create epoch client: %v", err)
 	}
