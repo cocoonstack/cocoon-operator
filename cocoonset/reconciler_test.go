@@ -17,7 +17,7 @@ import (
 // fakeRegistry tracks manifest presence per (name, tag) key so tests can
 // simulate snapshots appearing/disappearing.
 type fakeRegistry struct {
-	present map[string]bool
+	present  map[string]bool
 	probeErr error
 }
 
