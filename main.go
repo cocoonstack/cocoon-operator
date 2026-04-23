@@ -67,14 +67,14 @@ func main() {
 		LeaderElectionID:       leaderElectionID,
 	})
 	if err != nil {
-		logger.Fatalf(ctx, err, "create manager %v", err)
+		logger.Fatalf(ctx, err, "create manager: %v", err)
 	}
 
 	if err = mgr.AddHealthzCheck("healthz", healthz.Ping); err != nil {
-		logger.Fatalf(ctx, err, "add healthz check %v", err)
+		logger.Fatalf(ctx, err, "add healthz check: %v", err)
 	}
 	if err = mgr.AddReadyzCheck("readyz", healthz.Ping); err != nil {
-		logger.Fatalf(ctx, err, "add readyz check %v", err)
+		logger.Fatalf(ctx, err, "add readyz check: %v", err)
 	}
 
 	epochClient, err := registryclient.NewFromEnv(commonk8s.EnvOrDefault("EPOCH_URL", "http://epoch.cocoon-system.svc:8080"), os.Getenv("EPOCH_TOKEN"))
@@ -87,14 +87,14 @@ func main() {
 		Scheme: mgr.GetScheme(),
 		Epoch:  epochClient,
 	}).SetupWithManager(mgr); err != nil {
-		logger.Fatalf(ctx, err, "register cocoonset.Reconciler %v", err)
+		logger.Fatalf(ctx, err, "register cocoonset.Reconciler: %v", err)
 	}
 	if err = (&hibernation.Reconciler{
 		Client: mgr.GetClient(),
 		Scheme: mgr.GetScheme(),
 		Epoch:  epochClient,
 	}).SetupWithManager(mgr); err != nil {
-		logger.Fatalf(ctx, err, "register hibernation.Reconciler %v", err)
+		logger.Fatalf(ctx, err, "register hibernation.Reconciler: %v", err)
 	}
 
 	signalCtx, cancel := signal.NotifyContext(ctx, syscall.SIGINT, syscall.SIGTERM)
@@ -103,7 +103,7 @@ func main() {
 	logger.Infof(signalCtx, "starting controller manager (metrics=%s probe=%s leader=%t)",
 		metricsAddr, probeAddr, enableLeaderElection)
 	if err = mgr.Start(signalCtx); err != nil {
-		logger.Fatalf(signalCtx, err, "manager exited with error %v", err)
+		logger.Fatalf(signalCtx, err, "manager exited with error: %v", err)
 	}
 }
 
