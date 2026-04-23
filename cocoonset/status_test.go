@@ -137,7 +137,7 @@ func TestAgentStatusFromPod(t *testing.T) {
 
 func TestBuildConditionsAllReady(t *testing.T) {
 	cs := newCocoonSet("demo")
-	conds := buildConditions(cs, 1, 1, cocoonv1.CocoonSetPhaseRunning)
+	conds := buildConditions(cs, 1, 1, 0, 0, cocoonv1.CocoonSetPhaseRunning)
 	var ready *metav1.Condition
 	for i := range conds {
 		if conds[i].Type == commonk8s.ConditionTypeReady {
@@ -146,5 +146,43 @@ func TestBuildConditionsAllReady(t *testing.T) {
 	}
 	if ready == nil || ready.Status != metav1.ConditionTrue {
 		t.Errorf("Ready condition should be True when all agents ready, got %+v", ready)
+	}
+}
+
+func TestBuildConditionsNotReadyWhenToolboxesPending(t *testing.T) {
+	cs := newCocoonSet("demo")
+	conds := buildConditions(cs, 1, 1, 0, 1, cocoonv1.CocoonSetPhaseScaling)
+	var ready *metav1.Condition
+	for i := range conds {
+		if conds[i].Type == commonk8s.ConditionTypeReady {
+			ready = &conds[i]
+		}
+	}
+	if ready == nil || ready.Status != metav1.ConditionFalse {
+		t.Errorf("Ready condition must be False while toolboxes pending, got %+v", ready)
+	}
+}
+
+func TestBuildStatusScalingWhenToolboxesPending(t *testing.T) {
+	cs := newCocoonSet("demo", func(cs *cocoonv1.CocoonSet) {
+		cs.Spec.Toolboxes = []cocoonv1.ToolboxSpec{
+			{Name: "tb", Image: "ghcr.io/cocoonstack/cocoon/toolbox:latest"},
+		}
+	})
+	main := readyPod(buildAgentPod(cs, 0, "", "", testScheme(t)))
+	tbPod := buildToolboxPod(cs, cs.Spec.Toolboxes[0], testScheme(t))
+	tbPod.Status.Phase = corev1.PodPending
+	classified := classifiedPods{
+		main:      main,
+		sub:       map[int32]*corev1.Pod{},
+		toolbox:   map[string]*corev1.Pod{"tb": tbPod},
+		allByName: map[string]*corev1.Pod{main.Name: main, tbPod.Name: tbPod},
+	}
+	status := buildStatus(cs, classified, "")
+	if status.Phase != cocoonv1.CocoonSetPhaseScaling {
+		t.Errorf("phase: %q, want Scaling", status.Phase)
+	}
+	if status.DesiredToolboxes != 1 || status.ReadyToolboxes != 0 {
+		t.Errorf("toolbox counts: ready=%d desired=%d, want 0/1", status.ReadyToolboxes, status.DesiredToolboxes)
 	}
 }

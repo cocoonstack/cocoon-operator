@@ -71,13 +71,19 @@ func buildStatus(cs *cocoonv1.CocoonSet, classified classifiedPods, phase cocoon
 		agents = append(agents, agentStatusFromPod(sub, slot, meta.RoleSubAgent, mainVMName))
 	}
 
+	tbDesired := int32(len(cs.Spec.Toolboxes))
+	tbReady := int32(0)
 	tbStatuses := make([]cocoonv1.ToolboxStatus, 0, len(classified.toolbox))
 	for _, name := range slices.Sorted(maps.Keys(classified.toolbox)) {
-		tbStatuses = append(tbStatuses, toolboxStatusFromPod(classified.toolbox[name], name))
+		pod := classified.toolbox[name]
+		if meta.IsPodReady(pod) {
+			tbReady++
+		}
+		tbStatuses = append(tbStatuses, toolboxStatusFromPod(pod, name))
 	}
 
 	if phase == "" {
-		phase = derivePhase(classified.main, ready, desired)
+		phase = derivePhase(classified.main, ready, desired, tbReady, tbDesired)
 	}
 
 	return cocoonv1.CocoonSetStatus{
@@ -85,17 +91,19 @@ func buildStatus(cs *cocoonv1.CocoonSet, classified classifiedPods, phase cocoon
 		Phase:              phase,
 		ReadyAgents:        ready,
 		DesiredAgents:      desired,
+		ReadyToolboxes:     tbReady,
+		DesiredToolboxes:   tbDesired,
 		Agents:             agents,
 		Toolboxes:          tbStatuses,
-		Conditions:         buildConditions(cs, ready, desired, phase),
+		Conditions:         buildConditions(cs, ready, desired, tbReady, tbDesired, phase),
 	}
 }
 
-func derivePhase(main *corev1.Pod, ready, desired int32) cocoonv1.CocoonSetPhase {
+func derivePhase(main *corev1.Pod, ready, desired, tbReady, tbDesired int32) cocoonv1.CocoonSetPhase {
 	switch {
 	case main == nil:
 		return cocoonv1.CocoonSetPhasePending
-	case ready < desired:
+	case ready < desired, tbReady < tbDesired:
 		return cocoonv1.CocoonSetPhaseScaling
 	default:
 		return cocoonv1.CocoonSetPhaseRunning
@@ -134,10 +142,10 @@ func toolboxStatusFromPod(pod *corev1.Pod, name string) cocoonv1.ToolboxStatus {
 
 // buildConditions returns Ready and Progressing conditions.
 // Timestamps are left zero so mergeConditions preserves existing LastTransitionTime.
-func buildConditions(cs *cocoonv1.CocoonSet, ready, desired int32, phase cocoonv1.CocoonSetPhase) []metav1.Condition {
+func buildConditions(cs *cocoonv1.CocoonSet, ready, desired, tbReady, tbDesired int32, phase cocoonv1.CocoonSetPhase) []metav1.Condition {
 	readyStatus := metav1.ConditionFalse
 	readyReason := conditionReasonNotReady
-	if ready == desired && desired > 0 {
+	if ready == desired && desired > 0 && tbReady == tbDesired {
 		readyStatus = metav1.ConditionTrue
 		readyReason = conditionReasonAllReady
 	}
@@ -145,7 +153,7 @@ func buildConditions(cs *cocoonv1.CocoonSet, ready, desired int32, phase cocoonv
 		cs.Generation,
 		readyStatus,
 		readyReason,
-		fmt.Sprintf("%d/%d agents ready", ready, desired),
+		fmt.Sprintf("%d/%d agents ready, %d/%d toolboxes ready", ready, desired, tbReady, tbDesired),
 	)
 
 	progressing := metav1.Condition{

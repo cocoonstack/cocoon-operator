@@ -505,6 +505,9 @@ spec:
               desiredAgents:
                 format: int32
                 type: integer
+              desiredToolboxes:
+                format: int32
+                type: integer
               observedGeneration:
                 format: int64
                 type: integer
@@ -518,6 +521,9 @@ spec:
                 - Failed
                 type: string
               readyAgents:
+                format: int32
+                type: integer
+              readyToolboxes:
                 format: int32
                 type: integer
               toolboxes:
