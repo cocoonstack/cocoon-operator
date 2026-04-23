@@ -269,6 +269,32 @@ func TestPodSpecMatchesAgentDetectsResourceDrift(t *testing.T) {
 	}
 }
 
+func TestPodSpecMatchesAgentDetectsProbePortDrift(t *testing.T) {
+	cs := newCocoonSet("demo")
+	scheme := testScheme(t)
+	pod := buildAgentPod(cs, 0, "", "", scheme)
+
+	updated := newCocoonSet("demo", func(cs *cocoonv1.CocoonSet) {
+		cs.Spec.Agent.ProbePort = 8080
+	})
+	if podSpecMatchesAgent(pod, updated, 0) {
+		t.Error("pod without probePort should not match spec that sets probePort")
+	}
+}
+
+func TestPodSpecMatchesToolboxDetectsProbePortDrift(t *testing.T) {
+	cs := newCocoonSet("demo")
+	scheme := testScheme(t)
+	tb := cocoonv1.ToolboxSpec{Name: "tb", Image: "ghcr.io/cocoonstack/cocoon/toolbox:latest", Mode: cocoonv1.ToolboxModeRun}
+	pod := buildToolboxPod(cs, tb, scheme)
+
+	updatedTb := tb
+	updatedTb.ProbePort = 9090
+	if podSpecMatchesToolbox(pod, cs, updatedTb) {
+		t.Error("toolbox pod without probePort should not match spec that sets probePort")
+	}
+}
+
 func TestPodSpecMatchesToolboxIdenticalSpec(t *testing.T) {
 	cs := newCocoonSet("demo")
 	scheme := testScheme(t)

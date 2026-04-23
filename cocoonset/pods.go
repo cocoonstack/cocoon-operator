@@ -197,17 +197,12 @@ func podSpecMatchesToolbox(pod *corev1.Pod, cs *cocoonv1.CocoonSet, tb cocoonv1.
 	return true
 }
 
+// vmSpecMatches reports whether two VMSpecs are equivalent. Callers
+// construct want with VMName/ForkFrom copied from current so those
+// fields never trigger a spurious mismatch; struct equality lets any
+// future VMSpec field be covered without editing this function.
 func vmSpecMatches(got, want meta.VMSpec) bool {
-	return got.Image == want.Image &&
-		got.Backend == want.Backend &&
-		got.OS == want.OS &&
-		got.Mode == want.Mode &&
-		got.ConnType == want.ConnType &&
-		got.Network == want.Network &&
-		got.NoDirectIO == want.NoDirectIO &&
-		got.ForcePull == want.ForcePull &&
-		got.SnapshotPolicy == want.SnapshotPolicy &&
-		got.Storage == want.Storage
+	return got == want
 }
 
 func resourcesMatch(pod *corev1.Pod, want corev1.ResourceRequirements) bool {
