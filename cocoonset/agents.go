@@ -10,6 +10,7 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 
 	cocoonv1 "github.com/cocoonstack/cocoon-common/apis/v1"
+	"github.com/cocoonstack/cocoon-common/meta"
 )
 
 // ensureSubAgents creates/deletes sub-agent pods to match [1..Replicas].
@@ -19,6 +20,14 @@ func (r *Reconciler) ensureSubAgents(ctx context.Context, cs *cocoonv1.CocoonSet
 	changed := false
 	for slot := int32(1); slot <= cs.Spec.Agent.Replicas; slot++ {
 		if pod, exists := classified.sub[slot]; exists {
+			if meta.IsPodTerminal(pod) {
+				logger.Infof(ctx, "sub-agent %s/%s slot %d terminal (phase=%s), deleting for recreate", pod.Namespace, pod.Name, slot, pod.Status.Phase)
+				if err := r.Delete(ctx, pod); err != nil && !apierrors.IsNotFound(err) {
+					return changed, fmt.Errorf("delete terminal sub-agent slot %d: %w", slot, err)
+				}
+				changed = true
+				continue
+			}
 			if podSpecMatchesAgent(pod, cs, slot) {
 				continue
 			}

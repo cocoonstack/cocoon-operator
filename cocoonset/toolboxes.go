@@ -29,6 +29,14 @@ func (r *Reconciler) ensureToolboxes(ctx context.Context, cs *cocoonv1.CocoonSet
 			return changed, fmt.Errorf("create toolbox %s: name collision with existing pod %s", tb.Name, podName)
 		}
 		if pod, exists := classified.toolbox[tb.Name]; exists {
+			if meta.IsPodTerminal(pod) {
+				logger.Infof(ctx, "toolbox %s/%s %q terminal (phase=%s), deleting for recreate", pod.Namespace, pod.Name, tb.Name, pod.Status.Phase)
+				if err := r.Delete(ctx, pod); err != nil && !apierrors.IsNotFound(err) {
+					return changed, fmt.Errorf("delete terminal toolbox %s: %w", tb.Name, err)
+				}
+				changed = true
+				continue
+			}
 			if podSpecMatchesToolbox(pod, cs, tb) {
 				continue
 			}

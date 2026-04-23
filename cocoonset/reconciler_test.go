@@ -150,6 +150,72 @@ func TestEnsureToolboxesIdempotentOnExistingToolbox(t *testing.T) {
 	}
 }
 
+func TestEnsureSubAgentsReplacesTerminalPod(t *testing.T) {
+	scheme := testScheme(t)
+	cs := newCocoonSet("demo", func(cs *cocoonv1.CocoonSet) {
+		cs.Spec.Agent.Replicas = 1
+	})
+
+	subPod := buildAgentPod(cs, 1, "vk-ns-demo-0", "", scheme)
+	subPod.Status.Phase = corev1.PodFailed
+
+	cli := ctrlfake.NewClientBuilder().
+		WithScheme(scheme).
+		WithObjects(subPod).
+		Build()
+	r := &Reconciler{Client: cli, Scheme: scheme}
+	classified := classifiedPods{
+		sub:       map[int32]*corev1.Pod{1: subPod},
+		toolbox:   map[string]*corev1.Pod{},
+		allByName: map[string]*corev1.Pod{subPod.Name: subPod},
+	}
+
+	changed, err := r.ensureSubAgents(t.Context(), cs, classified, "vk-ns-demo-0", "")
+	if err != nil {
+		t.Fatalf("ensureSubAgents: %v", err)
+	}
+	if !changed {
+		t.Fatal("ensureSubAgents must report changed after deleting a terminal pod")
+	}
+	if err := cli.Get(t.Context(), types.NamespacedName{Namespace: subPod.Namespace, Name: subPod.Name}, &corev1.Pod{}); err == nil {
+		t.Error("terminal sub-agent should have been deleted")
+	}
+}
+
+func TestEnsureToolboxesReplacesTerminalPod(t *testing.T) {
+	scheme := testScheme(t)
+	cs := newCocoonSet("demo", func(cs *cocoonv1.CocoonSet) {
+		cs.Spec.Toolboxes = []cocoonv1.ToolboxSpec{
+			{Name: "tb", Image: "ghcr.io/cocoonstack/cocoon/toolbox:latest"},
+		}
+	})
+
+	tbPod := buildToolboxPod(cs, cs.Spec.Toolboxes[0], scheme)
+	tbPod.Status.Phase = corev1.PodFailed
+
+	cli := ctrlfake.NewClientBuilder().
+		WithScheme(scheme).
+		WithObjects(tbPod).
+		Build()
+	r := &Reconciler{Client: cli, Scheme: scheme}
+	classified := classifiedPods{
+		sub:       map[int32]*corev1.Pod{},
+		toolbox:   map[string]*corev1.Pod{"tb": tbPod},
+		allByName: map[string]*corev1.Pod{tbPod.Name: tbPod},
+	}
+
+	changed, err := r.ensureToolboxes(t.Context(), cs, classified)
+	if err != nil {
+		t.Fatalf("ensureToolboxes: %v", err)
+	}
+	if !changed {
+		t.Fatal("ensureToolboxes must report changed after deleting a terminal pod")
+	}
+	if err := cli.Get(t.Context(), types.NamespacedName{Namespace: tbPod.Namespace, Name: tbPod.Name}, &corev1.Pod{}); err == nil {
+		t.Error("terminal toolbox should have been deleted")
+	}
+}
+
 func TestReconcileDeleteSkipsUnownedPods(t *testing.T) {
 	scheme := testScheme(t)
 	cs := newCocoonSet("demo")
