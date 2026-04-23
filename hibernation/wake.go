@@ -18,7 +18,13 @@ import (
 // reconcileWake clears the hibernate annotation and waits for the container to run.
 func (r *Reconciler) reconcileWake(ctx context.Context, hib *cocoonv1.CocoonHibernation, pod *corev1.Pod, vmName string) (ctrl.Result, error) {
 	logger := log.WithFunc("hibernation.Reconciler.reconcileWake")
-	if meta.IsContainerRunning(pod) {
+	// Gate tag deletion on BOTH container running AND a freshly applied VMID.
+	// During hibernate, vk-cocoon clears the VMID annotation; on wake it writes
+	// a new VMID only after successfully cloning from the snapshot. Checking
+	// IsContainerRunning alone is unreliable because pod.status.containerStatuses
+	// can momentarily show Running during the pod-recreate → wake race, causing
+	// the tag to be dropped before vk-cocoon has pulled it.
+	if meta.IsContainerRunning(pod) && meta.ParseVMRuntime(pod).VMID != "" {
 		// Drop snapshot tag (non-fatal; stale tag gets overwritten on next hibernate).
 		if err := r.Epoch.DeleteManifest(ctx, vmName, meta.HibernateSnapshotTag); err != nil {
 			logger.Warnf(ctx, "delete hibernation snapshot %s: %v", vmName, err)
