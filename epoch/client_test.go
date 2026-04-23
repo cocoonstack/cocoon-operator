@@ -13,7 +13,10 @@ func TestHasManifestNotFoundIsFolded(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	c := New(srv.URL, "")
+	c, err := New(srv.URL, "")
+	if err != nil {
+		t.Fatalf("new client: %v", err)
+	}
 	present, err := c.HasManifest(t.Context(), "demo", "hibernate")
 	if err != nil {
 		t.Fatalf("404 must not surface as error, got %v", err)
@@ -29,7 +32,10 @@ func TestHasManifestServerErrorPropagates(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	c := New(srv.URL, "")
+	c, err := New(srv.URL, "")
+	if err != nil {
+		t.Fatalf("new client: %v", err)
+	}
 	present, err := c.HasManifest(t.Context(), "demo", "hibernate")
 	if err == nil {
 		t.Fatalf("500 must surface as error so reconciler can mark Failed")
@@ -47,7 +53,10 @@ func TestHasManifestOKReportsPresent(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	c := New(srv.URL, "")
+	c, err := New(srv.URL, "")
+	if err != nil {
+		t.Fatalf("new client: %v", err)
+	}
 	present, err := c.HasManifest(t.Context(), "demo", "hibernate")
 	if err != nil {
 		t.Fatalf("OK must not surface as error, got %v", err)

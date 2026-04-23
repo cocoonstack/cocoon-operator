@@ -24,8 +24,12 @@ type Client struct {
 }
 
 // New creates a Client that talks to the epoch registry at baseURL.
-func New(baseURL, token string, opts ...registryclient.Option) *Client {
-	return &Client{inner: registryclient.New(baseURL, token, opts...)}
+func New(baseURL, token string, opts ...registryclient.Option) (*Client, error) {
+	inner, err := registryclient.New(baseURL, token, opts...)
+	if err != nil {
+		return nil, err
+	}
+	return &Client{inner: inner}, nil
 }
 
 // HasManifest folds ErrManifestNotFound into (false, nil); other errors propagate.

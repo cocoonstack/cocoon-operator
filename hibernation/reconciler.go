@@ -88,66 +88,6 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 	}
 }
 
-// reconcileHibernate sets hibernate annotation and polls epoch for the snapshot tag.
-func (r *Reconciler) reconcileHibernate(ctx context.Context, hib *cocoonv1.CocoonHibernation, pod *corev1.Pod, vmName string) (ctrl.Result, error) {
-	if err := commonk8s.PatchHibernateState(ctx, r.Client, pod, true); err != nil {
-		return ctrl.Result{}, fmt.Errorf("patch hibernate annotation: %w", err)
-	}
-
-	present, err := r.Epoch.HasManifest(ctx, vmName, meta.HibernateSnapshotTag)
-	if err != nil {
-		return ctrl.Result{}, fmt.Errorf("probe hibernate snapshot %s: %w", vmName, err)
-	}
-	if present {
-		return ctrl.Result{}, r.setPhase(ctx, hib, cocoonv1.CocoonHibernationPhaseHibernated, vmName)
-	}
-	// Snapshot not yet pushed — keep polling.
-	if updateErr := r.setPhase(ctx, hib, cocoonv1.CocoonHibernationPhaseHibernating, vmName); updateErr != nil {
-		return ctrl.Result{}, updateErr
-	}
-	return ctrl.Result{RequeueAfter: requeueInterval}, nil
-}
-
-// reconcileWake clears the hibernate annotation and waits for the container to run.
-func (r *Reconciler) reconcileWake(ctx context.Context, hib *cocoonv1.CocoonHibernation, pod *corev1.Pod, vmName string) (ctrl.Result, error) {
-	logger := log.WithFunc("hibernation.Reconciler.reconcileWake")
-	if meta.IsContainerRunning(pod) {
-		// Drop snapshot tag (non-fatal; stale tag gets overwritten on next hibernate).
-		if err := r.Epoch.DeleteManifest(ctx, vmName, meta.HibernateSnapshotTag); err != nil {
-			logger.Warnf(ctx, "delete hibernation snapshot %s: %v", vmName, err)
-		}
-		return ctrl.Result{}, r.setPhase(ctx, hib, cocoonv1.CocoonHibernationPhaseActive, vmName)
-	}
-
-	if bool(meta.ReadHibernateState(pod)) {
-		if err := commonk8s.PatchHibernateState(ctx, r.Client, pod, false); err != nil {
-			return ctrl.Result{}, fmt.Errorf("clear hibernate annotation: %w", err)
-		}
-	}
-
-	if wakeDeadlineExceeded(hib) {
-		return ctrl.Result{}, r.markFailed(ctx, hib,
-			fmt.Sprintf("wake timed out after %s; vk-cocoon never reported the container running", wakeTimeout))
-	}
-
-	if err := r.setPhase(ctx, hib, cocoonv1.CocoonHibernationPhaseWaking, vmName); err != nil {
-		return ctrl.Result{}, err
-	}
-	return ctrl.Result{RequeueAfter: requeueInterval}, nil
-}
-
-// wakeDeadlineExceeded checks whether the Waking phase has exceeded wakeTimeout.
-func wakeDeadlineExceeded(hib *cocoonv1.CocoonHibernation) bool {
-	if hib.Status.Phase != cocoonv1.CocoonHibernationPhaseWaking {
-		return false
-	}
-	ready := apimeta.FindStatusCondition(hib.Status.Conditions, commonk8s.ConditionTypeReady)
-	if ready == nil || ready.LastTransitionTime.IsZero() {
-		return false
-	}
-	return time.Since(ready.LastTransitionTime.Time) > wakeTimeout
-}
-
 // setPhase patches status, preserving timestamps on no-op updates.
 // On Failed->Waking re-entry, it refreshes LastTransitionTime so the wake deadline
 // does not inherit the stale timestamp from the previous failure.
