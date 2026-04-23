@@ -15,6 +15,40 @@ import (
 	"github.com/cocoonstack/cocoon-common/meta"
 )
 
+// allOwnedPodsHibernated reports whether every managed owned pod has a
+// hibernate snapshot published to epoch. Unmanaged pods (e.g. static
+// toolboxes) are skipped since they have no VM lifecycle to observe.
+// Returns (false, nil) whenever the expected state is not yet observed so
+// the caller requeues rather than treats it as an error.
+func (r *Reconciler) allOwnedPodsHibernated(ctx context.Context, classified classifiedPods) (bool, error) {
+	if r.Epoch == nil {
+		// No registry configured — fall back to "trust the annotation write"
+		// so existing deployments without epoch still reach Suspended.
+		return true, nil
+	}
+	for _, name := range slices.Sorted(maps.Keys(classified.allByName)) {
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return false, ctxErr
+		}
+		pod := classified.allByName[name]
+		spec := meta.ParseVMSpec(pod)
+		if !spec.Managed {
+			continue
+		}
+		if spec.VMName == "" {
+			return false, nil
+		}
+		present, err := r.Epoch.HasManifest(ctx, spec.VMName, meta.HibernateSnapshotTag)
+		if err != nil {
+			return false, fmt.Errorf("probe hibernate snapshot %s: %w", spec.VMName, err)
+		}
+		if !present {
+			return false, nil
+		}
+	}
+	return true, nil
+}
+
 // applySuspend writes HibernateState(true) onto every owned pod.
 func (r *Reconciler) applySuspend(ctx context.Context, classified classifiedPods) error {
 	for _, name := range slices.Sorted(maps.Keys(classified.allByName)) {

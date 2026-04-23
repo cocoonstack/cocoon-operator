@@ -1,6 +1,8 @@
 package cocoonset
 
 import (
+	"context"
+	"errors"
 	"testing"
 
 	corev1 "k8s.io/api/core/v1"
@@ -11,6 +13,24 @@ import (
 	cocoonv1 "github.com/cocoonstack/cocoon-common/apis/v1"
 	"github.com/cocoonstack/cocoon-common/meta"
 )
+
+// fakeRegistry tracks manifest presence per (name, tag) key so tests can
+// simulate snapshots appearing/disappearing.
+type fakeRegistry struct {
+	present map[string]bool
+	probeErr error
+}
+
+func (f *fakeRegistry) HasManifest(_ context.Context, name, tag string) (bool, error) {
+	if f.probeErr != nil {
+		return false, f.probeErr
+	}
+	return f.present[name+":"+tag], nil
+}
+
+func (f *fakeRegistry) DeleteManifest(_ context.Context, _, _ string) error {
+	return nil
+}
 
 func TestApplyUnsuspendClearsHibernateAnnotation(t *testing.T) {
 	scheme := testScheme(t)
@@ -147,6 +167,88 @@ func TestEnsureToolboxesIdempotentOnExistingToolbox(t *testing.T) {
 	}
 	if changed {
 		t.Error("should not report changed for idempotent create")
+	}
+}
+
+func TestAllOwnedPodsHibernatedWaitsForEachManagedPod(t *testing.T) {
+	scheme := testScheme(t)
+	cs := newCocoonSet("demo", func(cs *cocoonv1.CocoonSet) {
+		cs.Spec.Agent.Replicas = 1
+	})
+	main := buildAgentPod(cs, 0, "", "", scheme)
+	sub := buildAgentPod(cs, 1, "vk-ns-demo-0", "", scheme)
+	classified := classifiedPods{
+		main:      main,
+		sub:       map[int32]*corev1.Pod{1: sub},
+		toolbox:   map[string]*corev1.Pod{},
+		allByName: map[string]*corev1.Pod{main.Name: main, sub.Name: sub},
+	}
+	reg := &fakeRegistry{present: map[string]bool{
+		"vk-ns-demo-0:" + meta.HibernateSnapshotTag: true,
+	}}
+	r := &Reconciler{Scheme: scheme, Epoch: reg}
+
+	done, err := r.allOwnedPodsHibernated(t.Context(), classified)
+	if err != nil {
+		t.Fatalf("allOwnedPodsHibernated: %v", err)
+	}
+	if done {
+		t.Error("must stay pending while sub-agent snapshot is missing")
+	}
+
+	reg.present["vk-ns-demo-1:"+meta.HibernateSnapshotTag] = true
+	done, err = r.allOwnedPodsHibernated(t.Context(), classified)
+	if err != nil {
+		t.Fatalf("allOwnedPodsHibernated after sub snapshot: %v", err)
+	}
+	if !done {
+		t.Error("must be done once every managed pod has its snapshot")
+	}
+}
+
+func TestAllOwnedPodsHibernatedSkipsUnmanagedToolbox(t *testing.T) {
+	scheme := testScheme(t)
+	cs := newCocoonSet("demo", func(cs *cocoonv1.CocoonSet) {
+		cs.Spec.Toolboxes = []cocoonv1.ToolboxSpec{
+			{Name: "tb", Mode: cocoonv1.ToolboxModeStatic, StaticVMID: "qemu-1", StaticIP: "10.0.0.1"},
+		}
+	})
+	main := buildAgentPod(cs, 0, "", "", scheme)
+	tb := buildToolboxPod(cs, cs.Spec.Toolboxes[0], scheme)
+	classified := classifiedPods{
+		main:      main,
+		sub:       map[int32]*corev1.Pod{},
+		toolbox:   map[string]*corev1.Pod{"tb": tb},
+		allByName: map[string]*corev1.Pod{main.Name: main, tb.Name: tb},
+	}
+	// Only main's snapshot is present; static toolbox has no snapshot and must be skipped.
+	reg := &fakeRegistry{present: map[string]bool{
+		"vk-ns-demo-0:" + meta.HibernateSnapshotTag: true,
+	}}
+	r := &Reconciler{Scheme: scheme, Epoch: reg}
+
+	done, err := r.allOwnedPodsHibernated(t.Context(), classified)
+	if err != nil {
+		t.Fatalf("allOwnedPodsHibernated: %v", err)
+	}
+	if !done {
+		t.Error("unmanaged toolbox must not block suspend completion")
+	}
+}
+
+func TestAllOwnedPodsHibernatedPropagatesProbeError(t *testing.T) {
+	scheme := testScheme(t)
+	cs := newCocoonSet("demo")
+	main := buildAgentPod(cs, 0, "", "", scheme)
+	classified := classifiedPods{
+		main:      main,
+		sub:       map[int32]*corev1.Pod{},
+		toolbox:   map[string]*corev1.Pod{},
+		allByName: map[string]*corev1.Pod{main.Name: main},
+	}
+	r := &Reconciler{Scheme: scheme, Epoch: &fakeRegistry{probeErr: errors.New("transport boom")}}
+	if _, err := r.allOwnedPodsHibernated(t.Context(), classified); err == nil {
+		t.Fatal("expected probe error to surface")
 	}
 }
 

@@ -517,6 +517,7 @@ spec:
                 - Pending
                 - Running
                 - Scaling
+                - Suspending
                 - Suspended
                 - Failed
                 type: string

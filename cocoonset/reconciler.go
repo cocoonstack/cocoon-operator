@@ -17,20 +17,27 @@ import (
 
 	cocoonv1 "github.com/cocoonstack/cocoon-common/apis/v1"
 	"github.com/cocoonstack/cocoon-common/meta"
-	"github.com/cocoonstack/epoch/registryclient"
 )
 
 const (
 	finalizerName      = "cocoonset.cocoonstack.io/finalizer"
 	requeueWaitForMain = 5 * time.Second
+	requeueSuspendPoll = 5 * time.Second
 )
+
+// SnapshotRegistry is the subset of epoch's HTTP API this reconciler needs.
+// *registryclient.Client satisfies it natively; tests swap in fakes.
+type SnapshotRegistry interface {
+	HasManifest(ctx context.Context, name, reference string) (bool, error)
+	DeleteManifest(ctx context.Context, name, reference string) error
+}
 
 // Reconciler watches CocoonSet resources and manages the lifecycle of agent
 // and toolbox pods to match the declared spec.
 type Reconciler struct {
 	client.Client
 	Scheme *runtime.Scheme
-	Epoch  *registryclient.Client
+	Epoch  SnapshotRegistry
 }
 
 // SetupWithManager registers the reconciler. `For` uses GenerationChangedPredicate
@@ -100,8 +107,17 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 		if err := r.applySuspend(ctx, classified); err != nil {
 			return ctrl.Result{}, err
 		}
-		return ctrl.Result{}, r.patchStatus(ctx, &cs,
-			buildStatus(&cs, classified, cocoonv1.CocoonSetPhaseSuspended))
+		allHibernated, err := r.allOwnedPodsHibernated(ctx, classified)
+		if err != nil {
+			return ctrl.Result{}, err
+		}
+		phase := cocoonv1.CocoonSetPhaseSuspending
+		result := ctrl.Result{RequeueAfter: requeueSuspendPoll}
+		if allHibernated {
+			phase = cocoonv1.CocoonSetPhaseSuspended
+			result = ctrl.Result{}
+		}
+		return result, r.patchStatus(ctx, &cs, buildStatus(&cs, classified, phase))
 	}
 
 	// Clear stale hibernate annotations from a prior suspend pass.
