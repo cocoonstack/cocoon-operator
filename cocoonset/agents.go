@@ -7,6 +7,7 @@ import (
 	"slices"
 
 	"github.com/projecteru2/core/log"
+	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 
 	cocoonv1 "github.com/cocoonstack/cocoon-common/apis/v1"
@@ -20,22 +21,13 @@ func (r *Reconciler) ensureSubAgents(ctx context.Context, cs *cocoonv1.CocoonSet
 	changed := false
 	for slot := int32(1); slot <= cs.Spec.Agent.Replicas; slot++ {
 		if pod, exists := classified.sub[slot]; exists {
-			if meta.IsPodTerminal(pod) {
-				logger.Infof(ctx, "sub-agent %s/%s slot %d terminal (phase=%s), deleting for recreate", pod.Namespace, pod.Name, slot, pod.Status.Phase)
-				if err := r.Delete(ctx, pod); err != nil && !apierrors.IsNotFound(err) {
-					return changed, fmt.Errorf("delete terminal sub-agent slot %d: %w", slot, err)
-				}
+			deleted, err := r.triageSubAgent(ctx, logger, pod, cs, slot)
+			if err != nil {
+				return changed, err
+			}
+			if deleted {
 				changed = true
-				continue
 			}
-			if podSpecMatchesAgent(pod, cs, slot) {
-				continue
-			}
-			logger.Infof(ctx, "sub-agent %s/%s slot %d spec drifted, deleting for recreate", pod.Namespace, pod.Name, slot)
-			if err := r.Delete(ctx, pod); err != nil && !apierrors.IsNotFound(err) {
-				return changed, fmt.Errorf("delete drifted sub-agent slot %d: %w", slot, err)
-			}
-			changed = true
 			continue
 		}
 		subPod := buildAgentPod(cs, slot, mainVMName, mainNodeName, r.Scheme)
@@ -63,4 +55,25 @@ func (r *Reconciler) ensureSubAgents(ctx context.Context, cs *cocoonv1.CocoonSet
 		changed = true
 	}
 	return changed, nil
+}
+
+// triageSubAgent deletes pod when it is terminal or has drifted from spec.
+// Returns (deleted, err). A non-deleted return means the pod still matches.
+func (r *Reconciler) triageSubAgent(ctx context.Context, logger *log.Fields, pod *corev1.Pod, cs *cocoonv1.CocoonSet, slot int32) (bool, error) {
+	switch {
+	case meta.IsPodTerminal(pod):
+		logger.Infof(ctx, "sub-agent %s/%s slot %d terminal (phase=%s), deleting for recreate", pod.Namespace, pod.Name, slot, pod.Status.Phase)
+		if err := r.Delete(ctx, pod); err != nil && !apierrors.IsNotFound(err) {
+			return false, fmt.Errorf("delete terminal sub-agent slot %d: %w", slot, err)
+		}
+		return true, nil
+	case !podSpecMatchesAgent(pod, cs, slot):
+		logger.Infof(ctx, "sub-agent %s/%s slot %d spec drifted, deleting for recreate", pod.Namespace, pod.Name, slot)
+		if err := r.Delete(ctx, pod); err != nil && !apierrors.IsNotFound(err) {
+			return false, fmt.Errorf("delete drifted sub-agent slot %d: %w", slot, err)
+		}
+		return true, nil
+	default:
+		return false, nil
+	}
 }

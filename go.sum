@@ -27,12 +27,10 @@ github.com/cockroachdb/logtags v0.0.0-20230118201751-21c54148d20b h1:r6VH0faHjZe
 github.com/cockroachdb/logtags v0.0.0-20230118201751-21c54148d20b/go.mod h1:Vz9DsVWQQhf3vs21MhPMZpMGSht7O/2vFW2xusFUVOs=
 github.com/cockroachdb/redact v1.1.3 h1:AKZds10rFSIj7qADf0g46UixK8NNLwWTNdCIGS5wfSQ=
 github.com/cockroachdb/redact v1.1.3/go.mod h1:BVNblN9mBWFyMyqK1k3AAiSxhvhfK2oOZZ2lK+dpvRg=
-github.com/cocoonstack/cocoon-common v0.1.9 h1:WRPhYzO+X8fkpaOHRi+DzYOLinLbiCInaUyc8vyqrSg=
-github.com/cocoonstack/cocoon-common v0.1.9/go.mod h1:cjBGOeZvsw2J5X7RIQJ44PJx0QiwgypEJVdd5V38arU=
-github.com/cocoonstack/cocoon-common v0.1.10-0.20260420082925-c9faf86068fa h1:snlz5dka41vpVrxvt5JT2k5z2xOCgVaxXY/PUoWpbqQ=
-github.com/cocoonstack/cocoon-common v0.1.10-0.20260420082925-c9faf86068fa/go.mod h1:cjBGOeZvsw2J5X7RIQJ44PJx0QiwgypEJVdd5V38arU=
-github.com/cocoonstack/epoch v0.2.0 h1:MJpGS2A+/+K+Ih+QJNeTbZytKkrmOwCgA3yi5NIEeNY=
-github.com/cocoonstack/epoch v0.2.0/go.mod h1:sP9Yn9yvzXZdm19TTaK6jxYOMUB9FGhJgOFtH0COmgU=
+github.com/cocoonstack/cocoon-common v0.1.10-0.20260423175920-c8cd308978cb h1:s31sByTK+6ik1BOaAirpKZ1O9q3OSzT8kAiECci5T0k=
+github.com/cocoonstack/cocoon-common v0.1.10-0.20260423175920-c8cd308978cb/go.mod h1:cjBGOeZvsw2J5X7RIQJ44PJx0QiwgypEJVdd5V38arU=
+github.com/cocoonstack/epoch v0.2.1-0.20260423180208-f9da6a80997a h1:bHhT3BjlV8PChGDI36VwKCeFmu8jxakZaeVZ0YXlR9Y=
+github.com/cocoonstack/epoch v0.2.1-0.20260423180208-f9da6a80997a/go.mod h1:x65KEbc/XleTL39rOLXBAuT5kWNbQahxIYhbSbhXwDw=
 github.com/codegangsta/inject v0.0.0-20150114235600-33e0aa1cb7c0/go.mod h1:4Zcjuz89kmFXt9morQgcfYZAYZ5n8WHjt81YYWIwtTM=
 github.com/coreos/etcd v3.3.10+incompatible/go.mod h1:uF7uidLiAD3TWHmW31ZFd/JWoc32PjwdhPthX9715RE=
 github.com/coreos/go-etcd v2.0.0+incompatible/go.mod h1:Jez6KQU2B/sWsbdaef3ED8NzMklzPG4d5KIOhIy30Tk=

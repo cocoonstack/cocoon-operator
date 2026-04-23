@@ -7,13 +7,45 @@ import (
 	"maps"
 	"slices"
 
+	"github.com/projecteru2/core/log"
 	corev1 "k8s.io/api/core/v1"
+	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	cocoonv1 "github.com/cocoonstack/cocoon-common/apis/v1"
 	commonk8s "github.com/cocoonstack/cocoon-common/k8s"
 	"github.com/cocoonstack/cocoon-common/meta"
 )
+
+// reconcileSuspend ensures the main agent exists, applies the hibernate
+// annotation to every owned pod, then polls epoch to observe when all
+// managed VMs have been pushed to snapshot. Stays in Suspending with a
+// periodic requeue until every required snapshot lands.
+func (r *Reconciler) reconcileSuspend(ctx context.Context, cs *cocoonv1.CocoonSet, classified classifiedPods) (ctrl.Result, error) {
+	logger := log.WithFunc("cocoonset.Reconciler.reconcileSuspend")
+	if classified.main == nil {
+		mainPod := buildAgentPod(cs, 0, "", "", r.Scheme)
+		if err := r.Create(ctx, mainPod); err != nil {
+			return ctrl.Result{}, fmt.Errorf("create main agent before suspend: %w", err)
+		}
+		logger.Infof(ctx, "created main agent %s/%s ahead of suspend", mainPod.Namespace, mainPod.Name)
+		return ctrl.Result{Requeue: true}, nil
+	}
+	if err := r.applySuspend(ctx, classified); err != nil {
+		return ctrl.Result{}, err
+	}
+	allHibernated, err := r.allOwnedPodsHibernated(ctx, classified)
+	if err != nil {
+		return ctrl.Result{}, err
+	}
+	phase := cocoonv1.CocoonSetPhaseSuspending
+	result := ctrl.Result{RequeueAfter: requeueSuspendPoll}
+	if allHibernated {
+		phase = cocoonv1.CocoonSetPhaseSuspended
+		result = ctrl.Result{}
+	}
+	return result, r.patchStatus(ctx, cs, buildStatus(cs, classified, phase))
+}
 
 // allOwnedPodsHibernated reports whether every managed owned pod has a
 // hibernate snapshot published to epoch. Unmanaged pods (e.g. static
@@ -22,8 +54,8 @@ import (
 // the caller requeues rather than treats it as an error.
 func (r *Reconciler) allOwnedPodsHibernated(ctx context.Context, classified classifiedPods) (bool, error) {
 	if r.Epoch == nil {
-		// No registry configured — fall back to "trust the annotation write"
-		// so existing deployments without epoch still reach Suspended.
+		// No registry configured; epoch-less deployments have no snapshot to
+		// observe, so treat the annotation write as authoritative.
 		return true, nil
 	}
 	for _, name := range slices.Sorted(maps.Keys(classified.allByName)) {

@@ -16,6 +16,27 @@ import (
 	"github.com/cocoonstack/cocoon-common/meta"
 )
 
+// triageToolbox deletes pod when it is terminal or has drifted from spec.
+// Returns (deleted, err). A non-deleted return means the pod still matches.
+func (r *Reconciler) triageToolbox(ctx context.Context, logger *log.Fields, pod *corev1.Pod, cs *cocoonv1.CocoonSet, tb cocoonv1.ToolboxSpec) (bool, error) {
+	switch {
+	case meta.IsPodTerminal(pod):
+		logger.Infof(ctx, "toolbox %s/%s %q terminal (phase=%s), deleting for recreate", pod.Namespace, pod.Name, tb.Name, pod.Status.Phase)
+		if err := r.Delete(ctx, pod); err != nil && !apierrors.IsNotFound(err) {
+			return false, fmt.Errorf("delete terminal toolbox %s: %w", tb.Name, err)
+		}
+		return true, nil
+	case !podSpecMatchesToolbox(pod, cs, tb):
+		logger.Infof(ctx, "toolbox %s/%s %q spec drifted, deleting for recreate", pod.Namespace, pod.Name, tb.Name)
+		if err := r.Delete(ctx, pod); err != nil && !apierrors.IsNotFound(err) {
+			return false, fmt.Errorf("delete drifted toolbox %s: %w", tb.Name, err)
+		}
+		return true, nil
+	default:
+		return false, nil
+	}
+}
+
 // ensureToolboxes creates/deletes toolbox pods to match spec.
 // Returns true when cluster state was mutated.
 func (r *Reconciler) ensureToolboxes(ctx context.Context, cs *cocoonv1.CocoonSet, classified classifiedPods) (bool, error) {
@@ -29,22 +50,13 @@ func (r *Reconciler) ensureToolboxes(ctx context.Context, cs *cocoonv1.CocoonSet
 			return changed, fmt.Errorf("create toolbox %s: name collision with existing pod %s", tb.Name, podName)
 		}
 		if pod, exists := classified.toolbox[tb.Name]; exists {
-			if meta.IsPodTerminal(pod) {
-				logger.Infof(ctx, "toolbox %s/%s %q terminal (phase=%s), deleting for recreate", pod.Namespace, pod.Name, tb.Name, pod.Status.Phase)
-				if err := r.Delete(ctx, pod); err != nil && !apierrors.IsNotFound(err) {
-					return changed, fmt.Errorf("delete terminal toolbox %s: %w", tb.Name, err)
-				}
+			deleted, err := r.triageToolbox(ctx, logger, pod, cs, tb)
+			if err != nil {
+				return changed, err
+			}
+			if deleted {
 				changed = true
-				continue
 			}
-			if podSpecMatchesToolbox(pod, cs, tb) {
-				continue
-			}
-			logger.Infof(ctx, "toolbox %s/%s %q spec drifted, deleting for recreate", pod.Namespace, pod.Name, tb.Name)
-			if err := r.Delete(ctx, pod); err != nil && !apierrors.IsNotFound(err) {
-				return changed, fmt.Errorf("delete drifted toolbox %s: %w", tb.Name, err)
-			}
-			changed = true
 			continue
 		}
 		tbPod := buildToolboxPod(cs, tb, r.Scheme)

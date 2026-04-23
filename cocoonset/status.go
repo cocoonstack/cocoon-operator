@@ -71,7 +71,7 @@ func buildStatus(cs *cocoonv1.CocoonSet, classified classifiedPods, phase cocoon
 		agents = append(agents, agentStatusFromPod(sub, slot, meta.RoleSubAgent, mainVMName))
 	}
 
-	tbDesired := int32(len(cs.Spec.Toolboxes))
+	tbDesired := int32(len(cs.Spec.Toolboxes)) //nolint:gosec // bounded by CocoonSet spec size
 	tbReady := int32(0)
 	tbStatuses := make([]cocoonv1.ToolboxStatus, 0, len(classified.toolbox))
 	for _, name := range slices.Sorted(maps.Keys(classified.toolbox)) {

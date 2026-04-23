@@ -14,43 +14,38 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
 	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/builder"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/event"
 	"sigs.k8s.io/controller-runtime/pkg/handler"
+	"sigs.k8s.io/controller-runtime/pkg/predicate"
 
 	cocoonv1 "github.com/cocoonstack/cocoon-common/apis/v1"
 	commonk8s "github.com/cocoonstack/cocoon-common/k8s"
 	"github.com/cocoonstack/cocoon-common/meta"
+	"github.com/cocoonstack/cocoon-operator/snapshot"
 )
-
-// indexPodRefName keys CocoonHibernation objects by spec.podRef.name so the
-// pod watcher can resolve a pod event back to the CRs that target it.
-const indexPodRefName = "spec.podRef.name"
 
 const (
 	requeueInterval = 5 * time.Second
 	// wakeTimeout bounds how long Waking can last before marking Failed.
 	wakeTimeout = 5 * time.Minute
 
+	// indexPodRefName keys CocoonHibernation objects by spec.podRef.name so the
+	// pod watcher can resolve a pod event back to the CRs that target it.
+	indexPodRefName = "spec.podRef.name"
+
 	conditionReasonPending = "Pending"
 	conditionReasonDone    = "Done"
 	conditionReasonFailed  = "Failed"
 )
-
-// SnapshotRegistry is the subset of epoch's HTTP API this reconciler needs.
-// *registryclient.Client satisfies it natively; tests swap in fakes.
-type SnapshotRegistry interface {
-	// HasManifest reports whether (name, tag) exists. Missing returns (false, nil).
-	HasManifest(ctx context.Context, name, tag string) (bool, error)
-	// DeleteManifest removes the manifest at (name, tag).
-	DeleteManifest(ctx context.Context, name, tag string) error
-}
 
 // Reconciler watches CocoonHibernation resources and drives hibernate/wake
 // transitions by toggling pod annotations and polling the snapshot registry.
 type Reconciler struct {
 	client.Client
 	Scheme *runtime.Scheme
-	Epoch  SnapshotRegistry
+	Epoch  snapshot.Registry
 }
 
 // SetupWithManager registers the reconciler with the controller manager.
@@ -67,7 +62,19 @@ func (r *Reconciler) SetupWithManager(mgr ctrl.Manager) error {
 	}
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&cocoonv1.CocoonHibernation{}).
-		Watches(&corev1.Pod{}, handler.EnqueueRequestsFromMapFunc(r.hibernationsTargetingPod)).
+		Watches(
+			&corev1.Pod{},
+			handler.EnqueueRequestsFromMapFunc(r.hibernationsTargetingPod),
+			// Ignore status-only churn; we only care about creation, deletion,
+			// and annotation changes (VMName arriving, hibernate flag toggling).
+			builder.WithPredicates(predicate.Or(
+				predicate.AnnotationChangedPredicate{},
+				predicate.Funcs{
+					CreateFunc: func(event.CreateEvent) bool { return true },
+					DeleteFunc: func(event.DeleteEvent) bool { return true },
+				},
+			)),
+		).
 		Complete(r)
 }
 
@@ -176,8 +183,15 @@ func (r *Reconciler) markFailed(ctx context.Context, hib *cocoonv1.CocoonHiberna
 
 // markPending records that the CR is waiting on external state (pod creation,
 // VMName annotation) without pinning the phase to Failed. Self-heals once the
-// pod watcher re-enqueues the CR.
+// pod watcher re-enqueues the CR. Short-circuits when the phase and Ready
+// condition message already match, so the high-volume pod watcher does not
+// generate a PATCH on every event.
 func (r *Reconciler) markPending(ctx context.Context, hib *cocoonv1.CocoonHibernation, msg string) error {
+	if hib.Status.Phase == cocoonv1.CocoonHibernationPhasePending {
+		if ready := apimeta.FindStatusCondition(hib.Status.Conditions, commonk8s.ConditionTypeReady); ready != nil && ready.Message == msg {
+			return nil
+		}
+	}
 	if err := commonk8s.PatchStatus(ctx, r.Client, hib, func(h *cocoonv1.CocoonHibernation) {
 		h.Status.ObservedGeneration = h.Generation
 		h.Status.Phase = cocoonv1.CocoonHibernationPhasePending

@@ -17,6 +17,7 @@ import (
 
 	cocoonv1 "github.com/cocoonstack/cocoon-common/apis/v1"
 	"github.com/cocoonstack/cocoon-common/meta"
+	"github.com/cocoonstack/cocoon-operator/snapshot"
 )
 
 const (
@@ -25,19 +26,12 @@ const (
 	requeueSuspendPoll = 5 * time.Second
 )
 
-// SnapshotRegistry is the subset of epoch's HTTP API this reconciler needs.
-// *registryclient.Client satisfies it natively; tests swap in fakes.
-type SnapshotRegistry interface {
-	HasManifest(ctx context.Context, name, reference string) (bool, error)
-	DeleteManifest(ctx context.Context, name, reference string) error
-}
-
 // Reconciler watches CocoonSet resources and manages the lifecycle of agent
 // and toolbox pods to match the declared spec.
 type Reconciler struct {
 	client.Client
 	Scheme *runtime.Scheme
-	Epoch  SnapshotRegistry
+	Epoch  snapshot.Registry
 }
 
 // SetupWithManager registers the reconciler. `For` uses GenerationChangedPredicate
@@ -94,30 +88,8 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 			buildStatus(&cs, classified, cocoonv1.CocoonSetPhaseFailed))
 	}
 
-	// Suspend: ensure main exists first, then hibernate all owned pods.
 	if cs.Spec.Suspend {
-		if classified.main == nil {
-			mainPod := buildAgentPod(&cs, 0, "", "", r.Scheme)
-			if err := r.Create(ctx, mainPod); err != nil {
-				return ctrl.Result{}, fmt.Errorf("create main agent before suspend: %w", err)
-			}
-			logger.Infof(ctx, "created main agent %s/%s ahead of suspend", mainPod.Namespace, mainPod.Name)
-			return ctrl.Result{Requeue: true}, nil
-		}
-		if err := r.applySuspend(ctx, classified); err != nil {
-			return ctrl.Result{}, err
-		}
-		allHibernated, err := r.allOwnedPodsHibernated(ctx, classified)
-		if err != nil {
-			return ctrl.Result{}, err
-		}
-		phase := cocoonv1.CocoonSetPhaseSuspending
-		result := ctrl.Result{RequeueAfter: requeueSuspendPoll}
-		if allHibernated {
-			phase = cocoonv1.CocoonSetPhaseSuspended
-			result = ctrl.Result{}
-		}
-		return result, r.patchStatus(ctx, &cs, buildStatus(&cs, classified, phase))
+		return r.reconcileSuspend(ctx, &cs, classified)
 	}
 
 	// Clear stale hibernate annotations from a prior suspend pass.
