@@ -7,6 +7,7 @@ require (
 	github.com/cocoonstack/epoch v0.2.1-0.20260423235109-fcafc2d850ed
 	github.com/go-logr/logr v1.4.3
 	github.com/projecteru2/core v0.0.0-20241016125006-ff909eefe04c
+	golang.org/x/sync v0.19.0
 	k8s.io/api v0.35.3
 	k8s.io/apimachinery v0.35.3
 	k8s.io/client-go v0.35.3
@@ -60,7 +61,6 @@ require (
 	golang.org/x/exp v0.0.0-20240719175910-8a7402abbf56 // indirect
 	golang.org/x/net v0.48.0 // indirect
 	golang.org/x/oauth2 v0.30.0 // indirect
-	golang.org/x/sync v0.19.0 // indirect
 	golang.org/x/sys v0.39.0 // indirect
 	golang.org/x/term v0.38.0 // indirect
 	golang.org/x/text v0.32.0 // indirect

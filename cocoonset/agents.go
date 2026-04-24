@@ -5,8 +5,10 @@ import (
 	"fmt"
 	"maps"
 	"slices"
+	"sync/atomic"
 
 	"github.com/projecteru2/core/log"
+	"golang.org/x/sync/errgroup"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 
@@ -14,11 +16,22 @@ import (
 	"github.com/cocoonstack/cocoon-common/meta"
 )
 
+// subAgentCreateConcurrency caps parallel pod creates during fan-out so a
+// large scale-up (e.g. 1→N) does not burst the apiserver. Empirically the
+// rate limiter in controller-runtime plus apiserver QPS accommodate 8 in
+// flight without priority-fairness throttling.
+const subAgentCreateConcurrency = 8
+
 // ensureSubAgents creates/deletes sub-agent pods to match [1..Replicas].
-// Returns true when cluster state was mutated.
+// Returns true when cluster state was mutated. Missing slots are created
+// concurrently so batch scale-ups do not serialize N apiserver round trips.
 func (r *Reconciler) ensureSubAgents(ctx context.Context, cs *cocoonv1.CocoonSet, classified classifiedPods, mainVMName, mainNodeName string) (bool, error) {
 	logger := log.WithFunc("cocoonset.Reconciler.ensureSubAgents")
 	changed := false
+
+	g, gctx := errgroup.WithContext(ctx)
+	g.SetLimit(subAgentCreateConcurrency)
+	var created atomic.Bool
 	for slot := int32(1); slot <= cs.Spec.Agent.Replicas; slot++ {
 		if pod, exists := classified.sub[slot]; exists {
 			deleted, err := r.triageSubAgent(ctx, logger, pod, cs, slot)
@@ -31,13 +44,22 @@ func (r *Reconciler) ensureSubAgents(ctx context.Context, cs *cocoonv1.CocoonSet
 			continue
 		}
 		subPod := buildAgentPod(cs, slot, mainVMName, mainNodeName, r.Scheme)
-		if err := r.Create(ctx, subPod); err != nil {
-			if apierrors.IsAlreadyExists(err) {
-				continue
+		g.Go(func() error {
+			if err := r.Create(gctx, subPod); err != nil {
+				if apierrors.IsAlreadyExists(err) {
+					return nil
+				}
+				return fmt.Errorf("create sub-agent slot %d: %w", slot, err)
 			}
-			return changed, fmt.Errorf("create sub-agent slot %d: %w", slot, err)
-		}
-		logger.Infof(ctx, "created sub-agent %s/%s", subPod.Namespace, subPod.Name)
+			logger.Infof(gctx, "created sub-agent %s/%s", subPod.Namespace, subPod.Name)
+			created.Store(true)
+			return nil
+		})
+	}
+	if err := g.Wait(); err != nil {
+		return changed || created.Load(), err
+	}
+	if created.Load() {
 		changed = true
 	}
 	for _, slot := range slices.Sorted(maps.Keys(classified.sub)) {
