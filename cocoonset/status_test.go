@@ -35,7 +35,7 @@ func TestBuildStatusScalingWhenSubsMissing(t *testing.T) {
 	cs := newCocoonSet("demo", func(cs *cocoonv1.CocoonSet) {
 		cs.Spec.Agent.Replicas = 1
 	})
-	main := readyPod(buildAgentPod(cs, 0, "", "", testScheme(t)))
+	main := readyPod(mustBuildAgentPod(t, cs, 0, "", "", testScheme(t)))
 	classified := classifiedPods{
 		main:      main,
 		sub:       map[int32]*corev1.Pod{},
@@ -49,7 +49,7 @@ func TestBuildStatusScalingWhenSubsMissing(t *testing.T) {
 
 func TestBuildStatusRunningWhenAllReady(t *testing.T) {
 	cs := newCocoonSet("demo")
-	main := readyPod(buildAgentPod(cs, 0, "", "", testScheme(t)))
+	main := readyPod(mustBuildAgentPod(t, cs, 0, "", "", testScheme(t)))
 	classified := classifiedPods{
 		main:      main,
 		sub:       map[int32]*corev1.Pod{},
@@ -65,8 +65,8 @@ func TestBuildStatusReportsAgents(t *testing.T) {
 	cs := newCocoonSet("demo", func(cs *cocoonv1.CocoonSet) {
 		cs.Spec.Agent.Replicas = 2
 	})
-	main := readyPod(buildAgentPod(cs, 0, "", "", testScheme(t)))
-	sub1 := readyPod(buildAgentPod(cs, 1, "vk-ns-demo-0", "", testScheme(t)))
+	main := readyPod(mustBuildAgentPod(t, cs, 0, "", "", testScheme(t)))
+	sub1 := readyPod(mustBuildAgentPod(t, cs, 1, "vk-ns-demo-0", "", testScheme(t)))
 	classified := classifiedPods{
 		main:      main,
 		sub:       map[int32]*corev1.Pod{1: sub1},
@@ -116,7 +116,7 @@ func TestStatusEqualDetectsChange(t *testing.T) {
 
 func TestAgentStatusFromPod(t *testing.T) {
 	cs := newCocoonSet("demo")
-	pod := buildAgentPod(cs, 0, "", "", testScheme(t))
+	pod := mustBuildAgentPod(t, cs, 0, "", "", testScheme(t))
 	pod.Status.Phase = corev1.PodRunning
 	vmRuntime := meta.VMRuntime{VMID: "qemu-1", IP: "10.0.0.1"}
 	vmRuntime.Apply(pod)
@@ -169,8 +169,8 @@ func TestBuildStatusScalingWhenToolboxesPending(t *testing.T) {
 			{Name: "tb", Image: "ghcr.io/cocoonstack/cocoon/toolbox:latest"},
 		}
 	})
-	main := readyPod(buildAgentPod(cs, 0, "", "", testScheme(t)))
-	tbPod := buildToolboxPod(cs, cs.Spec.Toolboxes[0], testScheme(t))
+	main := readyPod(mustBuildAgentPod(t, cs, 0, "", "", testScheme(t)))
+	tbPod := mustBuildToolboxPod(t, cs, cs.Spec.Toolboxes[0], testScheme(t))
 	tbPod.Status.Phase = corev1.PodPending
 	classified := classifiedPods{
 		main:      main,

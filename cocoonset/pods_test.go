@@ -22,6 +22,33 @@ func testScheme(t *testing.T) *runtime.Scheme {
 	return scheme
 }
 
+func mustBuildAgentPod(t *testing.T, cs *cocoonv1.CocoonSet, slot int32, mainVMName, bindNodeName string, scheme *runtime.Scheme) *corev1.Pod {
+	t.Helper()
+	pod, err := buildAgentPod(cs, slot, mainVMName, bindNodeName, scheme)
+	if err != nil {
+		t.Fatalf("build agent pod: %v", err)
+	}
+	return pod
+}
+
+func mustBuildToolboxPod(t *testing.T, cs *cocoonv1.CocoonSet, tb cocoonv1.ToolboxSpec, scheme *runtime.Scheme) *corev1.Pod {
+	t.Helper()
+	pod, err := buildToolboxPod(cs, tb, scheme)
+	if err != nil {
+		t.Fatalf("build toolbox pod: %v", err)
+	}
+	return pod
+}
+
+func mustNewManagedPod(t *testing.T, cs *cocoonv1.CocoonSet, podName, role, slotLabel string, scheme *runtime.Scheme) *corev1.Pod {
+	t.Helper()
+	pod, err := newManagedPod(cs, podName, role, slotLabel, scheme)
+	if err != nil {
+		t.Fatalf("new managed pod: %v", err)
+	}
+	return pod
+}
+
 func newCocoonSet(name string, modifiers ...func(*cocoonv1.CocoonSet)) *cocoonv1.CocoonSet {
 	cs := &cocoonv1.CocoonSet{
 		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: "ns", UID: "test-uid"},
@@ -39,7 +66,7 @@ func newCocoonSet(name string, modifiers ...func(*cocoonv1.CocoonSet)) *cocoonv1
 
 func TestBuildAgentPodSlot0IsMain(t *testing.T) {
 	cs := newCocoonSet("demo")
-	pod := buildAgentPod(cs, 0, "", "", testScheme(t))
+	pod := mustBuildAgentPod(t, cs, 0, "", "", testScheme(t))
 
 	if pod.Name != "demo-0" {
 		t.Errorf("pod name: %q, want demo-0", pod.Name)
@@ -63,7 +90,7 @@ func TestBuildAgentPodSubAgentForksFromMain(t *testing.T) {
 		cs.Spec.Agent.Replicas = 2
 	})
 	mainVMName := "vk-ns-demo-0"
-	pod := buildAgentPod(cs, 1, mainVMName, "cocoonset-node-2", testScheme(t))
+	pod := mustBuildAgentPod(t, cs, 1, mainVMName, "cocoonset-node-2", testScheme(t))
 
 	if pod.Labels[meta.LabelRole] != meta.RoleSubAgent {
 		t.Errorf("role: %q, want sub-agent", pod.Labels[meta.LabelRole])
@@ -78,7 +105,7 @@ func TestBuildAgentPodSubAgentForksFromMain(t *testing.T) {
 
 func TestBuildAgentPodAppliesAgentDefaults(t *testing.T) {
 	cs := newCocoonSet("demo")
-	pod := buildAgentPod(cs, 0, "", "", testScheme(t))
+	pod := mustBuildAgentPod(t, cs, 0, "", "", testScheme(t))
 	if pod.Annotations[meta.AnnotationMode] != string(cocoonv1.AgentModeClone) {
 		t.Errorf("mode default: %q", pod.Annotations[meta.AnnotationMode])
 	}
@@ -95,7 +122,7 @@ func TestBuildAgentPodPropagatesStorage(t *testing.T) {
 	cs := newCocoonSet("demo", func(cs *cocoonv1.CocoonSet) {
 		cs.Spec.Agent.Storage = &q
 	})
-	pod := buildAgentPod(cs, 0, "", "", testScheme(t))
+	pod := mustBuildAgentPod(t, cs, 0, "", "", testScheme(t))
 	if pod.Annotations[meta.AnnotationStorage] != "100Gi" {
 		t.Errorf("storage: %q", pod.Annotations[meta.AnnotationStorage])
 	}
@@ -110,7 +137,7 @@ func TestBuildToolboxPodStaticCarriesRuntimeHints(t *testing.T) {
 		StaticVMID: "qemu-1",
 		VNCPort:    5901,
 	}
-	pod := buildToolboxPod(cs, tb, testScheme(t))
+	pod := mustBuildToolboxPod(t, cs, tb, testScheme(t))
 
 	if pod.Annotations[meta.AnnotationManaged] == "true" {
 		t.Errorf("static toolbox should not be marked managed")
@@ -133,7 +160,7 @@ func TestBuildToolboxPodNonStaticIsManaged(t *testing.T) {
 		Mode:  cocoonv1.ToolboxModeRun,
 		Image: "ghcr.io/cocoonstack/cocoon/toolbox:latest",
 	}
-	pod := buildToolboxPod(cs, tb, testScheme(t))
+	pod := mustBuildToolboxPod(t, cs, tb, testScheme(t))
 	if pod.Annotations[meta.AnnotationManaged] != "true" {
 		t.Errorf("non-static toolbox should be managed")
 	}
@@ -142,10 +169,10 @@ func TestBuildToolboxPodNonStaticIsManaged(t *testing.T) {
 func TestClassifyPodsGroupsByRole(t *testing.T) {
 	cs := newCocoonSet("demo")
 	scheme := testScheme(t)
-	main := buildAgentPod(cs, 0, "", "", scheme)
-	sub1 := buildAgentPod(cs, 1, "vk-ns-demo-0", "", scheme)
-	sub2 := buildAgentPod(cs, 2, "vk-ns-demo-0", "", scheme)
-	tb := buildToolboxPod(cs, cocoonv1.ToolboxSpec{Name: "tb", Image: "x"}, scheme)
+	main := mustBuildAgentPod(t, cs, 0, "", "", scheme)
+	sub1 := mustBuildAgentPod(t, cs, 1, "vk-ns-demo-0", "", scheme)
+	sub2 := mustBuildAgentPod(t, cs, 2, "vk-ns-demo-0", "", scheme)
+	tb := mustBuildToolboxPod(t, cs, cocoonv1.ToolboxSpec{Name: "tb", Image: "x"}, scheme)
 
 	pods := []corev1.Pod{*main, *sub1, *sub2, *tb}
 	got := classifyPods(pods)
@@ -182,7 +209,7 @@ func TestClassifyPodsUnknownsBucket(t *testing.T) {
 
 func TestNewManagedPodHasOwnerReference(t *testing.T) {
 	cs := newCocoonSet("demo")
-	pod := newManagedPod(cs, "demo-0", meta.RoleMain, "0", testScheme(t))
+	pod := mustNewManagedPod(t, cs, "demo-0", meta.RoleMain, "0", testScheme(t))
 	if len(pod.OwnerReferences) != 1 {
 		t.Fatalf("expected 1 owner ref, got %d", len(pod.OwnerReferences))
 	}
@@ -197,7 +224,7 @@ func TestNewManagedPodHasOwnerReference(t *testing.T) {
 
 func TestNewManagedPodCarriesCocoonToleration(t *testing.T) {
 	cs := newCocoonSet("demo")
-	pod := newManagedPod(cs, "demo-0", meta.RoleMain, "0", testScheme(t))
+	pod := mustNewManagedPod(t, cs, "demo-0", meta.RoleMain, "0", testScheme(t))
 	found := false
 	for _, tol := range pod.Spec.Tolerations {
 		if tol.Key == meta.TolerationKey {
@@ -212,7 +239,7 @@ func TestNewManagedPodCarriesCocoonToleration(t *testing.T) {
 func TestPodSpecMatchesAgentIdenticalSpec(t *testing.T) {
 	cs := newCocoonSet("demo")
 	scheme := testScheme(t)
-	pod := buildAgentPod(cs, 0, "", "", scheme)
+	pod := mustBuildAgentPod(t, cs, 0, "", "", scheme)
 	if !podSpecMatchesAgent(pod, cs, 0) {
 		t.Error("freshly built pod should match its own spec")
 	}
@@ -221,7 +248,7 @@ func TestPodSpecMatchesAgentIdenticalSpec(t *testing.T) {
 func TestPodSpecMatchesAgentDetectsImageDrift(t *testing.T) {
 	cs := newCocoonSet("demo")
 	scheme := testScheme(t)
-	pod := buildAgentPod(cs, 0, "", "", scheme)
+	pod := mustBuildAgentPod(t, cs, 0, "", "", scheme)
 
 	updated := newCocoonSet("demo", func(cs *cocoonv1.CocoonSet) {
 		cs.Spec.Agent.Image = "ghcr.io/cocoonstack/cocoon/ubuntu:26.04"
@@ -234,7 +261,7 @@ func TestPodSpecMatchesAgentDetectsImageDrift(t *testing.T) {
 func TestPodSpecMatchesAgentDetectsBackendDrift(t *testing.T) {
 	cs := newCocoonSet("demo")
 	scheme := testScheme(t)
-	pod := buildAgentPod(cs, 0, "", "", scheme)
+	pod := mustBuildAgentPod(t, cs, 0, "", "", scheme)
 
 	updated := newCocoonSet("demo", func(cs *cocoonv1.CocoonSet) {
 		cs.Spec.Agent.Backend = "firecracker"
@@ -254,7 +281,7 @@ func TestPodSpecMatchesAgentDetectsResourceDrift(t *testing.T) {
 		}
 	})
 	scheme := testScheme(t)
-	pod := buildAgentPod(cs, 0, "", "", scheme)
+	pod := mustBuildAgentPod(t, cs, 0, "", "", scheme)
 
 	updated := newCocoonSet("demo", func(cs *cocoonv1.CocoonSet) {
 		cs.Spec.Agent.Resources = corev1.ResourceRequirements{
@@ -272,7 +299,7 @@ func TestPodSpecMatchesAgentDetectsResourceDrift(t *testing.T) {
 func TestPodSpecMatchesAgentDetectsProbePortDrift(t *testing.T) {
 	cs := newCocoonSet("demo")
 	scheme := testScheme(t)
-	pod := buildAgentPod(cs, 0, "", "", scheme)
+	pod := mustBuildAgentPod(t, cs, 0, "", "", scheme)
 
 	updated := newCocoonSet("demo", func(cs *cocoonv1.CocoonSet) {
 		cs.Spec.Agent.ProbePort = 8080
@@ -286,7 +313,7 @@ func TestPodSpecMatchesToolboxDetectsProbePortDrift(t *testing.T) {
 	cs := newCocoonSet("demo")
 	scheme := testScheme(t)
 	tb := cocoonv1.ToolboxSpec{Name: "tb", Image: "ghcr.io/cocoonstack/cocoon/toolbox:latest", Mode: cocoonv1.ToolboxModeRun}
-	pod := buildToolboxPod(cs, tb, scheme)
+	pod := mustBuildToolboxPod(t, cs, tb, scheme)
 
 	updatedTb := tb
 	updatedTb.ProbePort = 9090
@@ -299,7 +326,7 @@ func TestPodSpecMatchesToolboxIdenticalSpec(t *testing.T) {
 	cs := newCocoonSet("demo")
 	scheme := testScheme(t)
 	tb := cocoonv1.ToolboxSpec{Name: "tb", Image: "ghcr.io/cocoonstack/cocoon/toolbox:latest", Mode: cocoonv1.ToolboxModeRun}
-	pod := buildToolboxPod(cs, tb, scheme)
+	pod := mustBuildToolboxPod(t, cs, tb, scheme)
 	if !podSpecMatchesToolbox(pod, cs, tb) {
 		t.Error("freshly built toolbox pod should match its own spec")
 	}
@@ -309,7 +336,7 @@ func TestPodSpecMatchesToolboxDetectsImageDrift(t *testing.T) {
 	cs := newCocoonSet("demo")
 	scheme := testScheme(t)
 	tb := cocoonv1.ToolboxSpec{Name: "tb", Image: "ghcr.io/cocoonstack/cocoon/toolbox:v1"}
-	pod := buildToolboxPod(cs, tb, scheme)
+	pod := mustBuildToolboxPod(t, cs, tb, scheme)
 
 	updatedTb := cocoonv1.ToolboxSpec{Name: "tb", Image: "ghcr.io/cocoonstack/cocoon/toolbox:v2"}
 	if podSpecMatchesToolbox(pod, cs, updatedTb) {
@@ -322,7 +349,7 @@ func TestPodSpecMatchesSubAgentPreservesForkFrom(t *testing.T) {
 		cs.Spec.Agent.Replicas = 1
 	})
 	scheme := testScheme(t)
-	pod := buildAgentPod(cs, 1, "vk-ns-demo-0", "", scheme)
+	pod := mustBuildAgentPod(t, cs, 1, "vk-ns-demo-0", "", scheme)
 	if !podSpecMatchesAgent(pod, cs, 1) {
 		t.Error("sub-agent should match when spec is unchanged")
 	}
@@ -333,7 +360,7 @@ func TestPodSpecMatchesAgentDetectsServiceAccountDrift(t *testing.T) {
 		cs.Spec.Agent.ServiceAccountName = "sa-old"
 	})
 	scheme := testScheme(t)
-	pod := buildAgentPod(cs, 0, "", "", scheme)
+	pod := mustBuildAgentPod(t, cs, 0, "", "", scheme)
 
 	updated := newCocoonSet("demo", func(cs *cocoonv1.CocoonSet) {
 		cs.Spec.Agent.ServiceAccountName = "sa-new"
@@ -352,7 +379,7 @@ func TestPodSpecMatchesAgentDetectsEnvFromDrift(t *testing.T) {
 		}
 	})
 	scheme := testScheme(t)
-	pod := buildAgentPod(cs, 0, "", "", scheme)
+	pod := mustBuildAgentPod(t, cs, 0, "", "", scheme)
 
 	updated := newCocoonSet("demo", func(cs *cocoonv1.CocoonSet) {
 		cs.Spec.Agent.EnvFrom = []corev1.EnvFromSource{
@@ -371,7 +398,7 @@ func TestPodSpecMatchesAgentDetectsNodePoolDrift(t *testing.T) {
 		cs.Spec.NodePool = "gpu"
 	})
 	scheme := testScheme(t)
-	pod := buildAgentPod(cs, 0, "", "", scheme)
+	pod := mustBuildAgentPod(t, cs, 0, "", "", scheme)
 
 	updated := newCocoonSet("demo", func(cs *cocoonv1.CocoonSet) {
 		cs.Spec.NodePool = "cpu"
@@ -384,7 +411,7 @@ func TestPodSpecMatchesAgentDetectsNodePoolDrift(t *testing.T) {
 func TestPodSpecMatchesAgentNodePoolDefaultFallback(t *testing.T) {
 	cs := newCocoonSet("demo") // NodePool empty -> DefaultNodePool
 	scheme := testScheme(t)
-	pod := buildAgentPod(cs, 0, "", "", scheme)
+	pod := mustBuildAgentPod(t, cs, 0, "", "", scheme)
 	if !podSpecMatchesAgent(pod, cs, 0) {
 		t.Error("pod with default node pool should match spec without explicit pool")
 	}
@@ -400,7 +427,7 @@ func TestPodSpecMatchesToolboxDetectsStaticVMIDDrift(t *testing.T) {
 		StaticIP:   "10.0.0.1",
 		VNCPort:    5901,
 	}
-	pod := buildToolboxPod(cs, tb, scheme)
+	pod := mustBuildToolboxPod(t, cs, tb, scheme)
 
 	updatedTb := cocoonv1.ToolboxSpec{
 		Name:       "tb",
@@ -424,7 +451,7 @@ func TestPodSpecMatchesToolboxDetectsStaticIPDrift(t *testing.T) {
 		StaticIP:   "10.0.0.1",
 		VNCPort:    5901,
 	}
-	pod := buildToolboxPod(cs, tb, scheme)
+	pod := mustBuildToolboxPod(t, cs, tb, scheme)
 
 	updatedTb := cocoonv1.ToolboxSpec{
 		Name:       "tb",
@@ -448,7 +475,7 @@ func TestPodSpecMatchesToolboxDetectsVNCPortDrift(t *testing.T) {
 		StaticIP:   "10.0.0.1",
 		VNCPort:    5901,
 	}
-	pod := buildToolboxPod(cs, tb, scheme)
+	pod := mustBuildToolboxPod(t, cs, tb, scheme)
 
 	updatedTb := cocoonv1.ToolboxSpec{
 		Name:       "tb",
@@ -472,7 +499,7 @@ func TestPodSpecMatchesToolboxStaticIdenticalSpec(t *testing.T) {
 		StaticIP:   "10.0.0.1",
 		VNCPort:    5901,
 	}
-	pod := buildToolboxPod(cs, tb, scheme)
+	pod := mustBuildToolboxPod(t, cs, tb, scheme)
 	if !podSpecMatchesToolbox(pod, cs, tb) {
 		t.Error("freshly built static toolbox pod should match its own spec")
 	}
@@ -484,7 +511,7 @@ func TestPodSpecMatchesToolboxDetectsNodePoolDrift(t *testing.T) {
 	})
 	scheme := testScheme(t)
 	tb := cocoonv1.ToolboxSpec{Name: "tb", Image: "ghcr.io/cocoonstack/cocoon/toolbox:latest", Mode: cocoonv1.ToolboxModeRun}
-	pod := buildToolboxPod(cs, tb, scheme)
+	pod := mustBuildToolboxPod(t, cs, tb, scheme)
 
 	updated := newCocoonSet("demo", func(cs *cocoonv1.CocoonSet) {
 		cs.Spec.NodePool = "cpu"

@@ -24,7 +24,10 @@ import (
 func (r *Reconciler) reconcileSuspend(ctx context.Context, cs *cocoonv1.CocoonSet, classified classifiedPods) (ctrl.Result, error) {
 	logger := log.WithFunc("cocoonset.Reconciler.reconcileSuspend")
 	if classified.main == nil {
-		mainPod := buildAgentPod(cs, 0, "", "", r.Scheme)
+		mainPod, err := buildAgentPod(cs, 0, "", "", r.Scheme)
+		if err != nil {
+			return ctrl.Result{}, fmt.Errorf("build main agent before suspend: %w", err)
+		}
 		if err := r.Create(ctx, mainPod); err != nil {
 			return ctrl.Result{}, fmt.Errorf("create main agent before suspend: %w", err)
 		}

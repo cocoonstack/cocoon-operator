@@ -94,8 +94,8 @@ func TestApplyUnsuspendClearsHibernateAnnotation(t *testing.T) {
 func TestApplyUnsuspendNoopOnCleanSet(t *testing.T) {
 	scheme := testScheme(t)
 	cs := newCocoonSet("demo")
-	mainPod := buildAgentPod(cs, 0, "", "", scheme)
-	subPod := buildAgentPod(cs, 1, "vk-ns-demo-0", "", scheme)
+	mainPod := mustBuildAgentPod(t, cs, 0, "", "", scheme)
+	subPod := mustBuildAgentPod(t, cs, 1, "vk-ns-demo-0", "", scheme)
 
 	cli := ctrlfake.NewClientBuilder().
 		WithScheme(scheme).
@@ -122,7 +122,7 @@ func TestEnsureToolboxesCollisionReturnsError(t *testing.T) {
 		}
 	})
 
-	agentPod := buildAgentPod(cs, 0, "", "", scheme)
+	agentPod := mustBuildAgentPod(t, cs, 0, "", "", scheme)
 	cli := ctrlfake.NewClientBuilder().
 		WithScheme(scheme).
 		WithObjects(agentPod).
@@ -149,7 +149,7 @@ func TestEnsureToolboxesIdempotentOnExistingToolbox(t *testing.T) {
 		}
 	})
 
-	tbPod := buildToolboxPod(cs, cs.Spec.Toolboxes[0], scheme)
+	tbPod := mustBuildToolboxPod(t, cs, cs.Spec.Toolboxes[0], scheme)
 	cli := ctrlfake.NewClientBuilder().
 		WithScheme(scheme).
 		WithObjects(tbPod).
@@ -175,8 +175,8 @@ func TestAllOwnedPodsHibernatedWaitsForEachManagedPod(t *testing.T) {
 	cs := newCocoonSet("demo", func(cs *cocoonv1.CocoonSet) {
 		cs.Spec.Agent.Replicas = 1
 	})
-	main := buildAgentPod(cs, 0, "", "", scheme)
-	sub := buildAgentPod(cs, 1, "vk-ns-demo-0", "", scheme)
+	main := mustBuildAgentPod(t, cs, 0, "", "", scheme)
+	sub := mustBuildAgentPod(t, cs, 1, "vk-ns-demo-0", "", scheme)
 	classified := classifiedPods{
 		main:      main,
 		sub:       map[int32]*corev1.Pod{1: sub},
@@ -213,8 +213,8 @@ func TestAllOwnedPodsHibernatedSkipsUnmanagedToolbox(t *testing.T) {
 			{Name: "tb", Mode: cocoonv1.ToolboxModeStatic, StaticVMID: "qemu-1", StaticIP: "10.0.0.1"},
 		}
 	})
-	main := buildAgentPod(cs, 0, "", "", scheme)
-	tb := buildToolboxPod(cs, cs.Spec.Toolboxes[0], scheme)
+	main := mustBuildAgentPod(t, cs, 0, "", "", scheme)
+	tb := mustBuildToolboxPod(t, cs, cs.Spec.Toolboxes[0], scheme)
 	classified := classifiedPods{
 		main:      main,
 		sub:       map[int32]*corev1.Pod{},
@@ -239,7 +239,7 @@ func TestAllOwnedPodsHibernatedSkipsUnmanagedToolbox(t *testing.T) {
 func TestAllOwnedPodsHibernatedPropagatesProbeError(t *testing.T) {
 	scheme := testScheme(t)
 	cs := newCocoonSet("demo")
-	main := buildAgentPod(cs, 0, "", "", scheme)
+	main := mustBuildAgentPod(t, cs, 0, "", "", scheme)
 	classified := classifiedPods{
 		main:      main,
 		sub:       map[int32]*corev1.Pod{},
@@ -258,7 +258,7 @@ func TestEnsureSubAgentsReplacesTerminalPod(t *testing.T) {
 		cs.Spec.Agent.Replicas = 1
 	})
 
-	subPod := buildAgentPod(cs, 1, "vk-ns-demo-0", "", scheme)
+	subPod := mustBuildAgentPod(t, cs, 1, "vk-ns-demo-0", "", scheme)
 	subPod.Status.Phase = corev1.PodFailed
 
 	cli := ctrlfake.NewClientBuilder().
@@ -292,7 +292,7 @@ func TestEnsureToolboxesReplacesTerminalPod(t *testing.T) {
 		}
 	})
 
-	tbPod := buildToolboxPod(cs, cs.Spec.Toolboxes[0], scheme)
+	tbPod := mustBuildToolboxPod(t, cs, cs.Spec.Toolboxes[0], scheme)
 	tbPod.Status.Phase = corev1.PodFailed
 
 	cli := ctrlfake.NewClientBuilder().
@@ -323,7 +323,7 @@ func TestReconcileDeleteSkipsUnownedPods(t *testing.T) {
 	cs := newCocoonSet("demo")
 	cs.Finalizers = []string{finalizerName}
 
-	ownedPod := buildAgentPod(cs, 0, "", "", scheme)
+	ownedPod := mustBuildAgentPod(t, cs, 0, "", "", scheme)
 
 	unownedPod := &corev1.Pod{
 		ObjectMeta: metav1.ObjectMeta{

@@ -67,7 +67,7 @@ func classifyPods(pods []corev1.Pod) classifiedPods {
 
 // buildAgentPod constructs the desired Pod for an agent slot.
 // Slot 0 is main; slot >= 1 are sub-agents that fork from the main VM.
-func buildAgentPod(cs *cocoonv1.CocoonSet, slot int32, mainVMName, bindNodeName string, scheme *runtime.Scheme) *corev1.Pod {
+func buildAgentPod(cs *cocoonv1.CocoonSet, slot int32, mainVMName, bindNodeName string, scheme *runtime.Scheme) (*corev1.Pod, error) {
 	role := meta.RoleMain
 	forkFrom := ""
 	if slot > 0 {
@@ -78,7 +78,10 @@ func buildAgentPod(cs *cocoonv1.CocoonSet, slot int32, mainVMName, bindNodeName 
 	vmName := meta.VMNameForDeployment(cs.Namespace, cs.Name, int(slot))
 	podName := fmt.Sprintf("%s-%d", cs.Name, slot)
 
-	pod := newManagedPod(cs, podName, role, strconv.FormatInt(int64(slot), 10), scheme)
+	pod, err := newManagedPod(cs, podName, role, strconv.FormatInt(int64(slot), 10), scheme)
+	if err != nil {
+		return nil, err
+	}
 
 	meta.FromAgentSpec(cs.Spec.Agent, vmName, cs.Spec.SnapshotPolicy, forkFrom).Apply(pod)
 
@@ -91,14 +94,17 @@ func buildAgentPod(cs *cocoonv1.CocoonSet, slot int32, mainVMName, bindNodeName 
 	if bindNodeName != "" {
 		pod.Spec.NodeName = bindNodeName
 	}
-	return pod
+	return pod, nil
 }
 
-func buildToolboxPod(cs *cocoonv1.CocoonSet, tb cocoonv1.ToolboxSpec, scheme *runtime.Scheme) *corev1.Pod {
+func buildToolboxPod(cs *cocoonv1.CocoonSet, tb cocoonv1.ToolboxSpec, scheme *runtime.Scheme) (*corev1.Pod, error) {
 	podName := fmt.Sprintf("%s-%s", cs.Name, tb.Name)
 	vmName := meta.VMNameForPod(cs.Namespace, podName)
 
-	pod := newManagedPod(cs, podName, meta.RoleToolbox, tb.Name, scheme)
+	pod, err := newManagedPod(cs, podName, meta.RoleToolbox, tb.Name, scheme)
+	if err != nil {
+		return nil, err
+	}
 
 	meta.FromToolboxSpec(tb, vmName, cs.Spec.SnapshotPolicy).Apply(pod)
 
@@ -108,12 +114,12 @@ func buildToolboxPod(cs *cocoonv1.CocoonSet, tb cocoonv1.ToolboxSpec, scheme *ru
 	}
 	pod.Spec.Containers[0].Resources = tb.Resources
 	applyStorageRequest(pod, tb.Storage)
-	return pod
+	return pod, nil
 }
 
 // newManagedPod returns a Pod skeleton with shared labels, owner-reference,
-// toleration, and placeholder container. Panics on scheme mis-wiring.
-func newManagedPod(cs *cocoonv1.CocoonSet, podName, role, slotLabel string, scheme *runtime.Scheme) *corev1.Pod {
+// toleration, and placeholder container.
+func newManagedPod(cs *cocoonv1.CocoonSet, podName, role, slotLabel string, scheme *runtime.Scheme) (*corev1.Pod, error) {
 	one := int64(1)
 	pool := cmp.Or(cs.Spec.NodePool, meta.DefaultNodePool)
 	pod := &corev1.Pod{
@@ -144,9 +150,9 @@ func newManagedPod(cs *cocoonv1.CocoonSet, podName, role, slotLabel string, sche
 		},
 	}
 	if err := controllerutil.SetControllerReference(cs, pod, scheme); err != nil {
-		panic(fmt.Errorf("set controller reference: %w", err))
+		return nil, fmt.Errorf("set controller reference: %w", err)
 	}
-	return pod
+	return pod, nil
 }
 
 // podSpecMatchesAgent reports whether a running agent pod still matches what

@@ -38,7 +38,10 @@ func (r *Reconciler) ensureToolboxes(ctx context.Context, cs *cocoonv1.CocoonSet
 			}
 			continue
 		}
-		tbPod := buildToolboxPod(cs, tb, r.Scheme)
+		tbPod, err := buildToolboxPod(cs, tb, r.Scheme)
+		if err != nil {
+			return changed, fmt.Errorf("build toolbox %s: %w", tb.Name, err)
+		}
 		if err := r.Create(ctx, tbPod); err != nil {
 			if !apierrors.IsAlreadyExists(err) {
 				return changed, fmt.Errorf("create toolbox %s: %w", tb.Name, err)
