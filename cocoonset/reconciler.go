@@ -70,7 +70,8 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 	}
 
 	var podList corev1.PodList
-	if err := r.List(ctx, &podList,
+	if err := r.List(
+		ctx, &podList,
 		client.InNamespace(cs.Namespace),
 		client.MatchingLabels{meta.LabelCocoonSet: cs.Name},
 	); err != nil {

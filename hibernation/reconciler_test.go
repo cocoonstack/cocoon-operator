@@ -135,7 +135,7 @@ func TestReconcileHibernateSurfacesProbeError(t *testing.T) {
 	pod := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "demo-0", Namespace: "ns"}}
 	(&meta.VMSpec{VMName: "vk-ns-demo-0", Managed: true}).Apply(pod)
 	// Pre-set so PatchHibernateState short-circuits before the interesting HasManifest call.
-	(meta.HibernateState(true)).Apply(pod)
+	meta.HibernateState(true).Apply(pod)
 
 	scheme := testScheme(t)
 	cli := ctrlfake.NewClientBuilder().
@@ -174,7 +174,7 @@ func TestReconcileHibernateFoldsAbsenceToRequeue(t *testing.T) {
 	}
 	pod := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "demo-0", Namespace: "ns"}}
 	(&meta.VMSpec{VMName: "vk-ns-demo-0", Managed: true}).Apply(pod)
-	(meta.HibernateState(true)).Apply(pod)
+	meta.HibernateState(true).Apply(pod)
 
 	scheme := testScheme(t)
 	cli := ctrlfake.NewClientBuilder().

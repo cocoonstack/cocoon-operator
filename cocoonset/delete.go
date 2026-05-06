@@ -20,7 +20,8 @@ func (r *Reconciler) reconcileDelete(ctx context.Context, cs *cocoonv1.CocoonSet
 	logger.Infof(ctx, "deleting cocoonset %s/%s", cs.Namespace, cs.Name)
 
 	var podList corev1.PodList
-	if err := r.List(ctx, &podList,
+	if err := r.List(
+		ctx, &podList,
 		client.InNamespace(cs.Namespace),
 		client.MatchingLabels{meta.LabelCocoonSet: cs.Name},
 	); err != nil {
@@ -44,7 +45,8 @@ func (r *Reconciler) reconcileDelete(ctx context.Context, cs *cocoonv1.CocoonSet
 	// be running snapshot save/push. We only GC epoch tags and remove the
 	// finalizer once every pod is fully gone from the API server.
 	var remaining corev1.PodList
-	if err := r.List(ctx, &remaining,
+	if err := r.List(
+		ctx, &remaining,
 		client.InNamespace(cs.Namespace),
 		client.MatchingLabels{meta.LabelCocoonSet: cs.Name},
 	); err != nil {

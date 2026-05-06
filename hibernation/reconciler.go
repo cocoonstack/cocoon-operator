@@ -78,26 +78,6 @@ func (r *Reconciler) SetupWithManager(ctx context.Context, mgr ctrl.Manager) err
 		Complete(r)
 }
 
-// hibernationsTargetingPod returns reconcile requests for every CocoonHibernation
-// whose PodRef points at the given pod. Called from the Pod watcher.
-func (r *Reconciler) hibernationsTargetingPod(ctx context.Context, obj client.Object) []ctrl.Request {
-	var list cocoonv1.CocoonHibernationList
-	if err := r.List(ctx, &list,
-		client.InNamespace(obj.GetNamespace()),
-		client.MatchingFields{indexPodRefName: obj.GetName()},
-	); err != nil {
-		log.WithFunc("hibernation.Reconciler.hibernationsTargetingPod").
-			Warnf(ctx, "list hibernations targeting %s/%s: %v", obj.GetNamespace(), obj.GetName(), err)
-		return nil
-	}
-	out := make([]ctrl.Request, 0, len(list.Items))
-	for i := range list.Items {
-		h := &list.Items[i]
-		out = append(out, ctrl.Request{NamespacedName: types.NamespacedName{Namespace: h.Namespace, Name: h.Name}})
-	}
-	return out
-}
-
 // Reconcile drives a single hibernate or wake transition. Failed phases are recoverable.
 func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	logger := log.WithFunc("hibernation.Reconciler.Reconcile")
@@ -140,6 +120,27 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 	default:
 		return ctrl.Result{}, r.markFailed(ctx, &hib, fmt.Sprintf("unknown desire %q", hib.Spec.Desire))
 	}
+}
+
+// hibernationsTargetingPod returns reconcile requests for every CocoonHibernation
+// whose PodRef points at the given pod. Called from the Pod watcher.
+func (r *Reconciler) hibernationsTargetingPod(ctx context.Context, obj client.Object) []ctrl.Request {
+	var list cocoonv1.CocoonHibernationList
+	if err := r.List(
+		ctx, &list,
+		client.InNamespace(obj.GetNamespace()),
+		client.MatchingFields{indexPodRefName: obj.GetName()},
+	); err != nil {
+		log.WithFunc("hibernation.Reconciler.hibernationsTargetingPod").
+			Warnf(ctx, "list hibernations targeting %s/%s: %v", obj.GetNamespace(), obj.GetName(), err)
+		return nil
+	}
+	out := make([]ctrl.Request, 0, len(list.Items))
+	for i := range list.Items {
+		h := &list.Items[i]
+		out = append(out, ctrl.Request{NamespacedName: types.NamespacedName{Namespace: h.Namespace, Name: h.Name}})
+	}
+	return out
 }
 
 // setPhase patches status, preserving timestamps on no-op updates.

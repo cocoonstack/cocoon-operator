@@ -38,12 +38,12 @@ func TestApplyUnsuspendClearsHibernateAnnotation(t *testing.T) {
 	mainPod := &corev1.Pod{
 		ObjectMeta: metav1.ObjectMeta{Name: "demo-0", Namespace: "ns"},
 	}
-	(meta.HibernateState(true)).Apply(mainPod)
+	meta.HibernateState(true).Apply(mainPod)
 
 	subPod := &corev1.Pod{
 		ObjectMeta: metav1.ObjectMeta{Name: "demo-1", Namespace: "ns"},
 	}
-	(meta.HibernateState(true)).Apply(subPod)
+	meta.HibernateState(true).Apply(subPod)
 
 	tbPod := &corev1.Pod{
 		ObjectMeta: metav1.ObjectMeta{Name: "demo-tb", Namespace: "ns"},
@@ -356,13 +356,13 @@ func TestApplyUnsuspendSkipsPodHibernatedByCR(t *testing.T) {
 	hibernated := &corev1.Pod{
 		ObjectMeta: metav1.ObjectMeta{Name: "demo-0", Namespace: "ns"},
 	}
-	(meta.HibernateState(true)).Apply(hibernated)
+	meta.HibernateState(true).Apply(hibernated)
 
 	// Also hibernated but not named in any CR -- proves skip is selective.
 	leftover := &corev1.Pod{
 		ObjectMeta: metav1.ObjectMeta{Name: "demo-1", Namespace: "ns"},
 	}
-	(meta.HibernateState(true)).Apply(leftover)
+	meta.HibernateState(true).Apply(leftover)
 
 	hibCR := &cocoonv1.CocoonHibernation{
 		ObjectMeta: metav1.ObjectMeta{Name: "demo-hib", Namespace: "ns"},
