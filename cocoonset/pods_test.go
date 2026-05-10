@@ -246,6 +246,30 @@ func TestNewManagedPodStampsCocoonSetGeneration(t *testing.T) {
 	}
 }
 
+// Guards against a future cocoon-common change where VMSpec.Apply replaces
+// pod.Annotations instead of merging — that would silently strip the
+// generation stamp set by newManagedPod.
+func TestBuildAgentPodPreservesCocoonSetGeneration(t *testing.T) {
+	cs := newCocoonSet("demo", func(cs *cocoonv1.CocoonSet) {
+		cs.Generation = 11
+	})
+	pod := mustBuildAgentPod(t, cs, 0, "", "", testScheme(t))
+	if got := pod.Annotations[meta.AnnotationCocoonSetGeneration]; got != "11" {
+		t.Errorf("cocoonset generation annotation = %q, want 11", got)
+	}
+}
+
+func TestBuildToolboxPodPreservesCocoonSetGeneration(t *testing.T) {
+	cs := newCocoonSet("demo", func(cs *cocoonv1.CocoonSet) {
+		cs.Generation = 13
+	})
+	tb := cocoonv1.ToolboxSpec{Name: "tb", Image: "ghcr.io/cocoonstack/cocoon/toolbox:latest"}
+	pod := mustBuildToolboxPod(t, cs, tb, testScheme(t))
+	if got := pod.Annotations[meta.AnnotationCocoonSetGeneration]; got != "13" {
+		t.Errorf("cocoonset generation annotation = %q, want 13", got)
+	}
+}
+
 func TestPodSpecMatchesAgentIdenticalSpec(t *testing.T) {
 	cs := newCocoonSet("demo")
 	scheme := testScheme(t)
