@@ -236,6 +236,16 @@ func TestNewManagedPodCarriesCocoonToleration(t *testing.T) {
 	}
 }
 
+func TestNewManagedPodStampsCocoonSetGeneration(t *testing.T) {
+	cs := newCocoonSet("demo", func(cs *cocoonv1.CocoonSet) {
+		cs.Generation = 42
+	})
+	pod := mustNewManagedPod(t, cs, "demo-0", meta.RoleMain, "0", testScheme(t))
+	if got := pod.Annotations[meta.AnnotationCocoonSetGeneration]; got != "42" {
+		t.Errorf("cocoonset generation annotation = %q, want 42", got)
+	}
+}
+
 func TestPodSpecMatchesAgentIdenticalSpec(t *testing.T) {
 	cs := newCocoonSet("demo")
 	scheme := testScheme(t)
