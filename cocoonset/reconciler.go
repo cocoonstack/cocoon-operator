@@ -83,11 +83,8 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 	owned := filterOwnedPods(podList.Items, &cs)
 	classified := classifyPods(owned)
 
-	// Stamp the current CocoonSet generation onto every owned pod before
-	// any spec-driven patch. vk-cocoon copies this into
-	// lifecycle-observed-generation when a state transition completes,
-	// so without this projection clients cannot tell which spec revision
-	// the lifecycle state was reached for.
+	// Stamp before any spec-driven patch so observed-generation reflects
+	// the spec revision that produced the resulting state.
 	if err := r.syncCocoonSetGeneration(ctx, &cs, classified); err != nil {
 		return ctrl.Result{}, err
 	}

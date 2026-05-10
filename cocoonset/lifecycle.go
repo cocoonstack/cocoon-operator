@@ -10,13 +10,9 @@ import (
 	commonk8s "github.com/cocoonstack/cocoon-common/k8s"
 )
 
-// syncCocoonSetGeneration stamps cs.Generation onto every owned pod's
-// AnnotationCocoonSetGeneration annotation. vk-cocoon reads this back as
-// lifecycle-observed-generation when a state transition completes, giving
-// clients a counter-based completion signal that is not subject to
-// wallclock skew. The PatchCocoonSetGeneration helper short-circuits when
-// the pod already carries the current generation, so reconciles after
-// non-spec changes do not generate apiserver writes.
+// syncCocoonSetGeneration writes cs.Generation to each owned pod so
+// vk-cocoon can echo it back as lifecycle-observed-generation, giving
+// clients a counter-based completion signal immune to wallclock skew.
 func (r *Reconciler) syncCocoonSetGeneration(ctx context.Context, cs *cocoonv1.CocoonSet, classified classifiedPods) error {
 	for _, name := range slices.Sorted(maps.Keys(classified.allByName)) {
 		if ctxErr := ctx.Err(); ctxErr != nil {
