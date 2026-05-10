@@ -132,6 +132,9 @@ func newManagedPod(cs *cocoonv1.CocoonSet, podName, role, slotLabel string, sche
 				meta.LabelSlot:           slotLabel,
 				"app.kubernetes.io/name": cs.Name,
 			},
+			Annotations: map[string]string{
+				meta.AnnotationCocoonSetGeneration: strconv.FormatInt(cs.Generation, 10),
+			},
 		},
 		Spec: corev1.PodSpec{
 			TerminationGracePeriodSeconds: &one,

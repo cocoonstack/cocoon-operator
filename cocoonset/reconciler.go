@@ -83,6 +83,12 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 	owned := filterOwnedPods(podList.Items, &cs)
 	classified := classifyPods(owned)
 
+	// Stamp before any spec-driven patch so observed-generation reflects
+	// the spec revision that produced the resulting state.
+	if err := r.syncCocoonSetGeneration(ctx, &cs, classified); err != nil {
+		return ctrl.Result{}, err
+	}
+
 	// Stop reconciling if main agent is in a terminal phase (e.g. Failed).
 	if classified.main != nil && meta.IsPodTerminal(classified.main) {
 		return ctrl.Result{}, r.patchStatus(ctx, &cs,
