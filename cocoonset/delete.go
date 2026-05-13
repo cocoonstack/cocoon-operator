@@ -91,8 +91,8 @@ func (r *Reconciler) reconcileDelete(ctx context.Context, cs *cocoonv1.CocoonSet
 	return ctrl.Result{}, nil
 }
 
-// stashDeleteVMNames merges VM names from Status, live pods, and any previously
-// stashed annotation, then re-writes the annotation if anything changed.
+// stashDeleteVMNames merges VM names from Status, the previously stashed
+// annotation, and live pods, then re-writes the annotation if anything changed.
 func (r *Reconciler) stashDeleteVMNames(ctx context.Context, cs *cocoonv1.CocoonSet, owned []corev1.Pod) error {
 	have := make(map[string]struct{})
 	for _, a := range cs.Status.Agents {
@@ -146,6 +146,7 @@ func vmNamesForGC(cs *cocoonv1.CocoonSet) []string {
 			names = append(names, tb.VMName)
 		}
 	}
+	slices.Sort(names)
 	return names
 }
 
@@ -154,7 +155,7 @@ func parseVMNamesAnnotation(raw string) []string {
 		return nil
 	}
 	parts := strings.Split(raw, ",")
-	out := parts[:0]
+	out := make([]string, 0, len(parts))
 	for _, p := range parts {
 		if p = strings.TrimSpace(p); p != "" {
 			out = append(out, p)
