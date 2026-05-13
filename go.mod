@@ -4,7 +4,7 @@ go 1.25.6
 
 require (
 	github.com/cocoonstack/cocoon-common v0.2.1-0.20260513092659-fbadeee69373
-	github.com/cocoonstack/epoch v0.2.3-0.20260506150956-5d672b90749f
+	github.com/cocoonstack/epoch v0.2.3-0.20260513102541-36ecd7a40af4
 	github.com/go-logr/logr v1.4.3
 	github.com/projecteru2/core v0.0.0-20241016125006-ff909eefe04c
 	golang.org/x/sync v0.19.0
