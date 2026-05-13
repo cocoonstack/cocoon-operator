@@ -178,8 +178,10 @@ func (r *Reconciler) hibernationsTargetingPod(ctx context.Context, obj client.Ob
 // setPhase patches status, preserving timestamps on no-op updates.
 // On Failed->Waking re-entry, it refreshes LastTransitionTime so the wake deadline
 // does not inherit the stale timestamp from the previous failure.
+// The short-circuit also requires ObservedGeneration to already track Generation
+// so a spec bump that does not flip phase/VMName still surfaces in /status.
 func (r *Reconciler) setPhase(ctx context.Context, hib *cocoonv1.CocoonHibernation, phase cocoonv1.CocoonHibernationPhase, vmName string) error {
-	if hib.Status.Phase == phase && hib.Status.VMName == vmName {
+	if hib.Status.Phase == phase && hib.Status.VMName == vmName && hib.Status.ObservedGeneration == hib.Generation {
 		return nil
 	}
 	refreshWakeDeadline := phase == cocoonv1.CocoonHibernationPhaseWaking &&
