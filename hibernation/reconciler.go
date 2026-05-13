@@ -25,11 +25,14 @@ import (
 	cocoonv1 "github.com/cocoonstack/cocoon-common/apis/v1"
 	commonk8s "github.com/cocoonstack/cocoon-common/k8s"
 	"github.com/cocoonstack/cocoon-common/meta"
+	"github.com/cocoonstack/cocoon-operator/metrics"
 	"github.com/cocoonstack/cocoon-operator/snapshot"
 )
 
 const (
 	requeueInterval = 5 * time.Second
+	// hibernateTimeout bounds how long Hibernating can last before marking Failed.
+	hibernateTimeout = 3 * time.Minute
 	// wakeTimeout bounds how long Waking can last before marking Failed.
 	wakeTimeout = 5 * time.Minute
 
@@ -184,14 +187,13 @@ func (r *Reconciler) setPhase(ctx context.Context, hib *cocoonv1.CocoonHibernati
 	if hib.Status.Phase == phase && hib.Status.VMName == vmName && hib.Status.ObservedGeneration == hib.Generation {
 		return nil
 	}
-	refreshWakeDeadline := phase == cocoonv1.CocoonHibernationPhaseWaking &&
-		hib.Status.Phase != cocoonv1.CocoonHibernationPhaseWaking
+	refreshDeadline := hasPhaseDeadline(phase) && hib.Status.Phase != phase
 	if err := commonk8s.PatchStatus(ctx, r.Client, hib, func(h *cocoonv1.CocoonHibernation) {
 		h.Status.ObservedGeneration = h.Generation
 		h.Status.Phase = phase
 		h.Status.VMName = vmName
 		apimeta.SetStatusCondition(&h.Status.Conditions, readyCondition(phase, h.Generation))
-		if refreshWakeDeadline {
+		if refreshDeadline {
 			if ready := apimeta.FindStatusCondition(h.Status.Conditions, commonk8s.ConditionTypeReady); ready != nil {
 				ready.LastTransitionTime = metav1.Now()
 			}
@@ -200,6 +202,49 @@ func (r *Reconciler) setPhase(ctx context.Context, hib *cocoonv1.CocoonHibernati
 		return fmt.Errorf("patch hibernation status: %w", err)
 	}
 	return nil
+}
+
+// hasPhaseDeadline reports whether a phase carries a deadline that must reset
+// on re-entry (so a Failed→Hibernating retry doesn't inherit the old clock).
+func hasPhaseDeadline(p cocoonv1.CocoonHibernationPhase) bool {
+	return p == cocoonv1.CocoonHibernationPhaseHibernating || p == cocoonv1.CocoonHibernationPhaseWaking
+}
+
+// observePhaseExit records the duration spent in the current phase. Call
+// before transitioning away from Hibernating or Waking.
+func observePhaseExit(hib *cocoonv1.CocoonHibernation, result string) {
+	ready := apimeta.FindStatusCondition(hib.Status.Conditions, commonk8s.ConditionTypeReady)
+	if ready == nil || ready.LastTransitionTime.IsZero() {
+		return
+	}
+	elapsed := time.Since(ready.LastTransitionTime.Time).Seconds()
+	switch hib.Status.Phase {
+	case cocoonv1.CocoonHibernationPhaseHibernating:
+		metrics.HibernatePhaseDurationSeconds.WithLabelValues(result).Observe(elapsed)
+	case cocoonv1.CocoonHibernationPhaseWaking:
+		metrics.WakePhaseDurationSeconds.WithLabelValues(result).Observe(elapsed)
+	}
+}
+
+func (r *Reconciler) emitWarningf(hib *cocoonv1.CocoonHibernation, reason, format string, args ...any) {
+	if r.Recorder != nil {
+		r.Recorder.Eventf(hib, corev1.EventTypeWarning, reason, format, args...)
+	}
+}
+
+func (r *Reconciler) emitNormalf(hib *cocoonv1.CocoonHibernation, reason, format string, args ...any) {
+	if r.Recorder != nil {
+		r.Recorder.Eventf(hib, corev1.EventTypeNormal, reason, format, args...)
+	}
+}
+
+// announceRetryFromFailed emits a Normal event when a reconcile re-enters
+// hibernate/wake after a prior Failed phase.
+func (r *Reconciler) announceRetryFromFailed(hib *cocoonv1.CocoonHibernation, desire cocoonv1.HibernationDesire) {
+	if hib.Status.Phase != cocoonv1.CocoonHibernationPhaseFailed {
+		return
+	}
+	r.emitNormalf(hib, "RetryRequested", "retrying %s after prior failure", desire)
 }
 
 // markFailed sets the Failed phase. A subsequent reconcile can recover by overwriting it.

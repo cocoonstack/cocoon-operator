@@ -18,11 +18,15 @@ import (
 // reconcileWake clears the hibernate annotation and waits for the container to run.
 func (r *Reconciler) reconcileWake(ctx context.Context, hib *cocoonv1.CocoonHibernation, pod *corev1.Pod, vmName string) (ctrl.Result, error) {
 	logger := log.WithFunc("hibernation.Reconciler.reconcileWake")
+	r.announceRetryFromFailed(hib, cocoonv1.HibernationDesireWake)
+
 	if vmClonedAndRunning(pod) {
 		// Drop snapshot tag (non-fatal; stale tag gets overwritten on next hibernate).
 		if err := r.Epoch.DeleteManifest(ctx, vmName, meta.HibernateSnapshotTag); err != nil {
 			logger.Warnf(ctx, "delete hibernation snapshot %s: %v", vmName, err)
 		}
+		observePhaseExit(hib, "ok")
+		r.emitNormalf(hib, "WokenActive", "pod %s/%s is running", pod.Namespace, pod.Name)
 		return ctrl.Result{}, r.setPhase(ctx, hib, cocoonv1.CocoonHibernationPhaseActive, vmName)
 	}
 
@@ -33,6 +37,8 @@ func (r *Reconciler) reconcileWake(ctx context.Context, hib *cocoonv1.CocoonHibe
 	}
 
 	if wakeDeadlineExceeded(hib) {
+		observePhaseExit(hib, "timeout")
+		r.emitWarningf(hib, "WakeTimedOut", "vk-cocoon did not report the container running within %s", wakeTimeout)
 		return ctrl.Result{}, r.markFailed(ctx, hib,
 			fmt.Sprintf("wake timed out after %s; vk-cocoon never reported the container running", wakeTimeout))
 	}
