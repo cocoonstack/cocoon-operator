@@ -12,9 +12,13 @@ import (
 
 	"github.com/go-logr/logr"
 	"github.com/projecteru2/core/log"
+	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
+	"k8s.io/client-go/kubernetes"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
+	typedcorev1 "k8s.io/client-go/kubernetes/typed/core/v1"
+	"k8s.io/client-go/tools/record"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/healthz"
 	crlog "sigs.k8s.io/controller-runtime/pkg/log"
@@ -25,6 +29,7 @@ import (
 	commonlog "github.com/cocoonstack/cocoon-common/log"
 	"github.com/cocoonstack/cocoon-operator/cocoonset"
 	"github.com/cocoonstack/cocoon-operator/hibernation"
+	"github.com/cocoonstack/cocoon-operator/metrics"
 	"github.com/cocoonstack/cocoon-operator/version"
 	"github.com/cocoonstack/epoch/registryclient"
 )
@@ -87,17 +92,30 @@ func main() {
 		logger.Fatalf(ctx, err, "create epoch client: %v", err)
 	}
 
+	metrics.Register()
+
+	clientset, err := kubernetes.NewForConfig(mgr.GetConfig())
+	if err != nil {
+		logger.Fatalf(ctx, err, "build clientset: %v", err)
+	}
+	broadcaster := record.NewBroadcaster()
+	broadcaster.StartRecordingToSink(&typedcorev1.EventSinkImpl{Interface: clientset.CoreV1().Events("")})
+	defer broadcaster.Shutdown()
+	recorder := broadcaster.NewRecorder(mgr.GetScheme(), corev1.EventSource{Component: "cocoon-operator"})
+
 	if err = (&cocoonset.Reconciler{
-		Client: mgr.GetClient(),
-		Scheme: mgr.GetScheme(),
-		Epoch:  epochClient,
+		Client:   mgr.GetClient(),
+		Scheme:   mgr.GetScheme(),
+		Epoch:    epochClient,
+		Recorder: recorder,
 	}).SetupWithManager(ctx, mgr); err != nil {
 		logger.Fatalf(ctx, err, "register cocoonset.Reconciler: %v", err)
 	}
 	if err = (&hibernation.Reconciler{
-		Client: mgr.GetClient(),
-		Scheme: mgr.GetScheme(),
-		Epoch:  epochClient,
+		Client:   mgr.GetClient(),
+		Scheme:   mgr.GetScheme(),
+		Epoch:    epochClient,
+		Recorder: recorder,
 	}).SetupWithManager(ctx, mgr); err != nil {
 		logger.Fatalf(ctx, err, "register hibernation.Reconciler: %v", err)
 	}

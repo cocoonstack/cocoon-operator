@@ -9,6 +9,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/client-go/tools/record"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/builder"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -30,8 +31,9 @@ const (
 // and toolbox pods to match the declared spec.
 type Reconciler struct {
 	client.Client
-	Scheme *runtime.Scheme
-	Epoch  snapshot.Registry
+	Scheme   *runtime.Scheme
+	Epoch    snapshot.Registry
+	Recorder record.EventRecorder
 }
 
 // SetupWithManager registers the reconciler. `For` uses GenerationChangedPredicate
