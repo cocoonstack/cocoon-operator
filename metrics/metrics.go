@@ -34,7 +34,7 @@ var (
 			Help:      "Time spent in CocoonHibernation Hibernating phase, bucketed by result.",
 			Buckets:   []float64{10, 30, 60, 180, 600, 1800},
 		},
-		[]string{"result"}, // result=ok|failed|timeout
+		[]string{"result"}, // result=ok|timeout
 	)
 
 	WakePhaseDurationSeconds = prometheus.NewHistogramVec(
@@ -44,7 +44,7 @@ var (
 			Help:      "Time spent in CocoonHibernation Waking phase, bucketed by result.",
 			Buckets:   []float64{10, 30, 60, 180, 600, 1800},
 		},
-		[]string{"result"},
+		[]string{"result"}, // result=ok|timeout
 	)
 
 	LifecycleStateFailedObservedTotal = prometheus.NewCounterVec(

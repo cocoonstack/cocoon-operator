@@ -34,22 +34,19 @@ func readRebuildHistory(cs *cocoonv1.CocoonSet) map[int32]rebuildEntry {
 	return m
 }
 
-func writeRebuildHistory(cs *cocoonv1.CocoonSet, m map[int32]rebuildEntry) error {
-	// Garbage-collect entries for slots no longer in the spec.
+// encodeRebuildHistory garbage-collects entries for slots no longer in the
+// spec and returns the JSON payload for the annotation.
+func encodeRebuildHistory(replicas int32, m map[int32]rebuildEntry) (string, error) {
 	for slot := range m {
-		if slot > cs.Spec.Agent.Replicas {
+		if slot > replicas {
 			delete(m, slot)
 		}
 	}
 	raw, err := json.Marshal(m)
 	if err != nil {
-		return err
+		return "", err
 	}
-	if cs.Annotations == nil {
-		cs.Annotations = map[string]string{}
-	}
-	cs.Annotations[annotationRebuildHistory] = string(raw)
-	return nil
+	return string(raw), nil
 }
 
 // backoffDelay returns the wait before the next rebuild attempt: 0, 1s, 5s, 30s.

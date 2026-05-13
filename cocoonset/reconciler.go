@@ -96,13 +96,8 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 	// is the vk-cocoon-driven path (terminal before Pod Phase flips); IsPodTerminal
 	// is the kubelet-driven path. Both transition CocoonSet to Failed.
 	if classified.main != nil {
-		if state := meta.ReadLifecycleState(classified.main); state == meta.LifecycleStateFailed {
-			r.observeMainPodFailed(&cs, classified.main, "PodLifecycleFailed")
-			return ctrl.Result{}, r.patchStatus(ctx, &cs,
-				buildStatus(&cs, classified, cocoonv1.CocoonSetPhaseFailed))
-		}
-		if meta.IsPodTerminal(classified.main) {
-			r.observeMainPodFailed(&cs, classified.main, "MainAgentFailed")
+		if reason := mainPodFailedReason(classified.main); reason != "" {
+			r.observeMainPodFailed(&cs, classified.main, reason)
 			return ctrl.Result{}, r.patchStatus(ctx, &cs,
 				buildStatus(&cs, classified, cocoonv1.CocoonSetPhaseFailed))
 		}
@@ -153,7 +148,7 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 	mainVMName := meta.ParseVMSpec(classified.main).VMName
 	mainNodeName := classified.main.Spec.NodeName
 
-	subChanged, err := r.ensureSubAgents(ctx, &cs, classified, mainVMName, mainNodeName)
+	subChanged, subRequeue, err := r.ensureSubAgents(ctx, &cs, classified, mainVMName, mainNodeName)
 	if err != nil {
 		return ctrl.Result{}, err
 	}
@@ -165,14 +160,32 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 	if subChanged || tbChanged {
 		return ctrl.Result{Requeue: true}, nil
 	}
-
-	return ctrl.Result{}, r.patchStatus(ctx, &cs, buildStatus(&cs, classified, ""))
+	if err := r.patchStatus(ctx, &cs, buildStatus(&cs, classified, "")); err != nil {
+		return ctrl.Result{}, err
+	}
+	return ctrl.Result{RequeueAfter: subRequeue}, nil
 }
 
-// observeMainPodFailed records the failure on the metric + event channels.
-// Message is taken from the lifecycle-state-message annotation when present.
+// mainPodFailedReason maps a pod's terminal signal to the Event reason that
+// the operator emits when transitioning the CocoonSet to Failed; "" means
+// the pod is not terminal.
+func mainPodFailedReason(pod *corev1.Pod) string {
+	if meta.ReadLifecycleState(pod) == meta.LifecycleStateFailed {
+		return "PodLifecycleFailed"
+	}
+	if meta.IsPodTerminal(pod) {
+		return "MainAgentFailed"
+	}
+	return ""
+}
+
+// observeMainPodFailed records the failure on the event channel and, when the
+// signal came from a vk-cocoon lifecycle annotation, bumps the dedicated
+// counter so the Pod-Phase-only path doesn't dilute the metric's meaning.
 func (r *Reconciler) observeMainPodFailed(cs *cocoonv1.CocoonSet, pod *corev1.Pod, reason string) {
-	metrics.LifecycleStateFailedObservedTotal.WithLabelValues(string(cs.Status.Phase)).Inc()
+	if reason == "PodLifecycleFailed" {
+		metrics.LifecycleStateFailedObservedTotal.WithLabelValues(string(cs.Status.Phase)).Inc()
+	}
 	if r.Recorder == nil {
 		return
 	}

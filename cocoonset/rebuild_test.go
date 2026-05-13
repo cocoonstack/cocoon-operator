@@ -14,9 +14,11 @@ func TestRebuildHistoryRoundTrip(t *testing.T) {
 		1: {Count: 2, LastDeleted: time.Date(2026, 5, 14, 1, 0, 0, 0, time.UTC)},
 		2: {Count: 1, LastDeleted: time.Date(2026, 5, 14, 1, 0, 30, 0, time.UTC)},
 	}
-	if err := writeRebuildHistory(cs, in); err != nil {
-		t.Fatalf("writeRebuildHistory: %v", err)
+	enc, err := encodeRebuildHistory(cs.Spec.Agent.Replicas, in)
+	if err != nil {
+		t.Fatalf("encodeRebuildHistory: %v", err)
 	}
+	cs.Annotations = map[string]string{annotationRebuildHistory: enc}
 	got := readRebuildHistory(cs)
 	if got[1].Count != 2 || got[2].Count != 1 {
 		t.Fatalf("round-trip lost counts: %+v", got)
@@ -24,16 +26,17 @@ func TestRebuildHistoryRoundTrip(t *testing.T) {
 }
 
 func TestRebuildHistoryGarbageCollectsStaleSlots(t *testing.T) {
-	cs := &cocoonv1.CocoonSet{}
-	cs.Spec.Agent.Replicas = 2
 	in := map[int32]rebuildEntry{
 		1: {Count: 1},
 		2: {Count: 2},
 		7: {Count: 3}, // slot beyond Replicas, must be pruned
 	}
-	if err := writeRebuildHistory(cs, in); err != nil {
-		t.Fatalf("writeRebuildHistory: %v", err)
+	enc, err := encodeRebuildHistory(2, in)
+	if err != nil {
+		t.Fatalf("encodeRebuildHistory: %v", err)
 	}
+	cs := &cocoonv1.CocoonSet{}
+	cs.Annotations = map[string]string{annotationRebuildHistory: enc}
 	got := readRebuildHistory(cs)
 	if _, ok := got[7]; ok {
 		t.Fatalf("expected slot 7 pruned, got %+v", got)

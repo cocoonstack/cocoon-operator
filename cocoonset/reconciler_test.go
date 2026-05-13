@@ -301,7 +301,7 @@ func TestEnsureSubAgentsReplacesTerminalPod(t *testing.T) {
 		allByName: map[string]*corev1.Pod{subPod.Name: subPod},
 	}
 
-	changed, err := r.ensureSubAgents(t.Context(), cs, classified, "vk-ns-demo-0", "")
+	changed, _, err := r.ensureSubAgents(t.Context(), cs, classified, "vk-ns-demo-0", "")
 	if err != nil {
 		t.Fatalf("ensureSubAgents: %v", err)
 	}
