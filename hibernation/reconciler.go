@@ -220,9 +220,11 @@ func (r *Reconciler) markFailed(ctx context.Context, hib *cocoonv1.CocoonHiberna
 // VMName annotation) without pinning the phase to Failed. Self-heals once the
 // pod watcher re-enqueues the CR. Short-circuits when the phase and Ready
 // condition message already match, so the high-volume pod watcher does not
-// generate a PATCH on every event.
+// generate a PATCH on every event. The short-circuit also requires
+// ObservedGeneration to already track Generation so a spec bump that lands
+// while we are pending still surfaces in /status.
 func (r *Reconciler) markPending(ctx context.Context, hib *cocoonv1.CocoonHibernation, msg string) error {
-	if hib.Status.Phase == cocoonv1.CocoonHibernationPhasePending {
+	if hib.Status.Phase == cocoonv1.CocoonHibernationPhasePending && hib.Status.ObservedGeneration == hib.Generation {
 		if ready := apimeta.FindStatusCondition(hib.Status.Conditions, commonk8s.ConditionTypeReady); ready != nil && ready.Message == msg {
 			return nil
 		}

@@ -497,6 +497,46 @@ func TestSetPhasePatchesObservedGenerationOnSamePhase(t *testing.T) {
 	}
 }
 
+// TestMarkPendingPatchesObservedGenerationOnSameMessage mirrors the setPhase
+// case: when the high-volume pod watcher re-enqueues a Pending CR with the
+// same message after a spec bump, the short-circuit must still fire a status
+// patch so ObservedGeneration tracks Generation.
+func TestMarkPendingPatchesObservedGenerationOnSameMessage(t *testing.T) {
+	msg := "pod ns/demo-0 not yet present"
+	hib := &cocoonv1.CocoonHibernation{
+		ObjectMeta: metav1.ObjectMeta{Name: "hib", Namespace: "ns", Generation: 4},
+		Status: cocoonv1.CocoonHibernationStatus{
+			Phase:              cocoonv1.CocoonHibernationPhasePending,
+			ObservedGeneration: 3, // lags by one rev
+			Conditions: []metav1.Condition{{
+				Type:    commonk8s.ConditionTypeReady,
+				Status:  metav1.ConditionFalse,
+				Reason:  conditionReasonPending,
+				Message: msg,
+			}},
+		},
+	}
+	scheme := testScheme(t)
+	cli := ctrlfake.NewClientBuilder().
+		WithScheme(scheme).
+		WithObjects(hib).
+		WithStatusSubresource(&cocoonv1.CocoonHibernation{}).
+		Build()
+	r := &Reconciler{Client: cli, Scheme: scheme}
+
+	if err := r.markPending(t.Context(), hib, msg); err != nil {
+		t.Fatalf("markPending: %v", err)
+	}
+
+	var out cocoonv1.CocoonHibernation
+	if err := cli.Get(t.Context(), types.NamespacedName{Namespace: "ns", Name: "hib"}, &out); err != nil {
+		t.Fatalf("get hib: %v", err)
+	}
+	if out.Status.ObservedGeneration != 4 {
+		t.Errorf("ObservedGeneration = %d, want 4 (markPending must patch when generation moved even if message is unchanged)", out.Status.ObservedGeneration)
+	}
+}
+
 func TestReconcilePendingWhenPodMissing(t *testing.T) {
 	hib := &cocoonv1.CocoonHibernation{
 		ObjectMeta: metav1.ObjectMeta{Name: "hib", Namespace: "ns", Finalizers: []string{finalizerName}},
