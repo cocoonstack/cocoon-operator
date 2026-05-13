@@ -463,10 +463,6 @@ func TestReconcileWakeRecoversFromFailed(t *testing.T) {
 	}
 }
 
-// TestSetPhasePatchesObservedGenerationOnSamePhase covers the case where a spec
-// bump did not change phase or VMName but Generation moved forward; the
-// short-circuit must still fire a status PATCH so ObservedGeneration tracks
-// Generation (clients use it to detect a stuck reconcile).
 func TestSetPhasePatchesObservedGenerationOnSamePhase(t *testing.T) {
 	hib := &cocoonv1.CocoonHibernation{
 		ObjectMeta: metav1.ObjectMeta{Name: "hib", Namespace: "ns", Generation: 7},
@@ -497,10 +493,6 @@ func TestSetPhasePatchesObservedGenerationOnSamePhase(t *testing.T) {
 	}
 }
 
-// TestMarkPendingPatchesObservedGenerationOnSameMessage mirrors the setPhase
-// case: when the high-volume pod watcher re-enqueues a Pending CR with the
-// same message after a spec bump, the short-circuit must still fire a status
-// patch so ObservedGeneration tracks Generation.
 func TestMarkPendingPatchesObservedGenerationOnSameMessage(t *testing.T) {
 	msg := "pod ns/demo-0 not yet present"
 	hib := &cocoonv1.CocoonHibernation{

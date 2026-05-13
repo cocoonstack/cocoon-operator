@@ -175,11 +175,9 @@ func (r *Reconciler) hibernationsTargetingPod(ctx context.Context, obj client.Ob
 	return out
 }
 
-// setPhase patches status, preserving timestamps on no-op updates.
-// On Failed->Waking re-entry, it refreshes LastTransitionTime so the wake deadline
-// does not inherit the stale timestamp from the previous failure.
-// The short-circuit also requires ObservedGeneration to already track Generation
-// so a spec bump that does not flip phase/VMName still surfaces in /status.
+// setPhase patches status when phase, vmName, or generation moved. On
+// Failed->Waking re-entry it also refreshes Ready.LastTransitionTime so the
+// wake deadline doesn't carry over from the previous failure.
 func (r *Reconciler) setPhase(ctx context.Context, hib *cocoonv1.CocoonHibernation, phase cocoonv1.CocoonHibernationPhase, vmName string) error {
 	if hib.Status.Phase == phase && hib.Status.VMName == vmName && hib.Status.ObservedGeneration == hib.Generation {
 		return nil
@@ -216,13 +214,9 @@ func (r *Reconciler) markFailed(ctx context.Context, hib *cocoonv1.CocoonHiberna
 	return nil
 }
 
-// markPending records that the CR is waiting on external state (pod creation,
-// VMName annotation) without pinning the phase to Failed. Self-heals once the
-// pod watcher re-enqueues the CR. Short-circuits when the phase and Ready
-// condition message already match, so the high-volume pod watcher does not
-// generate a PATCH on every event. The short-circuit also requires
-// ObservedGeneration to already track Generation so a spec bump that lands
-// while we are pending still surfaces in /status.
+// markPending parks the CR on Pending without pinning Failed; self-heals on
+// re-enqueue. Short-circuits when phase, generation, and Ready message all
+// match so the pod watcher doesn't PATCH on every event.
 func (r *Reconciler) markPending(ctx context.Context, hib *cocoonv1.CocoonHibernation, msg string) error {
 	if hib.Status.Phase == cocoonv1.CocoonHibernationPhasePending && hib.Status.ObservedGeneration == hib.Generation {
 		if ready := apimeta.FindStatusCondition(hib.Status.Conditions, commonk8s.ConditionTypeReady); ready != nil && ready.Message == msg {

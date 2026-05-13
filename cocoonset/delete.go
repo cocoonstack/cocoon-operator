@@ -17,11 +17,8 @@ import (
 	"github.com/cocoonstack/cocoon-common/meta"
 )
 
-// annotationDeleteVMNames durably records VM names for the GC step that runs
-// after pods are gone, so a CocoonSet deleted before Status.Agents was patched
-// (race window between r.Create(pod) and the reconcile that fills status) still
-// gets every tag cleaned. Annotation, not status, because it must survive the
-// pod-still-terminating requeue without depending on a second-pass status write.
+// annotationDeleteVMNames records VM names for the post-pod GC step, so a
+// CocoonSet deleted before Status.Agents was patched still gets every tag cleaned.
 const annotationDeleteVMNames = "cocoonset.cocoonstack.io/delete-vm-names"
 
 // reconcileDelete deletes all owned pods, GCs snapshots, and removes the finalizer.
@@ -44,8 +41,7 @@ func (r *Reconciler) reconcileDelete(ctx context.Context, cs *cocoonv1.CocoonSet
 		return ctrl.Result{}, fmt.Errorf("stash vm names: %w", err)
 	}
 
-	// Issue delete; vk-cocoon completes the snapshot push during the grace
-	// period before we GC tags below.
+	// vk-cocoon completes the snapshot push during the grace period before GC.
 	for i := range owned {
 		if ctxErr := ctx.Err(); ctxErr != nil {
 			return ctrl.Result{}, ctxErr
@@ -82,9 +78,7 @@ func (r *Reconciler) reconcileDelete(ctx context.Context, cs *cocoonv1.CocoonSet
 			}
 		}
 	} else {
-		// Production wires an Epoch client unconditionally; this branch only fires
-		// in tests or a misconfigured deployment. Log so the operator surfaces the
-		// configuration drift instead of silently leaking snapshot tags.
+		// Production always wires r.Epoch; this branch only fires in tests or misconfig.
 		logger.Warnf(ctx, "skipping epoch tag GC for cocoonset %s/%s: registry not configured", cs.Namespace, cs.Name)
 	}
 
