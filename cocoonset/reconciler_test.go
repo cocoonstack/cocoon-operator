@@ -388,6 +388,35 @@ func TestReconcileDeleteRemovesBothSnapshotTags(t *testing.T) {
 	}
 }
 
+// Race window: pod created but Status.Agents not yet patched with VMName.
+// reconcileDelete's first pass sees the pod and must stash its VMName onto
+// the annotation, so the second pass (after the pod is gone) still GCs the tag.
+func TestReconcileDeleteStashesPodVMNamesEvenWhenStatusIsEmpty(t *testing.T) {
+	scheme := testScheme(t)
+	cs := newCocoonSet("demo")
+	cs.Finalizers = []string{finalizerName}
+	// Status.Agents intentionally empty — reconciler hadn't patched it yet.
+
+	cli := ctrlfake.NewClientBuilder().
+		WithScheme(scheme).
+		WithObjects(cs, mustBuildAgentPod(t, cs, 0, "", "", scheme)).
+		Build()
+	reg := &fakeRegistry{}
+	r := &Reconciler{Client: cli, Scheme: scheme, Epoch: reg}
+
+	if _, err := r.reconcileDelete(t.Context(), cs); err != nil {
+		t.Fatalf("reconcileDelete: %v", err)
+	}
+
+	want := []string{
+		"vk-ns-demo-0:" + meta.DefaultSnapshotTag,
+		"vk-ns-demo-0:" + meta.HibernateSnapshotTag,
+	}
+	if !slices.Equal(reg.deleted, want) {
+		t.Errorf("DeleteManifest calls = %v, want %v", reg.deleted, want)
+	}
+}
+
 // Real clusters terminate pods asynchronously: by the time GC runs, the pod
 // list is already empty. VM names must come from Status, not from a re-list
 // (which is what the bug fix is about).
