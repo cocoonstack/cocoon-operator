@@ -102,6 +102,7 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 		if err := r.Update(ctx, &hib); err != nil {
 			return ctrl.Result{}, fmt.Errorf("add finalizer: %w", err)
 		}
+		return ctrl.Result{Requeue: true}, nil
 	}
 
 	if hib.Spec.PodRef.Name == "" {

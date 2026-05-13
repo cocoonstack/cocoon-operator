@@ -114,6 +114,44 @@ func TestFakeRegistryDeleteRecords(t *testing.T) {
 	}
 }
 
+// Finalizer add must end the cycle so the next reconcile reads the persisted object.
+func TestReconcileAddsFinalizerAndRequeues(t *testing.T) {
+	hib := &cocoonv1.CocoonHibernation{
+		ObjectMeta: metav1.ObjectMeta{Name: "hib", Namespace: "ns"},
+		Spec: cocoonv1.CocoonHibernationSpec{
+			Desire: cocoonv1.HibernationDesireHibernate,
+			PodRef: cocoonv1.HibernationPodRef{Name: "demo-0"},
+		},
+	}
+	scheme := testScheme(t)
+	cli := ctrlfake.NewClientBuilder().
+		WithScheme(scheme).
+		WithObjects(hib).
+		WithStatusSubresource(&cocoonv1.CocoonHibernation{}).
+		Build()
+	r := &Reconciler{Client: cli, Scheme: scheme, Epoch: &fakeRegistry{}}
+
+	res, err := r.Reconcile(t.Context(), ctrl.Request{
+		NamespacedName: types.NamespacedName{Namespace: "ns", Name: "hib"},
+	})
+	if err != nil {
+		t.Fatalf("Reconcile: %v", err)
+	}
+	if !res.Requeue {
+		t.Errorf("Requeue = false, want true after finalizer add")
+	}
+	var got cocoonv1.CocoonHibernation
+	if err := cli.Get(t.Context(), types.NamespacedName{Namespace: "ns", Name: "hib"}, &got); err != nil {
+		t.Fatalf("get hib: %v", err)
+	}
+	if len(got.Finalizers) == 0 || got.Finalizers[0] != finalizerName {
+		t.Errorf("finalizers = %v, want [%s]", got.Finalizers, finalizerName)
+	}
+	if got.Status.Phase != "" {
+		t.Errorf("status mutated before finalizer persisted, phase = %q", got.Status.Phase)
+	}
+}
+
 func TestReconcileDeleteClearsHibernateTagAndFinalizer(t *testing.T) {
 	hib := &cocoonv1.CocoonHibernation{
 		ObjectMeta: metav1.ObjectMeta{
@@ -191,7 +229,7 @@ func TestPodVMNameRoundtrip(t *testing.T) {
 // from HasManifest bubble out instead of being silently polled forever.
 func TestReconcileHibernateSurfacesProbeError(t *testing.T) {
 	hib := &cocoonv1.CocoonHibernation{
-		ObjectMeta: metav1.ObjectMeta{Name: "hib", Namespace: "ns"},
+		ObjectMeta: metav1.ObjectMeta{Name: "hib", Namespace: "ns", Finalizers: []string{finalizerName}},
 		Spec: cocoonv1.CocoonHibernationSpec{
 			Desire: cocoonv1.HibernationDesireHibernate,
 			PodRef: cocoonv1.HibernationPodRef{Name: "demo-0"},
@@ -231,7 +269,7 @@ func TestReconcileHibernateSurfacesProbeError(t *testing.T) {
 
 func TestReconcileHibernateFoldsAbsenceToRequeue(t *testing.T) {
 	hib := &cocoonv1.CocoonHibernation{
-		ObjectMeta: metav1.ObjectMeta{Name: "hib", Namespace: "ns"},
+		ObjectMeta: metav1.ObjectMeta{Name: "hib", Namespace: "ns", Finalizers: []string{finalizerName}},
 		Spec: cocoonv1.CocoonHibernationSpec{
 			Desire: cocoonv1.HibernationDesireHibernate,
 			PodRef: cocoonv1.HibernationPodRef{Name: "demo-0"},
@@ -319,7 +357,7 @@ func TestWakeDeadlineExceeded(t *testing.T) {
 
 func TestReconcileWakeFailsOnTimeout(t *testing.T) {
 	hib := &cocoonv1.CocoonHibernation{
-		ObjectMeta: metav1.ObjectMeta{Name: "hib", Namespace: "ns"},
+		ObjectMeta: metav1.ObjectMeta{Name: "hib", Namespace: "ns", Finalizers: []string{finalizerName}},
 		Spec: cocoonv1.CocoonHibernationSpec{
 			Desire: cocoonv1.HibernationDesireWake,
 			PodRef: cocoonv1.HibernationPodRef{Name: "demo-0"},
@@ -365,7 +403,7 @@ func TestReconcileWakeFailsOnTimeout(t *testing.T) {
 func TestReconcileWakeRecoversFromFailed(t *testing.T) {
 	staleTime := metav1.NewTime(time.Now().Add(-2 * wakeTimeout))
 	hib := &cocoonv1.CocoonHibernation{
-		ObjectMeta: metav1.ObjectMeta{Name: "hib", Namespace: "ns"},
+		ObjectMeta: metav1.ObjectMeta{Name: "hib", Namespace: "ns", Finalizers: []string{finalizerName}},
 		Spec: cocoonv1.CocoonHibernationSpec{
 			Desire: cocoonv1.HibernationDesireWake,
 			PodRef: cocoonv1.HibernationPodRef{Name: "demo-0"},
@@ -427,7 +465,7 @@ func TestReconcileWakeRecoversFromFailed(t *testing.T) {
 
 func TestReconcilePendingWhenPodMissing(t *testing.T) {
 	hib := &cocoonv1.CocoonHibernation{
-		ObjectMeta: metav1.ObjectMeta{Name: "hib", Namespace: "ns"},
+		ObjectMeta: metav1.ObjectMeta{Name: "hib", Namespace: "ns", Finalizers: []string{finalizerName}},
 		Spec: cocoonv1.CocoonHibernationSpec{
 			Desire: cocoonv1.HibernationDesireHibernate,
 			PodRef: cocoonv1.HibernationPodRef{Name: "demo-0"},
@@ -462,7 +500,7 @@ func TestReconcilePendingWhenPodMissing(t *testing.T) {
 
 func TestReconcilePendingWhenPodMissingVMName(t *testing.T) {
 	hib := &cocoonv1.CocoonHibernation{
-		ObjectMeta: metav1.ObjectMeta{Name: "hib", Namespace: "ns"},
+		ObjectMeta: metav1.ObjectMeta{Name: "hib", Namespace: "ns", Finalizers: []string{finalizerName}},
 		Spec: cocoonv1.CocoonHibernationSpec{
 			Desire: cocoonv1.HibernationDesireHibernate,
 			PodRef: cocoonv1.HibernationPodRef{Name: "demo-0"},
