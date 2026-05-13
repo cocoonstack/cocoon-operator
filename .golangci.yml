@@ -58,14 +58,6 @@ linters:
       - vendor
       - mocks
       - dist
-    rules:
-      - path: _test\.go
-        linters:
-          - errcheck
-          - gosec
-          - unparam
-          - goconst
-          - gocyclo
 
 formatters:
   enable:

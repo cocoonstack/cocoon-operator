@@ -162,6 +162,7 @@ func newManagedPod(cs *cocoonv1.CocoonSet, podName, role, slotLabel string, sche
 // buildAgentPod would produce from the current CocoonSet spec.
 func podSpecMatchesAgent(pod *corev1.Pod, cs *cocoonv1.CocoonSet, slot int32) bool {
 	current := meta.ParseVMSpec(pod)
+	// Sub-agents inherit ForkFrom; main agents leave it empty so a manual edit drifts.
 	forkFrom := ""
 	if slot > 0 {
 		forkFrom = current.ForkFrom
@@ -206,10 +207,8 @@ func podSpecMatchesToolbox(pod *corev1.Pod, cs *cocoonv1.CocoonSet, tb cocoonv1.
 	return true
 }
 
-// vmSpecMatches reports whether two VMSpecs are equivalent. Callers
-// construct want with VMName/ForkFrom copied from current so those
-// fields never trigger a spurious mismatch; struct equality lets any
-// future VMSpec field be covered without editing this function.
+// vmSpecMatches uses struct equality so any future VMSpec field is covered.
+// Callers copy VMName/ForkFrom from current into want to avoid spurious mismatches.
 func vmSpecMatches(got, want meta.VMSpec) bool {
 	return got == want
 }

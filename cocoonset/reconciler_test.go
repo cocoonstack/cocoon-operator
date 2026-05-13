@@ -147,6 +147,29 @@ func TestEnsureToolboxesCollisionReturnsError(t *testing.T) {
 	}
 }
 
+func TestEnsureToolboxesRejectsDuplicateNames(t *testing.T) {
+	scheme := testScheme(t)
+	cs := newCocoonSet("demo", func(cs *cocoonv1.CocoonSet) {
+		cs.Spec.Toolboxes = []cocoonv1.ToolboxSpec{
+			{Name: "tb", Image: "ghcr.io/cocoonstack/cocoon/toolbox:latest"},
+			{Name: "tb", Image: "ghcr.io/cocoonstack/cocoon/toolbox:other"},
+		}
+	})
+
+	cli := ctrlfake.NewClientBuilder().WithScheme(scheme).Build()
+	r := &Reconciler{Client: cli, Scheme: scheme}
+	classified := classifiedPods{
+		sub:       map[int32]*corev1.Pod{},
+		toolbox:   map[string]*corev1.Pod{},
+		allByName: map[string]*corev1.Pod{},
+	}
+
+	_, err := r.ensureToolboxes(t.Context(), cs, classified)
+	if err == nil {
+		t.Fatal("ensureToolboxes must reject a spec with duplicate toolbox names")
+	}
+}
+
 func TestEnsureToolboxesIdempotentOnExistingToolbox(t *testing.T) {
 	scheme := testScheme(t)
 	cs := newCocoonSet("demo", func(cs *cocoonv1.CocoonSet) {
