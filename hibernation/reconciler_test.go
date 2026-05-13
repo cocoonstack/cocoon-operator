@@ -117,10 +117,10 @@ func TestFakeRegistryDeleteRecords(t *testing.T) {
 func TestReconcileDeleteClearsHibernateTagAndFinalizer(t *testing.T) {
 	hib := &cocoonv1.CocoonHibernation{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:       "hib",
-			Namespace:  "ns",
-			Finalizers: []string{finalizerName},
-			DeletionTimestamp: &metav1.Time{Time: metav1.Now().Time},
+			Name:              "hib",
+			Namespace:         "ns",
+			Finalizers:        []string{finalizerName},
+			DeletionTimestamp: &metav1.Time{Time: time.Now()},
 		},
 		Spec:   cocoonv1.CocoonHibernationSpec{PodRef: cocoonv1.HibernationPodRef{Name: "demo-0"}},
 		Status: cocoonv1.CocoonHibernationStatus{VMName: "vk-ns-demo-0"},
@@ -153,10 +153,10 @@ func TestReconcileDeleteClearsHibernateTagAndFinalizer(t *testing.T) {
 func TestReconcileDeleteSkipsTagWhenVMNameMissing(t *testing.T) {
 	hib := &cocoonv1.CocoonHibernation{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:       "hib",
-			Namespace:  "ns",
-			Finalizers: []string{finalizerName},
-			DeletionTimestamp: &metav1.Time{Time: metav1.Now().Time},
+			Name:              "hib",
+			Namespace:         "ns",
+			Finalizers:        []string{finalizerName},
+			DeletionTimestamp: &metav1.Time{Time: time.Now()},
 		},
 		Spec: cocoonv1.CocoonHibernationSpec{PodRef: cocoonv1.HibernationPodRef{Name: "demo-0"}},
 		// Status.VMName left empty — delete before vk-cocoon ever filled it.

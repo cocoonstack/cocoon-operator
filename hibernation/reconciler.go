@@ -36,9 +36,7 @@ const (
 	// pod watcher can resolve a pod event back to the CRs that target it.
 	indexPodRefName = "spec.podRef.name"
 
-	// finalizerName keeps the CR alive long enough to clean its :hibernate
-	// snapshot from epoch, so a same-named pod created later can't wake
-	// into this CR's frozen guest memory.
+	// finalizerName keeps the CR alive long enough to clear its :hibernate tag from epoch.
 	finalizerName = "cocoonhibernation.cocoonset.cocoonstack.io/finalizer"
 
 	conditionReasonPending = "Pending"
@@ -138,9 +136,7 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 	}
 }
 
-// reconcileDelete clears the :hibernate snapshot from epoch and removes the
-// finalizer. VMName comes from status (vk-cocoon stamped it on hibernate);
-// when status is unset we still drop the finalizer so deletion can finish.
+// reconcileDelete clears the :hibernate tag (if Status.VMName is set) and removes the finalizer.
 func (r *Reconciler) reconcileDelete(ctx context.Context, hib *cocoonv1.CocoonHibernation) (ctrl.Result, error) {
 	logger := log.WithFunc("hibernation.Reconciler.reconcileDelete")
 	if r.Epoch != nil && hib.Status.VMName != "" {

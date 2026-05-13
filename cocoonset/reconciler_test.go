@@ -3,6 +3,7 @@ package cocoonset
 import (
 	"context"
 	"errors"
+	"slices"
 	"sync"
 	"testing"
 
@@ -15,9 +16,7 @@ import (
 	"github.com/cocoonstack/cocoon-common/meta"
 )
 
-// fakeRegistry tracks manifest presence per (name, tag) key so tests can
-// simulate snapshots appearing/disappearing, and records DeleteManifest
-// calls so tests can assert what reconcileDelete cleaned up.
+// fakeRegistry simulates manifest presence and records DeleteManifest calls.
 type fakeRegistry struct {
 	present   map[string]bool
 	probeErr  error
@@ -372,27 +371,23 @@ func TestReconcileDeleteRemovesBothSnapshotTags(t *testing.T) {
 	reg := &fakeRegistry{}
 	r := &Reconciler{Client: cli, Scheme: scheme, Epoch: reg}
 
-	// First reconcile deletes the pods and requeues to wait for termination.
+	// reconcileDelete runs in two phases: first deletes pods and requeues for
+	// termination, second observes none remain and walks the tag cleanup.
 	if _, err := r.reconcileDelete(t.Context(), cs); err != nil {
 		t.Fatalf("reconcileDelete (delete pods): %v", err)
 	}
-	// Second reconcile observes no pods remain and walks the tag cleanup.
 	if _, err := r.reconcileDelete(t.Context(), cs); err != nil {
 		t.Fatalf("reconcileDelete (gc tags): %v", err)
 	}
 
-	wantSuffixes := []string{":" + meta.DefaultSnapshotTag, ":" + meta.HibernateSnapshotTag}
-	if len(reg.deleted) != len(wantSuffixes) {
-		t.Fatalf("DeleteManifest calls = %v, want one per tag", reg.deleted)
+	want := []string{
+		"vk-ns-demo-0:" + meta.DefaultSnapshotTag,
+		"vk-ns-demo-0:" + meta.HibernateSnapshotTag,
 	}
-	for i, want := range wantSuffixes {
-		if !endsWith(reg.deleted[i], want) {
-			t.Errorf("DeleteManifest[%d] = %q, want suffix %q", i, reg.deleted[i], want)
-		}
+	if !slices.Equal(reg.deleted, want) {
+		t.Errorf("DeleteManifest calls = %v, want %v", reg.deleted, want)
 	}
 }
-
-func endsWith(s, suffix string) bool { return len(s) >= len(suffix) && s[len(s)-len(suffix):] == suffix }
 
 func TestApplyUnsuspendSkipsPodHibernatedByCR(t *testing.T) {
 	scheme := testScheme(t)

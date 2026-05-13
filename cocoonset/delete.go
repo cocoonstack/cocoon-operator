@@ -58,11 +58,7 @@ func (r *Reconciler) reconcileDelete(ctx context.Context, cs *cocoonv1.CocoonSet
 		return ctrl.Result{RequeueAfter: requeueWaitForMain}, nil
 	}
 
-	// All pods gone — safe to GC snapshot tags from epoch. Walk both the
-	// :latest tag (snapshotPolicy=always pushes) and the :hibernate tag
-	// (CocoonHibernation pushes regardless of policy); leaving the latter
-	// behind would let a same-named CocoonSet recreated later wake into
-	// the previous generation's guest memory.
+	// :hibernate is pushed regardless of snapshotPolicy, so drop both tags unconditionally.
 	if r.Epoch != nil {
 		for i := range owned {
 			spec := meta.ParseVMSpec(&owned[i])
