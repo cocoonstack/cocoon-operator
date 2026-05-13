@@ -44,7 +44,8 @@ func (r *Reconciler) reconcileDelete(ctx context.Context, cs *cocoonv1.CocoonSet
 		return ctrl.Result{}, fmt.Errorf("stash vm names: %w", err)
 	}
 
-	// Phase 1: delete all pods and let vk-cocoon finish snapshot push.
+	// Issue delete; vk-cocoon completes the snapshot push during the grace
+	// period before we GC tags below.
 	for i := range owned {
 		if ctxErr := ctx.Err(); ctxErr != nil {
 			return ctrl.Result{}, ctxErr
