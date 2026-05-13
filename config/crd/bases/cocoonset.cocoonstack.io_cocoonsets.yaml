@@ -443,6 +443,9 @@ spec:
                   - slot
                   type: object
                 type: array
+                x-kubernetes-list-map-keys:
+                - slot
+                x-kubernetes-list-type: map
               conditions:
                 items:
                   description: Condition contains details for one aspect of the current
@@ -562,6 +565,9 @@ spec:
                   - name
                   type: object
                 type: array
+                x-kubernetes-list-map-keys:
+                - name
+                x-kubernetes-list-type: map
             type: object
         type: object
     served: true
