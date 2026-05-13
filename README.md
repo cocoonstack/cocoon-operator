@@ -14,7 +14,7 @@ cocoon-operator/
 ├── main.go              # manager wiring + flag parsing
 ├── cocoonset/           # CocoonSet reconciler, pod builders, status diff
 ├── hibernation/         # CocoonHibernation reconciler
-└── epoch/               # SnapshotRegistry interface + epoch HTTP adapter
+└── snapshot/            # snapshot.Registry interface consumed by both reconcilers
 ```
 
 ## Architecture
@@ -32,11 +32,11 @@ cocoon-operator/
 │           │                                  │                   │
 │           ▼                                  ▼                   │
 │  ┌────────────────────┐         ┌──────────────────────┐        │
-│  │ controller-runtime │         │ epoch SnapshotRegistry│        │
-│  │ Manager            │         │ (HTTP via             │        │
-│  │  - leader election │         │  registryclient)      │        │
-│  │  - metrics :8080    │        └──────────────────────┘        │
-│  │  - probes :8081     │                                         │
+│  │ controller-runtime │         │ snapshot.Registry    │        │
+│  │ Manager            │         │ (HTTP via            │        │
+│  │  - leader election │         │  registryclient)     │        │
+│  │  - metrics :8080   │         └──────────────────────┘        │
+│  │  - probes :8081    │                                          │
 │  └────────────────────┘                                          │
 └──────────────────────────────────────────────────────────────────┘
 ```
@@ -125,7 +125,7 @@ The Makefile detects Go workspace mode (`go env GOWORK`) and skips `go mod tidy`
 |---|---|
 | [cocoon-common](https://github.com/cocoonstack/cocoon-common) | CRD types, annotation contract, shared helpers |
 | [cocoon-webhook](https://github.com/cocoonstack/cocoon-webhook) | Admission webhook for sticky scheduling and CocoonSet validation |
-| [epoch](https://github.com/cocoonstack/epoch) | Snapshot registry; the operator queries it via `SnapshotRegistry` |
+| [epoch](https://github.com/cocoonstack/epoch) | Snapshot registry; the operator queries it via the `snapshot.Registry` interface |
 | [vk-cocoon](https://github.com/cocoonstack/vk-cocoon) | Virtual kubelet provider managing VM lifecycle |
 
 ## License
