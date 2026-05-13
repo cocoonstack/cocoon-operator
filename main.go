@@ -5,6 +5,7 @@ package main
 import (
 	"context"
 	"flag"
+	"fmt"
 	"os"
 	"os/signal"
 	"syscall"
@@ -48,7 +49,10 @@ func main() {
 	flag.Parse()
 
 	ctx := context.Background()
-	commonlog.Setup(ctx, "OPERATOR_LOG_LEVEL")
+	if err := commonlog.Setup(ctx, "OPERATOR_LOG_LEVEL"); err != nil {
+		fmt.Fprintf(os.Stderr, "setup log: %v\n", err)
+		os.Exit(1)
+	}
 	// Silence controller-runtime's own logger; we use core/log instead.
 	crlog.SetLogger(logr.Discard())
 	logger := log.WithFunc("main")
