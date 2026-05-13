@@ -210,6 +210,10 @@ func podSpecMatchesToolbox(pod *corev1.Pod, cs *cocoonv1.CocoonSet, tb cocoonv1.
 // construct want with VMName/ForkFrom copied from current so those
 // fields never trigger a spurious mismatch; struct equality lets any
 // future VMSpec field be covered without editing this function.
+//
+// ForkFrom is intentionally NOT inherited for main agents (slot 0), so a
+// manually-edited fork-from on a main pod is treated as drift and triggers
+// a recreate via podSpecMatchesAgent.
 func vmSpecMatches(got, want meta.VMSpec) bool {
 	return got == want
 }
