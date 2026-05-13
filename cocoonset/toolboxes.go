@@ -20,15 +20,17 @@ import (
 // Returns true when cluster state was mutated.
 func (r *Reconciler) ensureToolboxes(ctx context.Context, cs *cocoonv1.CocoonSet, classified classifiedPods) (bool, error) {
 	logger := log.WithFunc("cocoonset.Reconciler.ensureToolboxes")
-	changed := false
-	desired := map[string]bool{}
+	// Defense in depth: webhook should already reject duplicates. Validate
+	// upfront before any Create/Delete so a bypass can't leave partial state.
+	desired := make(map[string]bool, len(cs.Spec.Toolboxes))
 	for _, tb := range cs.Spec.Toolboxes {
-		// Defense in depth: the webhook should already reject this, but an older
-		// CRD or webhook bypass could let one toolbox overwrite another's pod.
-		if _, dup := desired[tb.Name]; dup {
-			return changed, fmt.Errorf("duplicate toolbox name %q in spec", tb.Name)
+		if desired[tb.Name] {
+			return false, fmt.Errorf("duplicate toolbox name %q in spec", tb.Name)
 		}
 		desired[tb.Name] = true
+	}
+	changed := false
+	for _, tb := range cs.Spec.Toolboxes {
 		podName := fmt.Sprintf("%s-%s", cs.Name, tb.Name)
 		if classified.allByName[podName] != nil && classified.toolbox[tb.Name] == nil {
 			return changed, fmt.Errorf("create toolbox %s: name collision with existing pod %s", tb.Name, podName)
