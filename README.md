@@ -60,12 +60,38 @@ Pods are constructed via `meta.FromAgentSpec` / `meta.FromToolboxSpec` factory h
 
 | Spec.Desire | What the reconciler does | Terminal phase |
 |---|---|---|
-| `Hibernate` | `meta.HibernateState(true).Apply` on the target pod, then poll `epoch.HasManifest(vmName, meta.HibernateSnapshotTag)` until the snapshot lands. A probe error (transport / 5xx / auth) surfaces as a returned error so controller-runtime logs + retries with backoff. | `Hibernated` |
+| `Hibernate` | `meta.HibernateState(true).Apply` on the target pod, then poll `epoch.HasManifest(vmName, meta.HibernateSnapshotTag)` until the snapshot lands or `hibernateTimeout` (3 minutes) trips. A probe error (transport / 5xx / auth) surfaces as a returned error so controller-runtime logs + retries with backoff. | `Hibernated` |
 | `Wake` | Check if the container is already `Running` (skip annotation patch if so), otherwise clear `meta.HibernateState` **once** (skip if already cleared to avoid triggering informer events on every requeue cycle), then wait for the container to be `Running` and drop the hibernation snapshot tag from epoch. A wake that does not complete within `wakeTimeout` (5 minutes) is escalated to `Phase=Failed` with a dated message in the `Ready` condition. | `Active` |
 
 On CR deletion the reconciler runs a finalizer (`cocoonhibernation.cocoonset.cocoonstack.io/finalizer`) that clears the `:hibernate` tag from epoch (if `Status.VMName` is set) before removing itself, so deleting a CocoonHibernation never leaves an orphaned snapshot on the registry.
 
-There is no `cocoon-vm-snapshots` ConfigMap bridge — epoch is the single source of truth for hibernation state. Failure paths set `Phase=Failed` with a one-shot message in the `Ready` condition instead of looping forever on a bad reference. A `Failed` wake is recoverable: on re-entry into `Waking` from a non-Waking phase the reconciler explicitly refreshes the Ready condition's `LastTransitionTime` so the wake budget resets cleanly (without the override, `apimeta.SetStatusCondition` would preserve the stale timestamp across the `False → False` transition and the recovered wake would trip the deadline on the next reconcile).
+There is no `cocoon-vm-snapshots` ConfigMap bridge — epoch is the single source of truth for hibernation state. Failure paths set `Phase=Failed` with a one-shot message in the `Ready` condition instead of looping forever on a bad reference. Both `Hibernate` and `Wake` Failed phases are recoverable: on re-entry from a non-deadline phase the reconciler refreshes the Ready condition's `LastTransitionTime` so the budget resets cleanly (without the override, `apimeta.SetStatusCondition` would preserve the stale timestamp across the `False → False` transition and the recovered phase would trip the deadline on the next reconcile). Each retry emits a `RetryRequested` Normal Event so the recovery is visible in `kubectl describe`.
+
+### Observability
+
+Reconciler failures surface as K8s Events on the CR plus Prometheus counters on the controller-runtime `/metrics` endpoint:
+
+| Event reason (CocoonHibernation) | Type |
+|---|---|
+| `HibernateTimedOut`, `WakeTimedOut` | Warning |
+| `Hibernated`, `WokenActive`, `RetryRequested` | Normal |
+
+| Event reason (CocoonSet) | Type |
+|---|---|
+| `PodLifecycleFailed`, `MainAgentFailed`, `SubAgentDeadLetter` | Warning |
+| `SubAgentRebuilding`, `RecoveredFromFailure` | Normal |
+
+Metrics:
+
+```
+cocoon_operator_subagent_rebuild_total{namespace, cocoonset}
+cocoon_operator_subagent_dead_letter_total{namespace, cocoonset}
+cocoon_operator_hibernate_phase_duration_seconds{result}    # result=ok|timeout
+cocoon_operator_wake_phase_duration_seconds{result}
+cocoon_operator_lifecycle_state_failed_observed_total{phase}
+```
+
+`CocoonSet` consumes the `vm.cocoonstack.io/lifecycle-state=Failed` annotation that vk-cocoon writes on terminal failures (hibernate, wake, post-clone, SAC); the operator flips to `Failed` immediately instead of waiting for `Pod.Status.Phase` to follow. `triageSubAgent` rebuilds a terminal sub pod at most three times with `0/1/5/30 s` exponential backoff, then marks the pod `cocoonset.cocoonstack.io/dead-letter=true` and leaves it in place so a permanently broken slot stops consuming the apiserver budget. Rebuild count persists in the `cocoonset.cocoonstack.io/rebuild-history` annotation on the CocoonSet so the count survives the pod delete.
 
 ## Configuration
 
