@@ -44,7 +44,7 @@ cocoon-operator/
 ### CocoonSet reconcile loop
 
 1. Fetch the CocoonSet (return early on NotFound).
-2. If `DeletionTimestamp` is set, walk owned pods, delete them, optionally `epoch.DeleteManifest` each VM (per-pod, gated on `meta.ShouldSnapshotVM(spec)` so `main-only` does not issue DeleteManifest against sub-agent / toolbox tags vk-cocoon never pushed), then drop the finalizer.
+2. If `DeletionTimestamp` is set, walk owned pods, delete them, `epoch.DeleteManifest` for both `:latest` and `:hibernate` tags on every owned VM (unconditional — DeleteManifest is 404-tolerant, and hibernate pushes ignore snapshotPolicy so any main-only gate would orphan `:hibernate` tags pushed by sub-agents), then drop the finalizer.
 3. Ensure the `cocoonset.cocoonstack.io/finalizer` is in place.
 4. List owned pods by `cocoonset.cocoonstack.io/name=<cs.Name>` and classify by role label.
 5. **Suspend short-circuit**: if `spec.suspend == true`, write `meta.HibernateState(true)` onto every pod and report `Phase=Suspended`.
@@ -62,6 +62,8 @@ Pods are constructed via `meta.FromAgentSpec` / `meta.FromToolboxSpec` factory h
 |---|---|---|
 | `Hibernate` | `meta.HibernateState(true).Apply` on the target pod, then poll `epoch.HasManifest(vmName, meta.HibernateSnapshotTag)` until the snapshot lands. A probe error (transport / 5xx / auth) surfaces as a returned error so controller-runtime logs + retries with backoff. | `Hibernated` |
 | `Wake` | Check if the container is already `Running` (skip annotation patch if so), otherwise clear `meta.HibernateState` **once** (skip if already cleared to avoid triggering informer events on every requeue cycle), then wait for the container to be `Running` and drop the hibernation snapshot tag from epoch. A wake that does not complete within `wakeTimeout` (5 minutes) is escalated to `Phase=Failed` with a dated message in the `Ready` condition. | `Active` |
+
+On CR deletion the reconciler runs a finalizer (`cocoonhibernation.cocoonset.cocoonstack.io/finalizer`) that clears the `:hibernate` tag from epoch (if `Status.VMName` is set) before removing itself, so deleting a CocoonHibernation never leaves an orphaned snapshot on the registry.
 
 There is no `cocoon-vm-snapshots` ConfigMap bridge — epoch is the single source of truth for hibernation state. Failure paths set `Phase=Failed` with a one-shot message in the `Ready` condition instead of looping forever on a bad reference. A `Failed` wake is recoverable: on re-entry into `Waking` from a non-Waking phase the reconciler explicitly refreshes the Ready condition's `LastTransitionTime` so the wake budget resets cleanly (without the override, `apimeta.SetStatusCondition` would preserve the stale timestamp across the `False → False` transition and the recovered wake would trip the deadline on the next reconcile).
 
