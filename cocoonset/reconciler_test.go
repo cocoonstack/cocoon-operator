@@ -360,9 +360,11 @@ func TestReconcileDeleteRemovesBothSnapshotTags(t *testing.T) {
 	scheme := testScheme(t)
 	cs := newCocoonSet("demo")
 	cs.Finalizers = []string{finalizerName}
-	// snapshotPolicy=never to prove the cleanup is not gated by it: hibernate
-	// may have pushed a :hibernate tag regardless of policy.
+	// snapshotPolicy=never proves the cleanup is not gated by it.
 	cs.Spec.SnapshotPolicy = cocoonv1.SnapshotPolicyNever
+	cs.Status.Agents = []cocoonv1.AgentStatus{
+		{Slot: 0, Role: "main", PodName: "demo-0", VMName: "vk-ns-demo-0"},
+	}
 
 	cli := ctrlfake.NewClientBuilder().
 		WithScheme(scheme).
@@ -371,18 +373,52 @@ func TestReconcileDeleteRemovesBothSnapshotTags(t *testing.T) {
 	reg := &fakeRegistry{}
 	r := &Reconciler{Client: cli, Scheme: scheme, Epoch: reg}
 
-	// reconcileDelete runs in two phases: first deletes pods and requeues for
-	// termination, second observes none remain and walks the tag cleanup.
+	// The fake client deletes synchronously, so the single reconcile sees the
+	// pod gone in the re-list and runs the GC inline.
 	if _, err := r.reconcileDelete(t.Context(), cs); err != nil {
-		t.Fatalf("reconcileDelete (delete pods): %v", err)
-	}
-	if _, err := r.reconcileDelete(t.Context(), cs); err != nil {
-		t.Fatalf("reconcileDelete (gc tags): %v", err)
+		t.Fatalf("reconcileDelete: %v", err)
 	}
 
 	want := []string{
 		"vk-ns-demo-0:" + meta.DefaultSnapshotTag,
 		"vk-ns-demo-0:" + meta.HibernateSnapshotTag,
+	}
+	if !slices.Equal(reg.deleted, want) {
+		t.Errorf("DeleteManifest calls = %v, want %v", reg.deleted, want)
+	}
+}
+
+// Real clusters terminate pods asynchronously: by the time GC runs, the pod
+// list is already empty. VM names must come from Status, not from a re-list
+// (which is what the bug fix is about).
+func TestReconcileDeleteCleansTagsAfterPodsGone(t *testing.T) {
+	scheme := testScheme(t)
+	cs := newCocoonSet("demo")
+	cs.Finalizers = []string{finalizerName}
+	cs.Status.Agents = []cocoonv1.AgentStatus{
+		{Slot: 0, Role: "main", PodName: "demo-0", VMName: "vk-ns-demo-0"},
+		{Slot: 1, Role: "sub", PodName: "demo-1", VMName: "vk-ns-demo-1"},
+	}
+	cs.Status.Toolboxes = []cocoonv1.ToolboxStatus{
+		{Name: "tb", PodName: "demo-tb", VMName: "vk-ns-demo-tb"},
+	}
+
+	// No pods in the fake client — kubelet already terminated them.
+	cli := ctrlfake.NewClientBuilder().WithScheme(scheme).WithObjects(cs).Build()
+	reg := &fakeRegistry{}
+	r := &Reconciler{Client: cli, Scheme: scheme, Epoch: reg}
+
+	if _, err := r.reconcileDelete(t.Context(), cs); err != nil {
+		t.Fatalf("reconcileDelete: %v", err)
+	}
+
+	want := []string{
+		"vk-ns-demo-0:" + meta.DefaultSnapshotTag,
+		"vk-ns-demo-0:" + meta.HibernateSnapshotTag,
+		"vk-ns-demo-1:" + meta.DefaultSnapshotTag,
+		"vk-ns-demo-1:" + meta.HibernateSnapshotTag,
+		"vk-ns-demo-tb:" + meta.DefaultSnapshotTag,
+		"vk-ns-demo-tb:" + meta.HibernateSnapshotTag,
 	}
 	if !slices.Equal(reg.deleted, want) {
 		t.Errorf("DeleteManifest calls = %v, want %v", reg.deleted, want)

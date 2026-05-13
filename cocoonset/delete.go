@@ -58,16 +58,13 @@ func (r *Reconciler) reconcileDelete(ctx context.Context, cs *cocoonv1.CocoonSet
 		return ctrl.Result{RequeueAfter: requeueWaitForMain}, nil
 	}
 
+	// Pods are gone by the time we GC, so read VM names from Status, not from a re-list.
 	// :hibernate is pushed regardless of snapshotPolicy, so drop both tags unconditionally.
 	if r.Epoch != nil {
-		for i := range owned {
-			spec := meta.ParseVMSpec(&owned[i])
-			if spec.VMName == "" {
-				continue
-			}
+		for _, name := range vmNamesFromStatus(cs) {
 			for _, tag := range []string{meta.DefaultSnapshotTag, meta.HibernateSnapshotTag} {
-				if err := r.Epoch.DeleteManifest(ctx, spec.VMName, tag); err != nil {
-					logger.Warnf(ctx, "delete snapshot %s:%s: %v", spec.VMName, tag, err)
+				if err := r.Epoch.DeleteManifest(ctx, name, tag); err != nil {
+					logger.Warnf(ctx, "delete snapshot %s:%s: %v", name, tag, err)
 				}
 			}
 		}
@@ -80,4 +77,21 @@ func (r *Reconciler) reconcileDelete(ctx context.Context, cs *cocoonv1.CocoonSet
 		}
 	}
 	return ctrl.Result{}, nil
+}
+
+// vmNamesFromStatus collects VM names for the agents and toolboxes the
+// reconciler observed before delete; pods themselves are already gone.
+func vmNamesFromStatus(cs *cocoonv1.CocoonSet) []string {
+	names := make([]string, 0, len(cs.Status.Agents)+len(cs.Status.Toolboxes))
+	for _, a := range cs.Status.Agents {
+		if a.VMName != "" {
+			names = append(names, a.VMName)
+		}
+	}
+	for _, tb := range cs.Status.Toolboxes {
+		if tb.VMName != "" {
+			names = append(names, tb.VMName)
+		}
+	}
+	return names
 }
