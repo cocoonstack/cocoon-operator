@@ -292,7 +292,7 @@ func TestEnsureSubAgentsReplacesTerminalPod(t *testing.T) {
 
 	cli := ctrlfake.NewClientBuilder().
 		WithScheme(scheme).
-		WithObjects(subPod).
+		WithObjects(cs, subPod).
 		Build()
 	r := &Reconciler{Client: cli, Scheme: scheme}
 	classified := classifiedPods{

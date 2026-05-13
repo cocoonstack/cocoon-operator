@@ -6,14 +6,18 @@ import (
 	"maps"
 	"slices"
 	"sync/atomic"
+	"time"
 
 	"github.com/projecteru2/core/log"
 	"golang.org/x/sync/errgroup"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/types"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	cocoonv1 "github.com/cocoonstack/cocoon-common/apis/v1"
 	"github.com/cocoonstack/cocoon-common/meta"
+	"github.com/cocoonstack/cocoon-operator/metrics"
 )
 
 // subAgentCreateConcurrency caps parallel pod creates during fan-out so a
@@ -83,15 +87,15 @@ func (r *Reconciler) ensureSubAgents(ctx context.Context, cs *cocoonv1.CocoonSet
 }
 
 // triageSubAgent deletes pod when it is terminal or has drifted from spec.
-// Returns (deleted, err). A non-deleted return means the pod still matches.
+// Returns (deleted, err). A non-deleted return means the pod still matches,
+// is in dead-letter, or is waiting on the rebuild backoff.
 func (r *Reconciler) triageSubAgent(ctx context.Context, logger *log.Fields, pod *corev1.Pod, cs *cocoonv1.CocoonSet, slot int32) (bool, error) {
+	if pod.Annotations[annotationDeadLetter] == "true" {
+		return false, nil
+	}
 	switch {
 	case meta.IsPodTerminal(pod):
-		logger.Infof(ctx, "sub-agent %s/%s slot %d terminal (phase=%s), deleting for recreate", pod.Namespace, pod.Name, slot, pod.Status.Phase)
-		if err := r.Delete(ctx, pod); err != nil && !apierrors.IsNotFound(err) {
-			return false, fmt.Errorf("delete terminal sub-agent slot %d: %w", slot, err)
-		}
-		return true, nil
+		return r.rebuildSubAgent(ctx, logger, pod, cs, slot)
 	case !podSpecMatchesAgent(pod, cs, slot):
 		logger.Infof(ctx, "sub-agent %s/%s slot %d spec drifted, deleting for recreate", pod.Namespace, pod.Name, slot)
 		if err := r.Delete(ctx, pod); err != nil && !apierrors.IsNotFound(err) {
@@ -101,4 +105,56 @@ func (r *Reconciler) triageSubAgent(ctx context.Context, logger *log.Fields, pod
 	default:
 		return false, nil
 	}
+}
+
+// rebuildSubAgent deletes pod with exponential backoff and a dead-letter
+// gate. Past maxRebuildAttempts the pod is marked dead-letter and left in
+// place so the failure stays visible and rebuild storms cannot consume
+// the apiserver budget.
+func (r *Reconciler) rebuildSubAgent(ctx context.Context, logger *log.Fields, pod *corev1.Pod, cs *cocoonv1.CocoonSet, slot int32) (bool, error) {
+	history := readRebuildHistory(cs)
+	entry := history[slot]
+	if entry.Count >= maxRebuildAttempts {
+		if err := r.patchPodAnnotation(ctx, pod, annotationDeadLetter, "true"); err != nil {
+			return false, err
+		}
+		metrics.SubAgentDeadLetterTotal.WithLabelValues(cs.Namespace, cs.Name).Inc()
+		if r.Recorder != nil {
+			r.Recorder.Eventf(cs, corev1.EventTypeWarning, "SubAgentDeadLetter",
+				"slot %d exhausted %d rebuilds; pod %s left in dead-letter", slot, maxRebuildAttempts, pod.Name)
+		}
+		return false, nil
+	}
+	if wait := backoffDelay(entry.Count); wait > 0 && time.Since(entry.LastDeleted) < wait {
+		return false, nil
+	}
+	logger.Infof(ctx, "sub-agent %s/%s slot %d terminal (phase=%s), rebuild attempt %d/%d",
+		pod.Namespace, pod.Name, slot, pod.Status.Phase, entry.Count+1, maxRebuildAttempts)
+	if err := r.Delete(ctx, pod); err != nil && !apierrors.IsNotFound(err) {
+		return false, fmt.Errorf("delete terminal sub-agent slot %d: %w", slot, err)
+	}
+	entry.Count++
+	entry.LastDeleted = time.Now()
+	history[slot] = entry
+	if err := writeRebuildHistory(cs, history); err != nil {
+		return true, fmt.Errorf("encode rebuild history: %w", err)
+	}
+	if err := r.Update(ctx, cs); err != nil {
+		return true, fmt.Errorf("persist rebuild history: %w", err)
+	}
+	metrics.SubAgentRebuildTotal.WithLabelValues(cs.Namespace, cs.Name).Inc()
+	if r.Recorder != nil {
+		r.Recorder.Eventf(cs, corev1.EventTypeNormal, "SubAgentRebuilding",
+			"slot %d attempt %d/%d", slot, entry.Count, maxRebuildAttempts)
+	}
+	return true, nil
+}
+
+// patchPodAnnotation sets a single annotation via a strategic merge patch.
+func (r *Reconciler) patchPodAnnotation(ctx context.Context, pod *corev1.Pod, key, value string) error {
+	patch := fmt.Appendf(nil, `{"metadata":{"annotations":{%q:%q}}}`, key, value)
+	if err := r.Patch(ctx, pod, client.RawPatch(types.StrategicMergePatchType, patch)); err != nil {
+		return fmt.Errorf("patch pod %s/%s annotation %s: %w", pod.Namespace, pod.Name, key, err)
+	}
+	return nil
 }

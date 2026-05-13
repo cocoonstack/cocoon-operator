@@ -106,6 +106,10 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 			return ctrl.Result{}, r.patchStatus(ctx, &cs,
 				buildStatus(&cs, classified, cocoonv1.CocoonSetPhaseFailed))
 		}
+		if cs.Status.Phase == cocoonv1.CocoonSetPhaseFailed && meta.IsPodReady(classified.main) && r.Recorder != nil {
+			r.Recorder.Eventf(&cs, corev1.EventTypeNormal, "RecoveredFromFailure",
+				"main pod %s/%s is Ready again", classified.main.Namespace, classified.main.Name)
+		}
 	}
 
 	if cs.Spec.Suspend {
