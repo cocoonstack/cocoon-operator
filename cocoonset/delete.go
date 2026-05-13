@@ -80,6 +80,11 @@ func (r *Reconciler) reconcileDelete(ctx context.Context, cs *cocoonv1.CocoonSet
 				}
 			}
 		}
+	} else {
+		// Production wires an Epoch client unconditionally; this branch only fires
+		// in tests or a misconfigured deployment. Log so the operator surfaces the
+		// configuration drift instead of silently leaking snapshot tags.
+		logger.Warnf(ctx, "skipping epoch tag GC for cocoonset %s/%s: registry not configured", cs.Namespace, cs.Name)
 	}
 
 	if controllerutil.ContainsFinalizer(cs, finalizerName) {
