@@ -114,6 +114,71 @@ func TestFakeRegistryDeleteRecords(t *testing.T) {
 	}
 }
 
+func TestReconcileDeleteClearsHibernateTagAndFinalizer(t *testing.T) {
+	hib := &cocoonv1.CocoonHibernation{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:       "hib",
+			Namespace:  "ns",
+			Finalizers: []string{finalizerName},
+			DeletionTimestamp: &metav1.Time{Time: metav1.Now().Time},
+		},
+		Spec:   cocoonv1.CocoonHibernationSpec{PodRef: cocoonv1.HibernationPodRef{Name: "demo-0"}},
+		Status: cocoonv1.CocoonHibernationStatus{VMName: "vk-ns-demo-0"},
+	}
+
+	scheme := testScheme(t)
+	cli := ctrlfake.NewClientBuilder().
+		WithScheme(scheme).
+		WithObjects(hib).
+		WithStatusSubresource(&cocoonv1.CocoonHibernation{}).
+		Build()
+	reg := &fakeRegistry{}
+	r := &Reconciler{Client: cli, Scheme: scheme, Epoch: reg}
+
+	if _, err := r.reconcileDelete(t.Context(), hib); err != nil {
+		t.Fatalf("reconcileDelete: %v", err)
+	}
+	if !reg.deleteCalled {
+		t.Errorf("DeleteManifest must be called on reconcileDelete")
+	}
+	// After RemoveFinalizer + Update, the fake client should let the object be gone
+	// since the test wrote a DeletionTimestamp and there are no other finalizers.
+	var got cocoonv1.CocoonHibernation
+	err := cli.Get(t.Context(), types.NamespacedName{Namespace: "ns", Name: "hib"}, &got)
+	if err == nil && len(got.Finalizers) != 0 {
+		t.Errorf("finalizer must be removed, got %v", got.Finalizers)
+	}
+}
+
+func TestReconcileDeleteSkipsTagWhenVMNameMissing(t *testing.T) {
+	hib := &cocoonv1.CocoonHibernation{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:       "hib",
+			Namespace:  "ns",
+			Finalizers: []string{finalizerName},
+			DeletionTimestamp: &metav1.Time{Time: metav1.Now().Time},
+		},
+		Spec: cocoonv1.CocoonHibernationSpec{PodRef: cocoonv1.HibernationPodRef{Name: "demo-0"}},
+		// Status.VMName left empty — delete before vk-cocoon ever filled it.
+	}
+
+	scheme := testScheme(t)
+	cli := ctrlfake.NewClientBuilder().
+		WithScheme(scheme).
+		WithObjects(hib).
+		WithStatusSubresource(&cocoonv1.CocoonHibernation{}).
+		Build()
+	reg := &fakeRegistry{}
+	r := &Reconciler{Client: cli, Scheme: scheme, Epoch: reg}
+
+	if _, err := r.reconcileDelete(t.Context(), hib); err != nil {
+		t.Fatalf("reconcileDelete: %v", err)
+	}
+	if reg.deleteCalled {
+		t.Errorf("DeleteManifest must be skipped when Status.VMName is empty")
+	}
+}
+
 func TestPodVMNameRoundtrip(t *testing.T) {
 	pod := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "demo-0", Namespace: "ns"}}
 	(&meta.VMSpec{VMName: "vk-ns-demo-0", Managed: true}).Apply(pod)

@@ -16,6 +16,7 @@ import (
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/builder"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	"sigs.k8s.io/controller-runtime/pkg/event"
 	"sigs.k8s.io/controller-runtime/pkg/handler"
 	"sigs.k8s.io/controller-runtime/pkg/predicate"
@@ -34,6 +35,11 @@ const (
 	// indexPodRefName keys CocoonHibernation objects by spec.podRef.name so the
 	// pod watcher can resolve a pod event back to the CRs that target it.
 	indexPodRefName = "spec.podRef.name"
+
+	// finalizerName keeps the CR alive long enough to clean its :hibernate
+	// snapshot from epoch, so a same-named pod created later can't wake
+	// into this CR's frozen guest memory.
+	finalizerName = "cocoonhibernation.cocoonset.cocoonstack.io/finalizer"
 
 	conditionReasonPending = "Pending"
 	conditionReasonDone    = "Done"
@@ -90,6 +96,16 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 		return ctrl.Result{}, fmt.Errorf("get hibernation %s: %w", req.NamespacedName, err)
 	}
 
+	if !hib.DeletionTimestamp.IsZero() {
+		return r.reconcileDelete(ctx, &hib)
+	}
+	if !controllerutil.ContainsFinalizer(&hib, finalizerName) {
+		controllerutil.AddFinalizer(&hib, finalizerName)
+		if err := r.Update(ctx, &hib); err != nil {
+			return ctrl.Result{}, fmt.Errorf("add finalizer: %w", err)
+		}
+	}
+
 	if hib.Spec.PodRef.Name == "" {
 		return ctrl.Result{}, r.markFailed(ctx, &hib, "spec.podRef.name is required")
 	}
@@ -120,6 +136,25 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 	default:
 		return ctrl.Result{}, r.markFailed(ctx, &hib, fmt.Sprintf("unknown desire %q", hib.Spec.Desire))
 	}
+}
+
+// reconcileDelete clears the :hibernate snapshot from epoch and removes the
+// finalizer. VMName comes from status (vk-cocoon stamped it on hibernate);
+// when status is unset we still drop the finalizer so deletion can finish.
+func (r *Reconciler) reconcileDelete(ctx context.Context, hib *cocoonv1.CocoonHibernation) (ctrl.Result, error) {
+	logger := log.WithFunc("hibernation.Reconciler.reconcileDelete")
+	if r.Epoch != nil && hib.Status.VMName != "" {
+		if err := r.Epoch.DeleteManifest(ctx, hib.Status.VMName, meta.HibernateSnapshotTag); err != nil {
+			logger.Warnf(ctx, "delete hibernate snapshot %s: %v", hib.Status.VMName, err)
+		}
+	}
+	if controllerutil.ContainsFinalizer(hib, finalizerName) {
+		controllerutil.RemoveFinalizer(hib, finalizerName)
+		if err := r.Update(ctx, hib); err != nil {
+			return ctrl.Result{}, fmt.Errorf("remove finalizer: %w", err)
+		}
+	}
+	return ctrl.Result{}, nil
 }
 
 // hibernationsTargetingPod returns reconcile requests for every CocoonHibernation
