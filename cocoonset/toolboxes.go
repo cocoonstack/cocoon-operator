@@ -23,6 +23,12 @@ func (r *Reconciler) ensureToolboxes(ctx context.Context, cs *cocoonv1.CocoonSet
 	changed := false
 	desired := map[string]bool{}
 	for _, tb := range cs.Spec.Toolboxes {
+		// Defense in depth: the webhook should already reject duplicate
+		// toolbox names, but an older CRD or a webhook bypass would
+		// otherwise let one toolbox silently overwrite another's pod.
+		if _, dup := desired[tb.Name]; dup {
+			return changed, fmt.Errorf("duplicate toolbox name %q in spec", tb.Name)
+		}
 		desired[tb.Name] = true
 		podName := fmt.Sprintf("%s-%s", cs.Name, tb.Name)
 		if classified.allByName[podName] != nil && classified.toolbox[tb.Name] == nil {
