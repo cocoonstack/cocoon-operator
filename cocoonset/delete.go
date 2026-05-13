@@ -58,16 +58,21 @@ func (r *Reconciler) reconcileDelete(ctx context.Context, cs *cocoonv1.CocoonSet
 		return ctrl.Result{RequeueAfter: requeueWaitForMain}, nil
 	}
 
-	// All pods gone — safe to GC snapshot tags from epoch.
+	// All pods gone — safe to GC snapshot tags from epoch. Walk both the
+	// :latest tag (snapshotPolicy=always pushes) and the :hibernate tag
+	// (CocoonHibernation pushes regardless of policy); leaving the latter
+	// behind would let a same-named CocoonSet recreated later wake into
+	// the previous generation's guest memory.
 	if r.Epoch != nil {
 		for i := range owned {
-			pod := &owned[i]
-			spec := meta.ParseVMSpec(pod)
-			if !meta.ShouldSnapshotVM(spec) || spec.VMName == "" {
+			spec := meta.ParseVMSpec(&owned[i])
+			if spec.VMName == "" {
 				continue
 			}
-			if err := r.Epoch.DeleteManifest(ctx, spec.VMName, meta.DefaultSnapshotTag); err != nil {
-				logger.Warnf(ctx, "delete snapshot %s: %v", spec.VMName, err)
+			for _, tag := range []string{meta.DefaultSnapshotTag, meta.HibernateSnapshotTag} {
+				if err := r.Epoch.DeleteManifest(ctx, spec.VMName, tag); err != nil {
+					logger.Warnf(ctx, "delete snapshot %s:%s: %v", spec.VMName, tag, err)
+				}
 			}
 		}
 	}

@@ -3,6 +3,7 @@ package cocoonset
 import (
 	"context"
 	"errors"
+	"sync"
 	"testing"
 
 	corev1 "k8s.io/api/core/v1"
@@ -15,10 +16,13 @@ import (
 )
 
 // fakeRegistry tracks manifest presence per (name, tag) key so tests can
-// simulate snapshots appearing/disappearing.
+// simulate snapshots appearing/disappearing, and records DeleteManifest
+// calls so tests can assert what reconcileDelete cleaned up.
 type fakeRegistry struct {
-	present  map[string]bool
-	probeErr error
+	present   map[string]bool
+	probeErr  error
+	deletedMu sync.Mutex
+	deleted   []string
 }
 
 func (f *fakeRegistry) HasManifest(_ context.Context, name, tag string) (bool, error) {
@@ -28,7 +32,10 @@ func (f *fakeRegistry) HasManifest(_ context.Context, name, tag string) (bool, e
 	return f.present[name+":"+tag], nil
 }
 
-func (f *fakeRegistry) DeleteManifest(_ context.Context, _, _ string) error {
+func (f *fakeRegistry) DeleteManifest(_ context.Context, name, tag string) error {
+	f.deletedMu.Lock()
+	defer f.deletedMu.Unlock()
+	f.deleted = append(f.deleted, name+":"+tag)
 	return nil
 }
 
@@ -349,6 +356,43 @@ func TestReconcileDeleteSkipsUnownedPods(t *testing.T) {
 		t.Fatalf("unowned pod should still exist: %v", err)
 	}
 }
+
+func TestReconcileDeleteRemovesBothSnapshotTags(t *testing.T) {
+	scheme := testScheme(t)
+	cs := newCocoonSet("demo")
+	cs.Finalizers = []string{finalizerName}
+	// snapshotPolicy=never to prove the cleanup is not gated by it: hibernate
+	// may have pushed a :hibernate tag regardless of policy.
+	cs.Spec.SnapshotPolicy = cocoonv1.SnapshotPolicyNever
+
+	cli := ctrlfake.NewClientBuilder().
+		WithScheme(scheme).
+		WithObjects(cs, mustBuildAgentPod(t, cs, 0, "", "", scheme)).
+		Build()
+	reg := &fakeRegistry{}
+	r := &Reconciler{Client: cli, Scheme: scheme, Epoch: reg}
+
+	// First reconcile deletes the pods and requeues to wait for termination.
+	if _, err := r.reconcileDelete(t.Context(), cs); err != nil {
+		t.Fatalf("reconcileDelete (delete pods): %v", err)
+	}
+	// Second reconcile observes no pods remain and walks the tag cleanup.
+	if _, err := r.reconcileDelete(t.Context(), cs); err != nil {
+		t.Fatalf("reconcileDelete (gc tags): %v", err)
+	}
+
+	wantSuffixes := []string{":" + meta.DefaultSnapshotTag, ":" + meta.HibernateSnapshotTag}
+	if len(reg.deleted) != len(wantSuffixes) {
+		t.Fatalf("DeleteManifest calls = %v, want one per tag", reg.deleted)
+	}
+	for i, want := range wantSuffixes {
+		if !endsWith(reg.deleted[i], want) {
+			t.Errorf("DeleteManifest[%d] = %q, want suffix %q", i, reg.deleted[i], want)
+		}
+	}
+}
+
+func endsWith(s, suffix string) bool { return len(s) >= len(suffix) && s[len(s)-len(suffix):] == suffix }
 
 func TestApplyUnsuspendSkipsPodHibernatedByCR(t *testing.T) {
 	scheme := testScheme(t)
