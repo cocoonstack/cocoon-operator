@@ -32,9 +32,7 @@ func readRebuildHistory(cs *cocoonv1.CocoonSet) map[int32]rebuildEntry {
 	if err := json.Unmarshal([]byte(raw), &m); err != nil {
 		return map[int32]rebuildEntry{}
 	}
-	// json.Unmarshal of the literal "null" leaves m nil; downstream writes
-	// would panic. Normalize so callers always see an addressable map.
-	if m == nil {
+	if m == nil { // json "null" leaves m nil; callers write to it
 		return map[int32]rebuildEntry{}
 	}
 	return m
