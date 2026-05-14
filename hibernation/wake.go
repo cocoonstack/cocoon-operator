@@ -25,9 +25,7 @@ func (r *Reconciler) reconcileWake(ctx context.Context, hib *cocoonv1.CocoonHibe
 		if err := r.Epoch.DeleteManifest(ctx, vmName, meta.HibernateSnapshotTag); err != nil {
 			logger.Warnf(ctx, "delete hibernation snapshot %s: %v", vmName, err)
 		}
-		// Gate the duration observation + Normal Event on the actual Waking→Active
-		// transition; a re-reconcile after the patch should be a no-op.
-		if hib.Status.Phase == cocoonv1.CocoonHibernationPhaseWaking {
+		if r.firstTransition(string(hib.UID), string(cocoonv1.CocoonHibernationPhaseActive)) {
 			observePhaseExit(hib, "ok")
 			r.emitNormalf(hib, "WokenActive", "pod %s/%s is running", pod.Namespace, pod.Name)
 		}

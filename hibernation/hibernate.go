@@ -27,8 +27,7 @@ func (r *Reconciler) reconcileHibernate(ctx context.Context, hib *cocoonv1.Cocoo
 		return ctrl.Result{}, fmt.Errorf("probe hibernate snapshot %s: %w", vmName, err)
 	}
 	if present {
-		// Gate to the actual Hibernating→Hibernated transition.
-		if hib.Status.Phase == cocoonv1.CocoonHibernationPhaseHibernating {
+		if r.firstTransition(string(hib.UID), string(cocoonv1.CocoonHibernationPhaseHibernated)) {
 			observePhaseExit(hib, "ok")
 			r.emitNormalf(hib, "Hibernated", "snapshot %s pushed to epoch", vmName)
 		}

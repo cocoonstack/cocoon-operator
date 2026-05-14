@@ -4,6 +4,7 @@ package hibernation
 import (
 	"context"
 	"fmt"
+	"sync"
 	"time"
 
 	"github.com/projecteru2/core/log"
@@ -55,6 +56,13 @@ type Reconciler struct {
 	Scheme   *runtime.Scheme
 	Epoch    snapshot.Registry
 	Recorder record.EventRecorder
+
+	// observed dedups phase-exit observations per (UID, target phase). The
+	// status patch from setPhase lags the cache, so a follow-up reconcile
+	// can re-enter the same transition branch before the new phase reaches
+	// our local view. Tracked in-memory only — restart resets the counter
+	// anyway, so coherence within a process lifetime is enough.
+	observed sync.Map
 }
 
 // SetupWithManager registers the reconciler with the controller manager.
@@ -224,6 +232,14 @@ func observePhaseExit(hib *cocoonv1.CocoonHibernation, result string) {
 	case cocoonv1.CocoonHibernationPhaseWaking:
 		metrics.WakePhaseDurationSeconds.WithLabelValues(result).Observe(elapsed)
 	}
+}
+
+// firstTransition reports whether this is the first time we record the
+// (uid, target) transition. Subsequent calls return false — protecting
+// the duration histogram and Normal Event from stale-cache re-entry.
+func (r *Reconciler) firstTransition(uid, target string) bool {
+	_, loaded := r.observed.LoadOrStore(uid+"|"+target, struct{}{})
+	return !loaded
 }
 
 func (r *Reconciler) emitWarningf(hib *cocoonv1.CocoonHibernation, reason, format string, args ...any) {
