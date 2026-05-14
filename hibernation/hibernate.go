@@ -27,8 +27,11 @@ func (r *Reconciler) reconcileHibernate(ctx context.Context, hib *cocoonv1.Cocoo
 		return ctrl.Result{}, fmt.Errorf("probe hibernate snapshot %s: %w", vmName, err)
 	}
 	if present {
-		observePhaseExit(hib, "ok")
-		r.emitNormalf(hib, "Hibernated", "snapshot %s pushed to epoch", vmName)
+		// Gate to the actual Hibernating→Hibernated transition.
+		if hib.Status.Phase == cocoonv1.CocoonHibernationPhaseHibernating {
+			observePhaseExit(hib, "ok")
+			r.emitNormalf(hib, "Hibernated", "snapshot %s pushed to epoch", vmName)
+		}
 		return ctrl.Result{}, r.setPhase(ctx, hib, cocoonv1.CocoonHibernationPhaseHibernated, vmName)
 	}
 	if hibernateDeadlineExceeded(hib) {
