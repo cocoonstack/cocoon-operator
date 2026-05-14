@@ -348,8 +348,8 @@ func TestWakeDeadlineExceeded(t *testing.T) {
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			if got := wakeDeadlineExceeded(c.hib); got != c.want {
-				t.Errorf("wakeDeadlineExceeded = %v, want %v", got, c.want)
+			if got := phaseDeadlineExceeded(c.hib, cocoonv1.CocoonHibernationPhaseWaking, wakeTimeout); got != c.want {
+				t.Errorf("phaseDeadlineExceeded(Waking) = %v, want %v", got, c.want)
 			}
 		})
 	}
@@ -460,6 +460,145 @@ func TestReconcileWakeRecoversFromFailed(t *testing.T) {
 	}
 	if out.Status.Phase != cocoonv1.CocoonHibernationPhaseWaking {
 		t.Errorf("phase after second reconcile = %q, want Waking (deadline must not re-trip)", out.Status.Phase)
+	}
+}
+
+func TestHibernateDeadlineExceeded(t *testing.T) {
+	staleReady := metav1.Condition{
+		Type:               commonk8s.ConditionTypeReady,
+		Status:             metav1.ConditionFalse,
+		Reason:             conditionReasonPending,
+		LastTransitionTime: metav1.NewTime(time.Now().Add(-2 * hibernateTimeout)),
+	}
+	freshReady := metav1.Condition{
+		Type:               commonk8s.ConditionTypeReady,
+		Status:             metav1.ConditionFalse,
+		Reason:             conditionReasonPending,
+		LastTransitionTime: metav1.NewTime(time.Now()),
+	}
+	cases := []struct {
+		name string
+		hib  *cocoonv1.CocoonHibernation
+		want bool
+	}{
+		{"not-hibernating-yet", &cocoonv1.CocoonHibernation{}, false},
+		{
+			"hibernating-within-budget",
+			&cocoonv1.CocoonHibernation{Status: cocoonv1.CocoonHibernationStatus{
+				Phase: cocoonv1.CocoonHibernationPhaseHibernating, Conditions: []metav1.Condition{freshReady},
+			}},
+			false,
+		},
+		{
+			"hibernating-past-budget",
+			&cocoonv1.CocoonHibernation{Status: cocoonv1.CocoonHibernationStatus{
+				Phase: cocoonv1.CocoonHibernationPhaseHibernating, Conditions: []metav1.Condition{staleReady},
+			}},
+			true,
+		},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			if got := phaseDeadlineExceeded(c.hib, cocoonv1.CocoonHibernationPhaseHibernating, hibernateTimeout); got != c.want {
+				t.Errorf("phaseDeadlineExceeded(Hibernating) = %v, want %v", got, c.want)
+			}
+		})
+	}
+}
+
+func TestReconcileHibernateFailsOnTimeout(t *testing.T) {
+	hib := &cocoonv1.CocoonHibernation{
+		ObjectMeta: metav1.ObjectMeta{Name: "hib", Namespace: "ns", Finalizers: []string{finalizerName}},
+		Spec: cocoonv1.CocoonHibernationSpec{
+			Desire: cocoonv1.HibernationDesireHibernate,
+			PodRef: cocoonv1.HibernationPodRef{Name: "demo-0"},
+		},
+		Status: cocoonv1.CocoonHibernationStatus{
+			Phase: cocoonv1.CocoonHibernationPhaseHibernating,
+			Conditions: []metav1.Condition{{
+				Type:               commonk8s.ConditionTypeReady,
+				Status:             metav1.ConditionFalse,
+				Reason:             conditionReasonPending,
+				LastTransitionTime: metav1.NewTime(time.Now().Add(-2 * hibernateTimeout)),
+			}},
+		},
+	}
+	pod := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "demo-0", Namespace: "ns"}}
+	(&meta.VMSpec{VMName: "vk-ns-demo-0", Managed: true}).Apply(pod)
+	meta.HibernateState(true).Apply(pod)
+
+	scheme := testScheme(t)
+	cli := ctrlfake.NewClientBuilder().
+		WithScheme(scheme).
+		WithObjects(hib, pod).
+		WithStatusSubresource(&cocoonv1.CocoonHibernation{}).
+		Build()
+	r := &Reconciler{Client: cli, Scheme: scheme, Epoch: &fakeRegistry{}}
+
+	if _, err := r.Reconcile(t.Context(), ctrl.Request{
+		NamespacedName: types.NamespacedName{Namespace: "ns", Name: "hib"},
+	}); err != nil {
+		t.Fatalf("Reconcile: %v", err)
+	}
+	var out cocoonv1.CocoonHibernation
+	if err := cli.Get(t.Context(), types.NamespacedName{Namespace: "ns", Name: "hib"}, &out); err != nil {
+		t.Fatalf("get hib: %v", err)
+	}
+	if out.Status.Phase != cocoonv1.CocoonHibernationPhaseFailed {
+		t.Errorf("phase = %q, want Failed", out.Status.Phase)
+	}
+}
+
+// TestReconcileHibernateRecoversFromFailed mirrors the wake recovery test:
+// Failed→Hibernating re-entry must refresh LastTransitionTime so the new
+// hibernate deadline starts from zero.
+func TestReconcileHibernateRecoversFromFailed(t *testing.T) {
+	staleTime := metav1.NewTime(time.Now().Add(-2 * hibernateTimeout))
+	hib := &cocoonv1.CocoonHibernation{
+		ObjectMeta: metav1.ObjectMeta{Name: "hib", Namespace: "ns", Finalizers: []string{finalizerName}},
+		Spec: cocoonv1.CocoonHibernationSpec{
+			Desire: cocoonv1.HibernationDesireHibernate,
+			PodRef: cocoonv1.HibernationPodRef{Name: "demo-0"},
+		},
+		Status: cocoonv1.CocoonHibernationStatus{
+			Phase: cocoonv1.CocoonHibernationPhaseFailed,
+			Conditions: []metav1.Condition{{
+				Type:               commonk8s.ConditionTypeReady,
+				Status:             metav1.ConditionFalse,
+				Reason:             conditionReasonFailed,
+				LastTransitionTime: staleTime,
+			}},
+		},
+	}
+	pod := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "demo-0", Namespace: "ns"}}
+	(&meta.VMSpec{VMName: "vk-ns-demo-0", Managed: true}).Apply(pod)
+
+	scheme := testScheme(t)
+	cli := ctrlfake.NewClientBuilder().
+		WithScheme(scheme).
+		WithObjects(hib, pod).
+		WithStatusSubresource(&cocoonv1.CocoonHibernation{}).
+		Build()
+	r := &Reconciler{Client: cli, Scheme: scheme, Epoch: &fakeRegistry{}}
+
+	if _, err := r.Reconcile(t.Context(), ctrl.Request{
+		NamespacedName: types.NamespacedName{Namespace: "ns", Name: "hib"},
+	}); err != nil {
+		t.Fatalf("Reconcile: %v", err)
+	}
+	var out cocoonv1.CocoonHibernation
+	if err := cli.Get(t.Context(), types.NamespacedName{Namespace: "ns", Name: "hib"}, &out); err != nil {
+		t.Fatalf("get hib: %v", err)
+	}
+	if out.Status.Phase != cocoonv1.CocoonHibernationPhaseHibernating {
+		t.Fatalf("phase = %q, want Hibernating (recovery path)", out.Status.Phase)
+	}
+	ready := findReadyCondition(out.Status.Conditions)
+	if ready == nil {
+		t.Fatal("Ready condition missing after recovery reconcile")
+	}
+	if !ready.LastTransitionTime.Time.After(staleTime.Time) {
+		t.Errorf("LastTransitionTime = %v (stale = %v), want refreshed", ready.LastTransitionTime.Time, staleTime.Time)
 	}
 }
 

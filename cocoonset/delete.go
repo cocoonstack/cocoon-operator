@@ -21,7 +21,6 @@ import (
 // CocoonSet deleted before Status.Agents was patched still gets every tag cleaned.
 const annotationDeleteVMNames = "cocoonset.cocoonstack.io/delete-vm-names"
 
-// reconcileDelete deletes all owned pods, GCs snapshots, and removes the finalizer.
 func (r *Reconciler) reconcileDelete(ctx context.Context, cs *cocoonv1.CocoonSet) (ctrl.Result, error) {
 	logger := log.WithFunc("cocoonset.Reconciler.reconcileDelete")
 	logger.Infof(ctx, "deleting cocoonset %s/%s", cs.Namespace, cs.Name)
@@ -78,7 +77,6 @@ func (r *Reconciler) reconcileDelete(ctx context.Context, cs *cocoonv1.CocoonSet
 			}
 		}
 	} else {
-		// Production always wires r.Epoch; this branch only fires in tests or misconfig.
 		logger.Warnf(ctx, "skipping epoch tag GC for cocoonset %s/%s: registry not configured", cs.Namespace, cs.Name)
 	}
 

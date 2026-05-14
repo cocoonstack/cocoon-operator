@@ -16,8 +16,6 @@ import (
 	"github.com/cocoonstack/cocoon-common/meta"
 )
 
-// ensureToolboxes creates/deletes toolbox pods to match spec.
-// Returns true when cluster state was mutated.
 func (r *Reconciler) ensureToolboxes(ctx context.Context, cs *cocoonv1.CocoonSet, classified classifiedPods) (bool, error) {
 	logger := log.WithFunc("cocoonset.Reconciler.ensureToolboxes")
 	// Defense in depth: webhook should already reject duplicates. Validate
@@ -78,12 +76,11 @@ func (r *Reconciler) ensureToolboxes(ctx context.Context, cs *cocoonv1.CocoonSet
 	return changed, nil
 }
 
-// triageToolbox deletes pod when it is terminal or has drifted from spec.
-// Returns (deleted, err). A non-deleted return means the pod still matches.
 func (r *Reconciler) triageToolbox(ctx context.Context, logger *log.Fields, pod *corev1.Pod, cs *cocoonv1.CocoonSet, tb cocoonv1.ToolboxSpec) (bool, error) {
 	switch {
-	case meta.IsPodTerminal(pod):
-		logger.Infof(ctx, "toolbox %s/%s %q terminal (phase=%s), deleting for recreate", pod.Namespace, pod.Name, tb.Name, pod.Status.Phase)
+	case podIsTerminal(pod):
+		logger.Infof(ctx, "toolbox %s/%s %q terminal (phase=%s lifecycle=%s), deleting for recreate",
+			pod.Namespace, pod.Name, tb.Name, pod.Status.Phase, meta.ReadLifecycleState(pod))
 		if err := r.Delete(ctx, pod); err != nil && !apierrors.IsNotFound(err) {
 			return false, fmt.Errorf("delete terminal toolbox %s: %w", tb.Name, err)
 		}

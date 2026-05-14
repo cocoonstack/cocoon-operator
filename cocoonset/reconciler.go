@@ -9,6 +9,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/client-go/tools/record"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/builder"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -17,6 +18,7 @@ import (
 
 	cocoonv1 "github.com/cocoonstack/cocoon-common/apis/v1"
 	"github.com/cocoonstack/cocoon-common/meta"
+	"github.com/cocoonstack/cocoon-operator/metrics"
 	"github.com/cocoonstack/cocoon-operator/snapshot"
 )
 
@@ -30,8 +32,9 @@ const (
 // and toolbox pods to match the declared spec.
 type Reconciler struct {
 	client.Client
-	Scheme *runtime.Scheme
-	Epoch  snapshot.Registry
+	Scheme   *runtime.Scheme
+	Epoch    snapshot.Registry
+	Recorder record.EventRecorder
 }
 
 // SetupWithManager registers the reconciler. `For` uses GenerationChangedPredicate
@@ -89,10 +92,19 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 		return ctrl.Result{}, err
 	}
 
-	// Stop reconciling if main agent is in a terminal phase (e.g. Failed).
-	if classified.main != nil && meta.IsPodTerminal(classified.main) {
-		return ctrl.Result{}, r.patchStatus(ctx, &cs,
-			buildStatus(&cs, classified, cocoonv1.CocoonSetPhaseFailed))
+	// Stop reconciling if main agent is in a terminal state. lifecycle-state=Failed
+	// is the vk-cocoon-driven path (terminal before Pod Phase flips); IsPodTerminal
+	// is the kubelet-driven path. Both transition CocoonSet to Failed.
+	if classified.main != nil {
+		if reason := mainPodFailedReason(classified.main); reason != "" {
+			r.observeMainPodFailed(&cs, classified.main, reason)
+			return ctrl.Result{}, r.patchStatus(ctx, &cs,
+				buildStatus(&cs, classified, cocoonv1.CocoonSetPhaseFailed))
+		}
+		if cs.Status.Phase == cocoonv1.CocoonSetPhaseFailed && meta.IsPodReady(classified.main) && r.Recorder != nil {
+			r.Recorder.Eventf(&cs, corev1.EventTypeNormal, "RecoveredFromFailure",
+				"main pod %s/%s is Ready again", classified.main.Namespace, classified.main.Name)
+		}
 	}
 
 	if cs.Spec.Suspend {
@@ -136,7 +148,7 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 	mainVMName := meta.ParseVMSpec(classified.main).VMName
 	mainNodeName := classified.main.Spec.NodeName
 
-	subChanged, err := r.ensureSubAgents(ctx, &cs, classified, mainVMName, mainNodeName)
+	subChanged, subRequeue, err := r.ensureSubAgents(ctx, &cs, classified, mainVMName, mainNodeName)
 	if err != nil {
 		return ctrl.Result{}, err
 	}
@@ -148,6 +160,47 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 	if subChanged || tbChanged {
 		return ctrl.Result{Requeue: true}, nil
 	}
+	if err := r.patchStatus(ctx, &cs, buildStatus(&cs, classified, "")); err != nil {
+		return ctrl.Result{}, err
+	}
+	return ctrl.Result{RequeueAfter: subRequeue}, nil
+}
 
-	return ctrl.Result{}, r.patchStatus(ctx, &cs, buildStatus(&cs, classified, ""))
+// mainPodFailedReason maps a pod's terminal signal to the Event reason that
+// the operator emits when transitioning the CocoonSet to Failed; "" means
+// the pod is not terminal.
+func mainPodFailedReason(pod *corev1.Pod) string {
+	if meta.ReadLifecycleState(pod) == meta.LifecycleStateFailed {
+		return "PodLifecycleFailed"
+	}
+	if meta.IsPodTerminal(pod) {
+		return "MainAgentFailed"
+	}
+	return ""
+}
+
+// podIsTerminal covers both the kubelet and the vk-cocoon-driven failure paths.
+func podIsTerminal(pod *corev1.Pod) bool {
+	return mainPodFailedReason(pod) != ""
+}
+
+// observeMainPodFailed records the failure on the event channel and, when the
+// signal came from a vk-cocoon lifecycle annotation, bumps the dedicated
+// counter so the Pod-Phase-only path doesn't dilute the metric's meaning.
+func (r *Reconciler) observeMainPodFailed(cs *cocoonv1.CocoonSet, pod *corev1.Pod, reason string) {
+	if reason == "PodLifecycleFailed" {
+		phase := string(cs.Status.Phase)
+		if phase == "" {
+			phase = string(cocoonv1.CocoonSetPhasePending)
+		}
+		metrics.LifecycleStateFailedObservedTotal.WithLabelValues(phase).Inc()
+	}
+	if r.Recorder == nil {
+		return
+	}
+	msg := pod.Annotations[meta.AnnotationLifecycleStateMessage]
+	if msg == "" {
+		msg = string(pod.Status.Phase)
+	}
+	r.Recorder.Eventf(cs, corev1.EventTypeWarning, reason, "main pod %s/%s: %s", pod.Namespace, pod.Name, msg)
 }

@@ -3,7 +3,10 @@ package cocoonset
 
 import (
 	"cmp"
+	"context"
 	"fmt"
+	"maps"
+	"slices"
 	"strconv"
 
 	corev1 "k8s.io/api/core/v1"
@@ -29,6 +32,20 @@ type classifiedPods struct {
 	toolbox   map[string]*corev1.Pod
 	unknowns  []*corev1.Pod
 	allByName map[string]*corev1.Pod
+}
+
+// forEachSorted invokes fn for every pod in allByName in name-sorted order,
+// returning early on ctx cancellation or fn error.
+func (c classifiedPods) forEachSorted(ctx context.Context, fn func(*corev1.Pod) error) error {
+	for _, name := range slices.Sorted(maps.Keys(c.allByName)) {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		if err := fn(c.allByName[name]); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // classifyPods groups pods by role label; unlabelled pods go into unknowns.
@@ -117,8 +134,6 @@ func buildToolboxPod(cs *cocoonv1.CocoonSet, tb cocoonv1.ToolboxSpec, scheme *ru
 	return pod, nil
 }
 
-// newManagedPod returns a Pod skeleton with shared labels, owner-reference,
-// toleration, and placeholder container.
 func newManagedPod(cs *cocoonv1.CocoonSet, podName, role, slotLabel string, scheme *runtime.Scheme) (*corev1.Pod, error) {
 	one := int64(1)
 	pool := cmp.Or(cs.Spec.NodePool, meta.DefaultNodePool)

@@ -4,6 +4,7 @@ package hibernation
 import (
 	"context"
 	"fmt"
+	"sync"
 	"time"
 
 	"github.com/projecteru2/core/log"
@@ -13,6 +14,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/client-go/tools/record"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/builder"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -24,11 +26,14 @@ import (
 	cocoonv1 "github.com/cocoonstack/cocoon-common/apis/v1"
 	commonk8s "github.com/cocoonstack/cocoon-common/k8s"
 	"github.com/cocoonstack/cocoon-common/meta"
+	"github.com/cocoonstack/cocoon-operator/metrics"
 	"github.com/cocoonstack/cocoon-operator/snapshot"
 )
 
 const (
 	requeueInterval = 5 * time.Second
+	// hibernateTimeout bounds how long Hibernating can last before marking Failed.
+	hibernateTimeout = 3 * time.Minute
 	// wakeTimeout bounds how long Waking can last before marking Failed.
 	wakeTimeout = 5 * time.Minute
 
@@ -48,8 +53,13 @@ const (
 // transitions by toggling pod annotations and polling the snapshot registry.
 type Reconciler struct {
 	client.Client
-	Scheme *runtime.Scheme
-	Epoch  snapshot.Registry
+	Scheme   *runtime.Scheme
+	Epoch    snapshot.Registry
+	Recorder record.EventRecorder
+
+	// observed[UID] = last recorded Ready.LastTransitionTime, dedups
+	// phase-exit observations against controller-runtime cache lag.
+	observed sync.Map
 }
 
 // SetupWithManager registers the reconciler with the controller manager.
@@ -145,6 +155,7 @@ func (r *Reconciler) reconcileDelete(ctx context.Context, hib *cocoonv1.CocoonHi
 			logger.Warnf(ctx, "delete hibernate snapshot %s: %v", hib.Status.VMName, err)
 		}
 	}
+	r.observed.Delete(string(hib.UID))
 	if controllerutil.ContainsFinalizer(hib, finalizerName) {
 		controllerutil.RemoveFinalizer(hib, finalizerName)
 		if err := r.Update(ctx, hib); err != nil {
@@ -182,14 +193,13 @@ func (r *Reconciler) setPhase(ctx context.Context, hib *cocoonv1.CocoonHibernati
 	if hib.Status.Phase == phase && hib.Status.VMName == vmName && hib.Status.ObservedGeneration == hib.Generation {
 		return nil
 	}
-	refreshWakeDeadline := phase == cocoonv1.CocoonHibernationPhaseWaking &&
-		hib.Status.Phase != cocoonv1.CocoonHibernationPhaseWaking
+	refreshDeadline := hasPhaseDeadline(phase) && hib.Status.Phase != phase
 	if err := commonk8s.PatchStatus(ctx, r.Client, hib, func(h *cocoonv1.CocoonHibernation) {
 		h.Status.ObservedGeneration = h.Generation
 		h.Status.Phase = phase
 		h.Status.VMName = vmName
 		apimeta.SetStatusCondition(&h.Status.Conditions, readyCondition(phase, h.Generation))
-		if refreshWakeDeadline {
+		if refreshDeadline {
 			if ready := apimeta.FindStatusCondition(h.Status.Conditions, commonk8s.ConditionTypeReady); ready != nil {
 				ready.LastTransitionTime = metav1.Now()
 			}
@@ -198,6 +208,81 @@ func (r *Reconciler) setPhase(ctx context.Context, hib *cocoonv1.CocoonHibernati
 		return fmt.Errorf("patch hibernation status: %w", err)
 	}
 	return nil
+}
+
+// hasPhaseDeadline reports whether a phase carries a deadline that must reset
+// on re-entry (so a Failed→Hibernating retry doesn't inherit the old clock).
+func hasPhaseDeadline(p cocoonv1.CocoonHibernationPhase) bool {
+	return p == cocoonv1.CocoonHibernationPhaseHibernating || p == cocoonv1.CocoonHibernationPhaseWaking
+}
+
+// phaseDeadlineExceeded reports whether hib has been in phase longer than timeout,
+// measured from Ready.LastTransitionTime.
+func phaseDeadlineExceeded(hib *cocoonv1.CocoonHibernation, phase cocoonv1.CocoonHibernationPhase, timeout time.Duration) bool {
+	if hib.Status.Phase != phase {
+		return false
+	}
+	ready := apimeta.FindStatusCondition(hib.Status.Conditions, commonk8s.ConditionTypeReady)
+	if ready == nil || ready.LastTransitionTime.IsZero() {
+		return false
+	}
+	return time.Since(ready.LastTransitionTime.Time) > timeout
+}
+
+// observePhaseExit records the duration spent in the current phase. Call
+// before transitioning away from Hibernating or Waking.
+func observePhaseExit(hib *cocoonv1.CocoonHibernation, result string) {
+	ready := apimeta.FindStatusCondition(hib.Status.Conditions, commonk8s.ConditionTypeReady)
+	if ready == nil || ready.LastTransitionTime.IsZero() {
+		return
+	}
+	elapsed := time.Since(ready.LastTransitionTime.Time).Seconds()
+	switch hib.Status.Phase {
+	case cocoonv1.CocoonHibernationPhaseHibernating:
+		metrics.HibernatePhaseDurationSeconds.WithLabelValues(result).Observe(elapsed)
+	case cocoonv1.CocoonHibernationPhaseWaking:
+		metrics.WakePhaseDurationSeconds.WithLabelValues(result).Observe(elapsed)
+	}
+}
+
+// firstTransitionAt reports whether Ready.LastTransitionTime has advanced
+// since the last observation for this CR.
+func (r *Reconciler) firstTransitionAt(hib *cocoonv1.CocoonHibernation) bool {
+	ready := apimeta.FindStatusCondition(hib.Status.Conditions, commonk8s.ConditionTypeReady)
+	if ready == nil || ready.LastTransitionTime.IsZero() {
+		return false
+	}
+	key := string(hib.UID)
+	got, loaded := r.observed.LoadOrStore(key, ready.LastTransitionTime.Time)
+	if !loaded {
+		return true
+	}
+	if ready.LastTransitionTime.After(got.(time.Time)) {
+		r.observed.Store(key, ready.LastTransitionTime.Time)
+		return true
+	}
+	return false
+}
+
+func (r *Reconciler) emitWarningf(hib *cocoonv1.CocoonHibernation, reason, format string, args ...any) {
+	if r.Recorder != nil {
+		r.Recorder.Eventf(hib, corev1.EventTypeWarning, reason, format, args...)
+	}
+}
+
+func (r *Reconciler) emitNormalf(hib *cocoonv1.CocoonHibernation, reason, format string, args ...any) {
+	if r.Recorder != nil {
+		r.Recorder.Eventf(hib, corev1.EventTypeNormal, reason, format, args...)
+	}
+}
+
+// announceRetryFromFailed emits a Normal event when a reconcile re-enters
+// hibernate/wake after a prior Failed phase.
+func (r *Reconciler) announceRetryFromFailed(hib *cocoonv1.CocoonHibernation, desire cocoonv1.HibernationDesire) {
+	if hib.Status.Phase != cocoonv1.CocoonHibernationPhaseFailed {
+		return
+	}
+	r.emitNormalf(hib, "RetryRequested", "retrying %s after prior failure", desire)
 }
 
 // markFailed sets the Failed phase. A subsequent reconcile can recover by overwriting it.
