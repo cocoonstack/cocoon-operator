@@ -67,18 +67,14 @@ func (r *Reconciler) reconcileDelete(ctx context.Context, cs *cocoonv1.CocoonSet
 		return ctrl.Result{RequeueAfter: requeueWaitForMain}, nil
 	}
 
-	// :hibernate is pushed independently by CocoonHibernation, so any leftover
-	// is orphaned at CocoonSet teardown — drop unconditionally. :latest is only
-	// orphaned when snapshotPolicy says no snapshot was pushed for this slot;
-	// when ShouldSnapshotVM is true the operator just pushed it on the user's
-	// behalf and downstream consumers (hot-snapshot workflows) retag it.
+	// :hibernate is always orphaned at teardown — drop unconditionally. :latest
+	// is kept when shouldKeepLatestTag says vk-cocoon pushed it for retag.
 	if r.Epoch != nil {
-		policy := string(cs.Spec.SnapshotPolicy)
 		for _, name := range vmNamesForGC(cs) {
 			if err := r.Epoch.DeleteManifest(ctx, name, meta.HibernateSnapshotTag); err != nil {
 				logger.Warnf(ctx, "delete snapshot %s:%s: %v", name, meta.HibernateSnapshotTag, err)
 			}
-			if meta.ShouldSnapshotVM(meta.VMSpec{VMName: name, SnapshotPolicy: policy}) {
+			if shouldKeepLatestTag(cs, name) {
 				continue
 			}
 			if err := r.Epoch.DeleteManifest(ctx, name, meta.DefaultSnapshotTag); err != nil {
@@ -155,6 +151,20 @@ func vmNamesForGC(cs *cocoonv1.CocoonSet) []string {
 	}
 	slices.Sort(names)
 	return names
+}
+
+// shouldKeepLatestTag avoids meta.ShouldSnapshotVM because that wraps the
+// deprecated ExtractSlotFromVMName, which mis-classifies toolbox names with
+// a "-N" suffix (e.g. "vk-ns-demo-db-0") as slot 0 under main-only.
+func shouldKeepLatestTag(cs *cocoonv1.CocoonSet, vmName string) bool {
+	switch cs.Spec.SnapshotPolicy.Default() {
+	case cocoonv1.SnapshotPolicyNever:
+		return false
+	case cocoonv1.SnapshotPolicyMainOnly:
+		return meta.ExtractAgentSlot(cs.Namespace, cs.Name, vmName) == 0
+	default:
+		return true
+	}
 }
 
 func parseVMNamesAnnotation(raw string) []string {

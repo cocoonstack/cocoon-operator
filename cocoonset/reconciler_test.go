@@ -531,6 +531,21 @@ func TestReconcileDeleteSnapshotPolicyGC(t *testing.T) {
 				"vk-ns-demo-tb:" + meta.DefaultSnapshotTag,
 			},
 		},
+		{
+			name:   "main-only reclaims :latest for toolbox with numeric-suffix name",
+			policy: cocoonv1.SnapshotPolicyMainOnly,
+			agents: []cocoonv1.AgentStatus{
+				{Slot: 0, Role: "main", PodName: "demo-0", VMName: "vk-ns-demo-0"},
+			},
+			toolboxes: []cocoonv1.ToolboxStatus{
+				{Name: "db-0", PodName: "demo-db-0", VMName: "vk-ns-demo-db-0"},
+			},
+			want: []string{
+				"vk-ns-demo-0:" + meta.HibernateSnapshotTag,
+				"vk-ns-demo-db-0:" + meta.HibernateSnapshotTag,
+				"vk-ns-demo-db-0:" + meta.DefaultSnapshotTag,
+			},
+		},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
