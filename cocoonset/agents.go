@@ -16,7 +16,6 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	cocoonv1 "github.com/cocoonstack/cocoon-common/apis/v1"
-	"github.com/cocoonstack/cocoon-common/meta"
 	"github.com/cocoonstack/cocoon-operator/metrics"
 )
 
@@ -101,7 +100,7 @@ func (r *Reconciler) triageSubAgent(ctx context.Context, logger *log.Fields, pod
 		return false, 0, nil
 	}
 	switch {
-	case meta.IsPodTerminal(pod):
+	case podIsTerminal(pod):
 		return r.rebuildSubAgent(ctx, logger, pod, cs, slot)
 	case !podSpecMatchesAgent(pod, cs, slot):
 		logger.Infof(ctx, "sub-agent %s/%s slot %d spec drifted, deleting for recreate", pod.Namespace, pod.Name, slot)

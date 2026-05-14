@@ -377,6 +377,45 @@ func TestReconcileMainLifecycleFailedTransitionsToFailed(t *testing.T) {
 	}
 }
 
+// TestEnsureSubAgentsTreatsLifecycleFailedAsTerminal pins the Codex finding:
+// a sub-agent carrying vm.cocoonstack.io/lifecycle-state=Failed annotation but
+// still in PodPhase=Running must trigger the rebuild path so the rebuild
+// backoff / dead-letter logic runs.
+func TestEnsureSubAgentsTreatsLifecycleFailedAsTerminal(t *testing.T) {
+	scheme := testScheme(t)
+	cs := newCocoonSet("demo", func(cs *cocoonv1.CocoonSet) {
+		cs.Spec.Agent.Replicas = 1
+	})
+	subPod := mustBuildAgentPod(t, cs, 1, "vk-ns-demo-0", "", scheme)
+	subPod.Status.Phase = corev1.PodRunning
+	if subPod.Annotations == nil {
+		subPod.Annotations = map[string]string{}
+	}
+	subPod.Annotations[meta.AnnotationLifecycleState] = string(meta.LifecycleStateFailed)
+
+	cli := ctrlfake.NewClientBuilder().
+		WithScheme(scheme).
+		WithObjects(cs, subPod).
+		Build()
+	r := &Reconciler{Client: cli, Scheme: scheme}
+	classified := classifiedPods{
+		sub:       map[int32]*corev1.Pod{1: subPod},
+		toolbox:   map[string]*corev1.Pod{},
+		allByName: map[string]*corev1.Pod{subPod.Name: subPod},
+	}
+
+	changed, _, err := r.ensureSubAgents(t.Context(), cs, classified, "vk-ns-demo-0", "")
+	if err != nil {
+		t.Fatalf("ensureSubAgents: %v", err)
+	}
+	if !changed {
+		t.Fatal("ensureSubAgents must rebuild a lifecycle-state=Failed sub-agent even when PodPhase is Running")
+	}
+	if err := cli.Get(t.Context(), types.NamespacedName{Namespace: subPod.Namespace, Name: subPod.Name}, &corev1.Pod{}); err == nil {
+		t.Error("failed sub-agent should have been deleted")
+	}
+}
+
 func TestEnsureToolboxesReplacesTerminalPod(t *testing.T) {
 	scheme := testScheme(t)
 	cs := newCocoonSet("demo", func(cs *cocoonv1.CocoonSet) {
