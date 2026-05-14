@@ -17,6 +17,7 @@ import (
 
 	cocoonv1 "github.com/cocoonstack/cocoon-common/apis/v1"
 	commonk8s "github.com/cocoonstack/cocoon-common/k8s"
+	"github.com/cocoonstack/cocoon-common/meta"
 	"github.com/cocoonstack/cocoon-operator/metrics"
 )
 
@@ -146,8 +147,8 @@ func (r *Reconciler) rebuildSubAgent(ctx context.Context, logger *log.Fields, po
 	if err := r.patchRebuildHistory(ctx, cs, next); err != nil {
 		return false, 0, fmt.Errorf("persist rebuild history: %w", err)
 	}
-	logger.Infof(ctx, "sub-agent %s/%s slot %d terminal (phase=%s), rebuild attempt %d/%d",
-		pod.Namespace, pod.Name, slot, pod.Status.Phase, next[slot].Count, maxRebuildAttempts)
+	logger.Infof(ctx, "sub-agent %s/%s slot %d terminal (phase=%s lifecycle=%s), rebuild attempt %d/%d",
+		pod.Namespace, pod.Name, slot, pod.Status.Phase, meta.ReadLifecycleState(pod), next[slot].Count, maxRebuildAttempts)
 	if err := r.Delete(ctx, pod); err != nil && !apierrors.IsNotFound(err) {
 		return false, 0, fmt.Errorf("delete terminal sub-agent slot %d: %w", slot, err)
 	}

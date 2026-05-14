@@ -71,3 +71,17 @@ func TestReadRebuildHistoryHandlesCorruptAnnotation(t *testing.T) {
 		t.Fatalf("corrupt annotation must yield empty history, got %+v", got)
 	}
 }
+
+func TestReadRebuildHistoryHandlesNullPayload(t *testing.T) {
+	cs := &cocoonv1.CocoonSet{}
+	cs.Annotations = map[string]string{annotationRebuildHistory: "null"}
+	got := readRebuildHistory(cs)
+	if got == nil {
+		t.Fatal("null payload must yield non-nil map so downstream writes don't panic")
+	}
+	// Round-trip via encodeRebuildHistory must not panic on the returned map.
+	got[1] = rebuildEntry{Count: 1}
+	if _, err := encodeRebuildHistory(2, got); err != nil {
+		t.Fatalf("encodeRebuildHistory on normalized null payload: %v", err)
+	}
+}
