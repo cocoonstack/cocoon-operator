@@ -2,6 +2,7 @@ package cocoonset
 
 import (
 	"encoding/json"
+	"maps"
 	"time"
 
 	cocoonv1 "github.com/cocoonstack/cocoon-common/apis/v1"
@@ -37,11 +38,9 @@ func readRebuildHistory(cs *cocoonv1.CocoonSet) map[int32]rebuildEntry {
 // encodeRebuildHistory garbage-collects entries for slots no longer in the
 // spec and returns the JSON payload for the annotation.
 func encodeRebuildHistory(replicas int32, m map[int32]rebuildEntry) (string, error) {
-	for slot := range m {
-		if slot > replicas {
-			delete(m, slot)
-		}
-	}
+	maps.DeleteFunc(m, func(slot int32, _ rebuildEntry) bool {
+		return slot > replicas
+	})
 	raw, err := json.Marshal(m)
 	if err != nil {
 		return "", err
