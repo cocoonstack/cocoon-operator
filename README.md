@@ -44,15 +44,17 @@ cocoon-operator/
 ### CocoonSet reconcile loop
 
 1. Fetch the CocoonSet (return early on NotFound).
-2. If `DeletionTimestamp` is set, walk owned pods, delete them, `epoch.DeleteManifest` for both `:latest` and `:hibernate` tags on every owned VM (unconditional — DeleteManifest is 404-tolerant, and hibernate pushes ignore snapshotPolicy so any main-only gate would orphan `:hibernate` tags pushed by sub-agents), then drop the finalizer.
+2. If `DeletionTimestamp` is set, walk owned pods, delete them, `epoch.DeleteManifest` for both `:latest` and `:hibernate` tags on every owned VM (unconditional — DeleteManifest is 404-tolerant, and hibernate pushes ignore snapshotPolicy so any main-only gate would orphan `:hibernate` tags pushed by sub-agents), then drop the finalizer. VM names to GC are stashed onto an annotation before pod deletion so the cleanup survives a CocoonSet deleted before `Status.Agents` was ever patched.
 3. Ensure the `cocoonset.cocoonstack.io/finalizer` is in place.
-4. List owned pods by `cocoonset.cocoonstack.io/name=<cs.Name>` and classify by role label.
-5. **Suspend short-circuit**: if `spec.suspend == true`, write `meta.HibernateState(true)` onto every pod and report `Phase=Suspended`.
-6. **Un-suspend**: if `spec.suspend == false` and any owned pod still carries the hibernate annotation from a prior suspend, clear it via `PatchHibernateState(false)` so vk-cocoon wakes the VMs. `PatchHibernateState(false)` is a no-op on pods whose annotation is already absent, so this is cheap in the common "never suspended" case.
-7. Ensure the **main agent** (slot 0). If it is not yet `Ready`, requeue in 5 seconds and report `Phase=Pending`.
-8. Ensure sub-agents `[1..Replicas]`; delete extras above the requested count.
-9. Ensure toolboxes by name; skip creation with an error if the toolbox pod name collides with an existing non-toolbox pod (e.g. an agent). Delete extras.
-10. Re-list and patch `/status` (with structural diff so unchanged status patches are no-ops).
+4. List owned pods by `cocoonset.cocoonstack.io/name=<cs.Name>`, drop any with stale labels that aren't actually controller-owned, and classify the rest by role label.
+5. **Lifecycle-bridge stamp**: patch `cs.Generation` onto each owned pod's `cocoonset.cocoonstack.io/generation` annotation so vk-cocoon can echo it back as `lifecycle-observed-generation`, giving clients a counter-based completion signal immune to wallclock skew.
+6. **Failed-state short-circuit**: if the main pod is terminal (`Pod.Phase=Failed`, or it carries `vm.cocoonstack.io/lifecycle-state=Failed` from vk-cocoon while still Running), patch `Phase=Failed` and emit `MainAgentFailed` / `PodLifecycleFailed`. The Failed phase is recoverable: when the main pod becomes `Ready` again the operator emits `RecoveredFromFailure` and resumes normal reconciliation.
+7. **Suspend short-circuit**: if `spec.suspend == true`, write `meta.HibernateState(true)` onto every owned pod and poll epoch for `:hibernate` manifests on every managed VM. Stay in `Phase=Suspending` (requeueing every 5 s) until every required snapshot lands, then transition to `Phase=Suspended`.
+8. **Un-suspend**: if `spec.suspend == false` and any owned pod still carries the hibernate annotation from a prior suspend, clear it via `PatchHibernateState(false)` so vk-cocoon wakes the VMs. Pods that are the active target of a `desire=Hibernate` CocoonHibernation CR are skipped to avoid racing the hibernation reconciler. `PatchHibernateState(false)` is a no-op on pods whose annotation is already absent, so this is cheap in the common "never suspended" case.
+9. Ensure the **main agent** (slot 0). If the existing pod has drifted from spec, delete it for recreate. If it is not yet `Ready`, requeue in 5 s and report `Phase=Pending`.
+10. Ensure sub-agents `[1..Replicas]` (creates are fanned out via an errgroup capped at 8 concurrent pod creates so a large scale-up does not burst the apiserver); delete extras above the requested count.
+11. Ensure toolboxes by name; skip creation with an error if the toolbox pod name collides with an existing non-toolbox pod (e.g. an agent). Delete extras.
+12. Re-list and patch `/status` (with structural diff so unchanged status patches are no-ops).
 
 Pods are constructed via `meta.FromAgentSpec` / `meta.FromToolboxSpec` factory helpers so the operator never touches the annotation map directly. These factories propagate the full `VMOptions` surface (OS, Backend, ConnType, Network, ForcePull, NoDirectIO, ProbePort, Storage, Resources) into the pod annotations that vk-cocoon consumes. The `For` watch uses `predicate.GenerationChangedPredicate` so reconciles only fire when the spec actually changes — status-only patches the operator makes itself never loop back. The `Owns` side filters pod events to creation, deletion, and meaningful transitions (phase change, readiness flip, label/annotation mutation) via a `podRelevantChange` predicate so pure VK status churn does not trigger reconcile storms.
 
@@ -91,7 +93,7 @@ cocoon_operator_wake_phase_duration_seconds{result}
 cocoon_operator_lifecycle_state_failed_observed_total{phase}
 ```
 
-`CocoonSet` consumes the `vm.cocoonstack.io/lifecycle-state=Failed` annotation that vk-cocoon writes on terminal failures (hibernate, wake, post-clone, SAC); the operator flips to `Failed` immediately instead of waiting for `Pod.Status.Phase` to follow. `triageSubAgent` rebuilds a terminal sub pod up to four times with `0/1/5/30 s` exponential backoff between attempts, then marks the pod `cocoonset.cocoonstack.io/dead-letter=true` and leaves it in place so a permanently broken slot stops consuming the apiserver budget. Rebuild count persists in the `cocoonset.cocoonstack.io/rebuild-history` annotation on the CocoonSet so the count survives the pod delete.
+`CocoonSet` consumes the `vm.cocoonstack.io/lifecycle-state=Failed` annotation that vk-cocoon writes on terminal failures (hibernate, wake, post-clone, SAC); the operator treats it as terminal on every owned pod role (main, sub-agent, toolbox) so reconciliation reacts immediately instead of waiting for `Pod.Status.Phase` to follow. `triageSubAgent` rebuilds a terminal sub pod up to four times with `0/1/5/30 s` exponential backoff between attempts, then marks the pod `cocoonset.cocoonstack.io/dead-letter=true` and leaves it in place so a permanently broken slot stops consuming the apiserver budget. Rebuild count persists in the `cocoonset.cocoonstack.io/rebuild-history` annotation on the CocoonSet so the count survives the pod delete; entries for slots beyond the current `spec.agent.replicas` are garbage-collected on every write.
 
 ## Configuration
 

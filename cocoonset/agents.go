@@ -16,6 +16,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	cocoonv1 "github.com/cocoonstack/cocoon-common/apis/v1"
+	commonk8s "github.com/cocoonstack/cocoon-common/k8s"
 	"github.com/cocoonstack/cocoon-operator/metrics"
 )
 
@@ -158,10 +159,12 @@ func (r *Reconciler) rebuildSubAgent(ctx context.Context, logger *log.Fields, po
 	return true, 0, nil
 }
 
-// patchPodAnnotation sets a single annotation via a strategic merge patch.
 func (r *Reconciler) patchPodAnnotation(ctx context.Context, pod *corev1.Pod, key, value string) error {
-	patch := fmt.Appendf(nil, `{"metadata":{"annotations":{%q:%q}}}`, key, value)
-	if err := r.Patch(ctx, pod, client.RawPatch(types.StrategicMergePatchType, patch)); err != nil {
+	patch, err := commonk8s.AnnotationsMergePatch(map[string]any{key: value})
+	if err != nil {
+		return fmt.Errorf("build patch for pod %s/%s annotation %s: %w", pod.Namespace, pod.Name, key, err)
+	}
+	if err := r.Patch(ctx, pod, client.RawPatch(types.MergePatchType, patch)); err != nil {
 		return fmt.Errorf("patch pod %s/%s annotation %s: %w", pod.Namespace, pod.Name, key, err)
 	}
 	return nil

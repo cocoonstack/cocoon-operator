@@ -3,10 +3,8 @@ package hibernation
 import (
 	"context"
 	"fmt"
-	"time"
 
 	corev1 "k8s.io/api/core/v1"
-	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	ctrl "sigs.k8s.io/controller-runtime"
 
 	cocoonv1 "github.com/cocoonstack/cocoon-common/apis/v1"
@@ -14,7 +12,6 @@ import (
 	"github.com/cocoonstack/cocoon-common/meta"
 )
 
-// reconcileHibernate sets hibernate annotation and polls epoch for the snapshot tag.
 func (r *Reconciler) reconcileHibernate(ctx context.Context, hib *cocoonv1.CocoonHibernation, pod *corev1.Pod, vmName string) (ctrl.Result, error) {
 	r.announceRetryFromFailed(hib, cocoonv1.HibernationDesireHibernate)
 
@@ -33,7 +30,7 @@ func (r *Reconciler) reconcileHibernate(ctx context.Context, hib *cocoonv1.Cocoo
 		}
 		return ctrl.Result{}, r.setPhase(ctx, hib, cocoonv1.CocoonHibernationPhaseHibernated, vmName)
 	}
-	if hibernateDeadlineExceeded(hib) {
+	if phaseDeadlineExceeded(hib, cocoonv1.CocoonHibernationPhaseHibernating, hibernateTimeout) {
 		if r.firstTransitionAt(hib) {
 			observePhaseExit(hib, "timeout")
 			r.emitWarningf(hib, "HibernateTimedOut", "vk-cocoon did not push snapshot %s within %s", vmName, hibernateTimeout)
@@ -46,16 +43,4 @@ func (r *Reconciler) reconcileHibernate(ctx context.Context, hib *cocoonv1.Cocoo
 		return ctrl.Result{}, updateErr
 	}
 	return ctrl.Result{RequeueAfter: requeueInterval}, nil
-}
-
-// hibernateDeadlineExceeded checks whether Hibernating has exceeded hibernateTimeout.
-func hibernateDeadlineExceeded(hib *cocoonv1.CocoonHibernation) bool {
-	if hib.Status.Phase != cocoonv1.CocoonHibernationPhaseHibernating {
-		return false
-	}
-	ready := apimeta.FindStatusCondition(hib.Status.Conditions, commonk8s.ConditionTypeReady)
-	if ready == nil || ready.LastTransitionTime.IsZero() {
-		return false
-	}
-	return time.Since(ready.LastTransitionTime.Time) > hibernateTimeout
 }

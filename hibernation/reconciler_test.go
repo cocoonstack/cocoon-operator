@@ -348,8 +348,8 @@ func TestWakeDeadlineExceeded(t *testing.T) {
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			if got := wakeDeadlineExceeded(c.hib); got != c.want {
-				t.Errorf("wakeDeadlineExceeded = %v, want %v", got, c.want)
+			if got := phaseDeadlineExceeded(c.hib, cocoonv1.CocoonHibernationPhaseWaking, wakeTimeout); got != c.want {
+				t.Errorf("phaseDeadlineExceeded(Waking) = %v, want %v", got, c.want)
 			}
 		})
 	}
@@ -499,8 +499,8 @@ func TestHibernateDeadlineExceeded(t *testing.T) {
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			if got := hibernateDeadlineExceeded(c.hib); got != c.want {
-				t.Errorf("hibernateDeadlineExceeded = %v, want %v", got, c.want)
+			if got := phaseDeadlineExceeded(c.hib, cocoonv1.CocoonHibernationPhaseHibernating, hibernateTimeout); got != c.want {
+				t.Errorf("phaseDeadlineExceeded(Hibernating) = %v, want %v", got, c.want)
 			}
 		})
 	}

@@ -216,6 +216,19 @@ func hasPhaseDeadline(p cocoonv1.CocoonHibernationPhase) bool {
 	return p == cocoonv1.CocoonHibernationPhaseHibernating || p == cocoonv1.CocoonHibernationPhaseWaking
 }
 
+// phaseDeadlineExceeded reports whether hib has been in phase longer than timeout,
+// measured from Ready.LastTransitionTime.
+func phaseDeadlineExceeded(hib *cocoonv1.CocoonHibernation, phase cocoonv1.CocoonHibernationPhase, timeout time.Duration) bool {
+	if hib.Status.Phase != phase {
+		return false
+	}
+	ready := apimeta.FindStatusCondition(hib.Status.Conditions, commonk8s.ConditionTypeReady)
+	if ready == nil || ready.LastTransitionTime.IsZero() {
+		return false
+	}
+	return time.Since(ready.LastTransitionTime.Time) > timeout
+}
+
 // observePhaseExit records the duration spent in the current phase. Call
 // before transitioning away from Hibernating or Waking.
 func observePhaseExit(hib *cocoonv1.CocoonHibernation, result string) {

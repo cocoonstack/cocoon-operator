@@ -86,16 +86,12 @@ func (r *Reconciler) allOwnedPodsHibernated(ctx context.Context, classified clas
 
 // applySuspend writes HibernateState(true) onto every owned pod.
 func (r *Reconciler) applySuspend(ctx context.Context, classified classifiedPods) error {
-	for _, name := range slices.Sorted(maps.Keys(classified.allByName)) {
-		if ctxErr := ctx.Err(); ctxErr != nil {
-			return ctxErr
-		}
-		pod := classified.allByName[name]
+	return classified.forEachSorted(ctx, func(pod *corev1.Pod) error {
 		if err := commonk8s.PatchHibernateState(ctx, r.Client, pod, true); err != nil {
 			return fmt.Errorf("patch hibernate annotation on %s/%s: %w", pod.Namespace, pod.Name, err)
 		}
-	}
-	return nil
+		return nil
+	})
 }
 
 // applyUnsuspend clears HibernateState from owned pods, skipping pods that are

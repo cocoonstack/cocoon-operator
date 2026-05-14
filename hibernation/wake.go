@@ -3,11 +3,9 @@ package hibernation
 import (
 	"context"
 	"fmt"
-	"time"
 
 	"github.com/projecteru2/core/log"
 	corev1 "k8s.io/api/core/v1"
-	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	ctrl "sigs.k8s.io/controller-runtime"
 
 	cocoonv1 "github.com/cocoonstack/cocoon-common/apis/v1"
@@ -15,7 +13,6 @@ import (
 	"github.com/cocoonstack/cocoon-common/meta"
 )
 
-// reconcileWake clears the hibernate annotation and waits for the container to run.
 func (r *Reconciler) reconcileWake(ctx context.Context, hib *cocoonv1.CocoonHibernation, pod *corev1.Pod, vmName string) (ctrl.Result, error) {
 	logger := log.WithFunc("hibernation.Reconciler.reconcileWake")
 	r.announceRetryFromFailed(hib, cocoonv1.HibernationDesireWake)
@@ -38,7 +35,7 @@ func (r *Reconciler) reconcileWake(ctx context.Context, hib *cocoonv1.CocoonHibe
 		}
 	}
 
-	if wakeDeadlineExceeded(hib) {
+	if phaseDeadlineExceeded(hib, cocoonv1.CocoonHibernationPhaseWaking, wakeTimeout) {
 		if r.firstTransitionAt(hib) {
 			observePhaseExit(hib, "timeout")
 			r.emitWarningf(hib, "WakeTimedOut", "vk-cocoon did not report the container running within %s", wakeTimeout)
@@ -63,16 +60,4 @@ func (r *Reconciler) reconcileWake(ctx context.Context, hib *cocoonv1.CocoonHibe
 // vk-cocoon has pulled it.
 func vmClonedAndRunning(pod *corev1.Pod) bool {
 	return meta.IsContainerRunning(pod) && meta.ParseVMRuntime(pod).VMID != ""
-}
-
-// wakeDeadlineExceeded checks whether the Waking phase has exceeded wakeTimeout.
-func wakeDeadlineExceeded(hib *cocoonv1.CocoonHibernation) bool {
-	if hib.Status.Phase != cocoonv1.CocoonHibernationPhaseWaking {
-		return false
-	}
-	ready := apimeta.FindStatusCondition(hib.Status.Conditions, commonk8s.ConditionTypeReady)
-	if ready == nil || ready.LastTransitionTime.IsZero() {
-		return false
-	}
-	return time.Since(ready.LastTransitionTime.Time) > wakeTimeout
 }

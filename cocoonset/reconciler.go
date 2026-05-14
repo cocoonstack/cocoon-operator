@@ -181,7 +181,7 @@ func mainPodFailedReason(pod *corev1.Pod) string {
 
 // podIsTerminal covers both the kubelet and the vk-cocoon-driven failure paths.
 func podIsTerminal(pod *corev1.Pod) bool {
-	return meta.IsPodTerminal(pod) || meta.ReadLifecycleState(pod) == meta.LifecycleStateFailed
+	return mainPodFailedReason(pod) != ""
 }
 
 // observeMainPodFailed records the failure on the event channel and, when the
