@@ -11,7 +11,7 @@ const (
 	annotationRebuildHistory = "cocoonset.cocoonstack.io/rebuild-history"
 	annotationDeadLetter     = "cocoonset.cocoonstack.io/dead-letter"
 
-	maxRebuildAttempts = 3
+	maxRebuildAttempts = 4
 )
 
 // rebuildEntry tracks how many times triageSubAgent has rebuilt a slot.

@@ -184,7 +184,11 @@ func mainPodFailedReason(pod *corev1.Pod) string {
 // counter so the Pod-Phase-only path doesn't dilute the metric's meaning.
 func (r *Reconciler) observeMainPodFailed(cs *cocoonv1.CocoonSet, pod *corev1.Pod, reason string) {
 	if reason == "PodLifecycleFailed" {
-		metrics.LifecycleStateFailedObservedTotal.WithLabelValues(string(cs.Status.Phase)).Inc()
+		phase := string(cs.Status.Phase)
+		if phase == "" {
+			phase = string(cocoonv1.CocoonSetPhasePending)
+		}
+		metrics.LifecycleStateFailedObservedTotal.WithLabelValues(phase).Inc()
 	}
 	if r.Recorder == nil {
 		return

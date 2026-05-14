@@ -10,6 +10,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
+	ctrl "sigs.k8s.io/controller-runtime"
 	ctrlfake "sigs.k8s.io/controller-runtime/pkg/client/fake"
 
 	cocoonv1 "github.com/cocoonstack/cocoon-common/apis/v1"
@@ -310,6 +311,69 @@ func TestEnsureSubAgentsReplacesTerminalPod(t *testing.T) {
 	}
 	if err := cli.Get(t.Context(), types.NamespacedName{Namespace: subPod.Namespace, Name: subPod.Name}, &corev1.Pod{}); err == nil {
 		t.Error("terminal sub-agent should have been deleted")
+	}
+}
+
+func TestMainPodFailedReason(t *testing.T) {
+	annot := func(state meta.LifecycleState) map[string]string {
+		return map[string]string{meta.AnnotationLifecycleState: string(state)}
+	}
+	cases := []struct {
+		name string
+		pod  *corev1.Pod
+		want string
+	}{
+		{"healthy", &corev1.Pod{}, ""},
+		{"lifecycle=failed annotation", &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Annotations: annot(meta.LifecycleStateFailed)}}, "PodLifecycleFailed"},
+		{"pod phase failed", &corev1.Pod{Status: corev1.PodStatus{Phase: corev1.PodFailed}}, "MainAgentFailed"},
+		// lifecycle annotation wins over phase — that's the vk-cocoon-driven path.
+		{"both annotation and phase", &corev1.Pod{
+			ObjectMeta: metav1.ObjectMeta{Annotations: annot(meta.LifecycleStateFailed)},
+			Status:     corev1.PodStatus{Phase: corev1.PodFailed},
+		}, "PodLifecycleFailed"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			if got := mainPodFailedReason(c.pod); got != c.want {
+				t.Errorf("mainPodFailedReason = %q, want %q", got, c.want)
+			}
+		})
+	}
+}
+
+// TestReconcileMainLifecycleFailedTransitionsToFailed verifies the
+// vk-cocoon-driven failure path: a main pod carrying
+// lifecycle-state=Failed annotation must flip the CocoonSet to Failed
+// even when Pod.Status.Phase is still Running.
+func TestReconcileMainLifecycleFailedTransitionsToFailed(t *testing.T) {
+	scheme := testScheme(t)
+	cs := newCocoonSet("demo", func(cs *cocoonv1.CocoonSet) {
+		cs.Finalizers = []string{finalizerName}
+	})
+	mainPod := mustBuildAgentPod(t, cs, 0, "", "", scheme)
+	mainPod.Status.Phase = corev1.PodRunning
+	if mainPod.Annotations == nil {
+		mainPod.Annotations = map[string]string{}
+	}
+	mainPod.Annotations[meta.AnnotationLifecycleState] = string(meta.LifecycleStateFailed)
+	mainPod.Annotations[meta.AnnotationLifecycleStateMessage] = "hibernate push failed"
+
+	cli := ctrlfake.NewClientBuilder().
+		WithScheme(scheme).
+		WithObjects(cs, mainPod).
+		WithStatusSubresource(&cocoonv1.CocoonSet{}).
+		Build()
+	r := &Reconciler{Client: cli, Scheme: scheme, Epoch: &fakeRegistry{}}
+
+	if _, err := r.Reconcile(t.Context(), ctrl.Request{NamespacedName: types.NamespacedName{Namespace: cs.Namespace, Name: cs.Name}}); err != nil {
+		t.Fatalf("Reconcile: %v", err)
+	}
+	var out cocoonv1.CocoonSet
+	if err := cli.Get(t.Context(), types.NamespacedName{Namespace: cs.Namespace, Name: cs.Name}, &out); err != nil {
+		t.Fatalf("get CocoonSet: %v", err)
+	}
+	if out.Status.Phase != cocoonv1.CocoonSetPhaseFailed {
+		t.Errorf("CocoonSet phase = %q, want Failed", out.Status.Phase)
 	}
 }
 
