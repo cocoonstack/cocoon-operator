@@ -67,13 +67,22 @@ func (r *Reconciler) reconcileDelete(ctx context.Context, cs *cocoonv1.CocoonSet
 		return ctrl.Result{RequeueAfter: requeueWaitForMain}, nil
 	}
 
-	// :hibernate is pushed regardless of snapshotPolicy, so drop both tags unconditionally.
+	// :hibernate is pushed independently by CocoonHibernation, so any leftover
+	// is orphaned at CocoonSet teardown — drop unconditionally. :latest is only
+	// orphaned when snapshotPolicy says no snapshot was pushed for this slot;
+	// when ShouldSnapshotVM is true the operator just pushed it on the user's
+	// behalf and downstream consumers (hot-snapshot workflows) retag it.
 	if r.Epoch != nil {
+		policy := string(cs.Spec.SnapshotPolicy)
 		for _, name := range vmNamesForGC(cs) {
-			for _, tag := range []string{meta.DefaultSnapshotTag, meta.HibernateSnapshotTag} {
-				if err := r.Epoch.DeleteManifest(ctx, name, tag); err != nil {
-					logger.Warnf(ctx, "delete snapshot %s:%s: %v", name, tag, err)
-				}
+			if err := r.Epoch.DeleteManifest(ctx, name, meta.HibernateSnapshotTag); err != nil {
+				logger.Warnf(ctx, "delete snapshot %s:%s: %v", name, meta.HibernateSnapshotTag, err)
+			}
+			if meta.ShouldSnapshotVM(meta.VMSpec{VMName: name, SnapshotPolicy: policy}) {
+				continue
+			}
+			if err := r.Epoch.DeleteManifest(ctx, name, meta.DefaultSnapshotTag); err != nil {
+				logger.Warnf(ctx, "delete snapshot %s:%s: %v", name, meta.DefaultSnapshotTag, err)
 			}
 		}
 	} else {
