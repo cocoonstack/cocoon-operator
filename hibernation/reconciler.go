@@ -57,11 +57,8 @@ type Reconciler struct {
 	Epoch    snapshot.Registry
 	Recorder record.EventRecorder
 
-	// observed dedups phase-exit observations per (UID, target phase). The
-	// status patch from setPhase lags the cache, so a follow-up reconcile
-	// can re-enter the same transition branch before the new phase reaches
-	// our local view. Tracked in-memory only — restart resets the counter
-	// anyway, so coherence within a process lifetime is enough.
+	// observed[UID] = last recorded Ready.LastTransitionTime, dedups
+	// phase-exit observations against controller-runtime cache lag.
 	observed sync.Map
 }
 
@@ -158,6 +155,7 @@ func (r *Reconciler) reconcileDelete(ctx context.Context, hib *cocoonv1.CocoonHi
 			logger.Warnf(ctx, "delete hibernate snapshot %s: %v", hib.Status.VMName, err)
 		}
 	}
+	r.observed.Delete(string(hib.UID))
 	if controllerutil.ContainsFinalizer(hib, finalizerName) {
 		controllerutil.RemoveFinalizer(hib, finalizerName)
 		if err := r.Update(ctx, hib); err != nil {
@@ -234,12 +232,23 @@ func observePhaseExit(hib *cocoonv1.CocoonHibernation, result string) {
 	}
 }
 
-// firstTransition reports whether this is the first time we record the
-// (uid, target) transition. Subsequent calls return false — protecting
-// the duration histogram and Normal Event from stale-cache re-entry.
-func (r *Reconciler) firstTransition(uid, target string) bool {
-	_, loaded := r.observed.LoadOrStore(uid+"|"+target, struct{}{})
-	return !loaded
+// firstTransitionAt reports whether Ready.LastTransitionTime has advanced
+// since the last observation for this CR.
+func (r *Reconciler) firstTransitionAt(hib *cocoonv1.CocoonHibernation) bool {
+	ready := apimeta.FindStatusCondition(hib.Status.Conditions, commonk8s.ConditionTypeReady)
+	if ready == nil || ready.LastTransitionTime.IsZero() {
+		return false
+	}
+	key := string(hib.UID)
+	got, loaded := r.observed.LoadOrStore(key, ready.LastTransitionTime.Time)
+	if !loaded {
+		return true
+	}
+	if ready.LastTransitionTime.After(got.(time.Time)) {
+		r.observed.Store(key, ready.LastTransitionTime.Time)
+		return true
+	}
+	return false
 }
 
 func (r *Reconciler) emitWarningf(hib *cocoonv1.CocoonHibernation, reason, format string, args ...any) {

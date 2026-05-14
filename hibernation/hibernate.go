@@ -27,15 +27,17 @@ func (r *Reconciler) reconcileHibernate(ctx context.Context, hib *cocoonv1.Cocoo
 		return ctrl.Result{}, fmt.Errorf("probe hibernate snapshot %s: %w", vmName, err)
 	}
 	if present {
-		if r.firstTransition(string(hib.UID), string(cocoonv1.CocoonHibernationPhaseHibernated)) {
+		if r.firstTransitionAt(hib) {
 			observePhaseExit(hib, "ok")
 			r.emitNormalf(hib, "Hibernated", "snapshot %s pushed to epoch", vmName)
 		}
 		return ctrl.Result{}, r.setPhase(ctx, hib, cocoonv1.CocoonHibernationPhaseHibernated, vmName)
 	}
 	if hibernateDeadlineExceeded(hib) {
-		observePhaseExit(hib, "timeout")
-		r.emitWarningf(hib, "HibernateTimedOut", "vk-cocoon did not push snapshot %s within %s", vmName, hibernateTimeout)
+		if r.firstTransitionAt(hib) {
+			observePhaseExit(hib, "timeout")
+			r.emitWarningf(hib, "HibernateTimedOut", "vk-cocoon did not push snapshot %s within %s", vmName, hibernateTimeout)
+		}
 		return ctrl.Result{}, r.markFailed(ctx, hib,
 			fmt.Sprintf("hibernate timed out after %s; vk-cocoon never pushed the snapshot", hibernateTimeout))
 	}

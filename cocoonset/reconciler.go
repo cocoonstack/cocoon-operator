@@ -179,11 +179,7 @@ func mainPodFailedReason(pod *corev1.Pod) string {
 	return ""
 }
 
-// podIsTerminal reports whether pod is in a terminal state from either the
-// kubelet (Pod.Status.Phase=Failed) or the vk-cocoon-driven path
-// (vm.cocoonstack.io/lifecycle-state=Failed). Sub-agents and toolboxes use
-// this to trigger rebuild for both signals; main pod uses mainPodFailedReason
-// directly to differentiate the Event reason.
+// podIsTerminal covers both the kubelet and the vk-cocoon-driven failure paths.
 func podIsTerminal(pod *corev1.Pod) bool {
 	return meta.IsPodTerminal(pod) || meta.ReadLifecycleState(pod) == meta.LifecycleStateFailed
 }
