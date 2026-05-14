@@ -482,46 +482,86 @@ func TestReconcileDeleteSkipsUnownedPods(t *testing.T) {
 	}
 }
 
-func TestReconcileDeleteRemovesBothSnapshotTags(t *testing.T) {
+// :hibernate is always orphaned at CocoonSet teardown so it's always cleaned;
+// :latest is only orphaned when snapshotPolicy says no push happened for that
+// slot. Always/main-only-slot-0 leave :latest in place for downstream retag.
+func TestReconcileDeleteSnapshotPolicyGC(t *testing.T) {
 	scheme := testScheme(t)
-	cs := newCocoonSet("demo")
-	cs.Finalizers = []string{finalizerName}
-	// snapshotPolicy=never proves the cleanup is not gated by it.
-	cs.Spec.SnapshotPolicy = cocoonv1.SnapshotPolicyNever
-	cs.Status.Agents = []cocoonv1.AgentStatus{
-		{Slot: 0, Role: "main", PodName: "demo-0", VMName: "vk-ns-demo-0"},
+	cases := []struct {
+		name      string
+		policy    cocoonv1.SnapshotPolicy
+		agents    []cocoonv1.AgentStatus
+		toolboxes []cocoonv1.ToolboxStatus
+		want      []string
+	}{
+		{
+			name:   "never drops both tags — no push happened",
+			policy: cocoonv1.SnapshotPolicyNever,
+			agents: []cocoonv1.AgentStatus{
+				{Slot: 0, Role: "main", PodName: "demo-0", VMName: "vk-ns-demo-0"},
+			},
+			want: []string{
+				"vk-ns-demo-0:" + meta.HibernateSnapshotTag,
+				"vk-ns-demo-0:" + meta.DefaultSnapshotTag,
+			},
+		},
+		{
+			name:   "always preserves :latest for downstream retag",
+			policy: cocoonv1.SnapshotPolicyAlways,
+			agents: []cocoonv1.AgentStatus{
+				{Slot: 0, Role: "main", PodName: "demo-0", VMName: "vk-ns-demo-0"},
+			},
+			want: []string{"vk-ns-demo-0:" + meta.HibernateSnapshotTag},
+		},
+		{
+			name:   "main-only keeps slot 0, drops other slots and toolboxes",
+			policy: cocoonv1.SnapshotPolicyMainOnly,
+			agents: []cocoonv1.AgentStatus{
+				{Slot: 0, Role: "main", PodName: "demo-0", VMName: "vk-ns-demo-0"},
+				{Slot: 1, Role: "sub", PodName: "demo-1", VMName: "vk-ns-demo-1"},
+			},
+			toolboxes: []cocoonv1.ToolboxStatus{
+				{Name: "tb", PodName: "demo-tb", VMName: "vk-ns-demo-tb"},
+			},
+			want: []string{
+				"vk-ns-demo-0:" + meta.HibernateSnapshotTag,
+				"vk-ns-demo-1:" + meta.HibernateSnapshotTag,
+				"vk-ns-demo-1:" + meta.DefaultSnapshotTag,
+				"vk-ns-demo-tb:" + meta.HibernateSnapshotTag,
+				"vk-ns-demo-tb:" + meta.DefaultSnapshotTag,
+			},
+		},
 	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			cs := newCocoonSet("demo")
+			cs.Finalizers = []string{finalizerName}
+			cs.Spec.SnapshotPolicy = c.policy
+			cs.Status.Agents = c.agents
+			cs.Status.Toolboxes = c.toolboxes
 
-	cli := ctrlfake.NewClientBuilder().
-		WithScheme(scheme).
-		WithObjects(cs, mustBuildAgentPod(t, cs, 0, "", "", scheme)).
-		Build()
-	reg := &fakeRegistry{}
-	r := &Reconciler{Client: cli, Scheme: scheme, Epoch: reg}
+			cli := ctrlfake.NewClientBuilder().WithScheme(scheme).WithObjects(cs).Build()
+			reg := &fakeRegistry{}
+			r := &Reconciler{Client: cli, Scheme: scheme, Epoch: reg}
 
-	// The fake client deletes synchronously, so the single reconcile sees the
-	// pod gone in the re-list and runs the GC inline.
-	if _, err := r.reconcileDelete(t.Context(), cs); err != nil {
-		t.Fatalf("reconcileDelete: %v", err)
-	}
-
-	want := []string{
-		"vk-ns-demo-0:" + meta.DefaultSnapshotTag,
-		"vk-ns-demo-0:" + meta.HibernateSnapshotTag,
-	}
-	if !slices.Equal(reg.deleted, want) {
-		t.Errorf("DeleteManifest calls = %v, want %v", reg.deleted, want)
+			if _, err := r.reconcileDelete(t.Context(), cs); err != nil {
+				t.Fatalf("reconcileDelete: %v", err)
+			}
+			if !slices.Equal(reg.deleted, c.want) {
+				t.Errorf("DeleteManifest calls = %v, want %v", reg.deleted, c.want)
+			}
+		})
 	}
 }
 
 // Race window: pod created but Status.Agents not yet patched with VMName.
-// reconcileDelete's first pass sees the pod and must stash its VMName onto
-// the annotation, so the second pass (after the pod is gone) still GCs the tag.
+// reconcileDelete's first pass sees the pod and stashes its VMName onto the
+// annotation, so the second pass still GCs :hibernate (default policy
+// preserves :latest per TestReconcileDeleteAlwaysPolicyPreservesLatest).
 func TestReconcileDeleteStashesPodVMNamesEvenWhenStatusIsEmpty(t *testing.T) {
 	scheme := testScheme(t)
 	cs := newCocoonSet("demo")
 	cs.Finalizers = []string{finalizerName}
-	// Status.Agents intentionally empty — reconciler hadn't patched it yet.
 
 	cli := ctrlfake.NewClientBuilder().
 		WithScheme(scheme).
@@ -534,18 +574,14 @@ func TestReconcileDeleteStashesPodVMNamesEvenWhenStatusIsEmpty(t *testing.T) {
 		t.Fatalf("reconcileDelete: %v", err)
 	}
 
-	want := []string{
-		"vk-ns-demo-0:" + meta.DefaultSnapshotTag,
-		"vk-ns-demo-0:" + meta.HibernateSnapshotTag,
-	}
+	want := []string{"vk-ns-demo-0:" + meta.HibernateSnapshotTag}
 	if !slices.Equal(reg.deleted, want) {
 		t.Errorf("DeleteManifest calls = %v, want %v", reg.deleted, want)
 	}
 }
 
 // Real clusters terminate pods asynchronously: by the time GC runs, the pod
-// list is already empty. VM names must come from Status, not from a re-list
-// (which is what the bug fix is about).
+// list is already empty. VM names must come from Status, not from a re-list.
 func TestReconcileDeleteCleansTagsAfterPodsGone(t *testing.T) {
 	scheme := testScheme(t)
 	cs := newCocoonSet("demo")
@@ -558,7 +594,6 @@ func TestReconcileDeleteCleansTagsAfterPodsGone(t *testing.T) {
 		{Name: "tb", PodName: "demo-tb", VMName: "vk-ns-demo-tb"},
 	}
 
-	// No pods in the fake client — kubelet already terminated them.
 	cli := ctrlfake.NewClientBuilder().WithScheme(scheme).WithObjects(cs).Build()
 	reg := &fakeRegistry{}
 	r := &Reconciler{Client: cli, Scheme: scheme, Epoch: reg}
@@ -567,12 +602,10 @@ func TestReconcileDeleteCleansTagsAfterPodsGone(t *testing.T) {
 		t.Fatalf("reconcileDelete: %v", err)
 	}
 
+	// Default policy is always, so :latest is preserved for every VM.
 	want := []string{
-		"vk-ns-demo-0:" + meta.DefaultSnapshotTag,
 		"vk-ns-demo-0:" + meta.HibernateSnapshotTag,
-		"vk-ns-demo-1:" + meta.DefaultSnapshotTag,
 		"vk-ns-demo-1:" + meta.HibernateSnapshotTag,
-		"vk-ns-demo-tb:" + meta.DefaultSnapshotTag,
 		"vk-ns-demo-tb:" + meta.HibernateSnapshotTag,
 	}
 	if !slices.Equal(reg.deleted, want) {
