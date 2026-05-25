@@ -17,6 +17,17 @@ func (r *Reconciler) reconcileWake(ctx context.Context, hib *cocoonv1.CocoonHibe
 	logger := log.WithFunc("hibernation.Reconciler.reconcileWake")
 	r.announceRetryFromFailed(hib, cocoonv1.HibernationDesireWake)
 
+	// Clear hibernate=true before the cloned-and-running fast-path. A pod that
+	// is already awake but still carries hibernate residue would otherwise take
+	// the fast-path with the annotation left set; a later Desire=Hibernate then
+	// no-ops PatchHibernateState, letting the CR flip to Hibernated against a
+	// stale tag without vk-cocoon ever taking a fresh snapshot.
+	if meta.ReadHibernateState(pod) {
+		if err := commonk8s.PatchHibernateState(ctx, r.Client, pod, false); err != nil {
+			return ctrl.Result{}, fmt.Errorf("clear hibernate annotation: %w", err)
+		}
+	}
+
 	if vmClonedAndRunning(pod) {
 		// Drop snapshot tag (non-fatal; stale tag gets overwritten on next hibernate).
 		if err := r.Epoch.DeleteManifest(ctx, vmName, meta.HibernateSnapshotTag); err != nil {
@@ -27,12 +38,6 @@ func (r *Reconciler) reconcileWake(ctx context.Context, hib *cocoonv1.CocoonHibe
 			r.emitNormalf(hib, "WokenActive", "pod %s/%s is running", pod.Namespace, pod.Name)
 		}
 		return ctrl.Result{}, r.setPhase(ctx, hib, cocoonv1.CocoonHibernationPhaseActive, vmName)
-	}
-
-	if meta.ReadHibernateState(pod) {
-		if err := commonk8s.PatchHibernateState(ctx, r.Client, pod, false); err != nil {
-			return ctrl.Result{}, fmt.Errorf("clear hibernate annotation: %w", err)
-		}
 	}
 
 	if phaseDeadlineExceeded(hib, cocoonv1.CocoonHibernationPhaseWaking, wakeTimeout) {

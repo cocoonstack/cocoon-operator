@@ -463,6 +463,63 @@ func TestReconcileWakeRecoversFromFailed(t *testing.T) {
 	}
 }
 
+// TestReconcileWakeClearsHibernateResidueOnFastPath covers the case where a pod
+// is already cloned+running but still carries hibernate=true. The wake fast-path
+// must clear the annotation before marking the CR Active; otherwise a later
+// Desire=Hibernate no-ops PatchHibernateState and the CR can flip to Hibernated
+// against a stale tag without a fresh snapshot.
+func TestReconcileWakeClearsHibernateResidueOnFastPath(t *testing.T) {
+	hib := &cocoonv1.CocoonHibernation{
+		ObjectMeta: metav1.ObjectMeta{Name: "hib", Namespace: "ns", Finalizers: []string{finalizerName}},
+		Spec: cocoonv1.CocoonHibernationSpec{
+			Desire: cocoonv1.HibernationDesireWake,
+			PodRef: cocoonv1.HibernationPodRef{Name: "demo-0"},
+		},
+		Status: cocoonv1.CocoonHibernationStatus{Phase: cocoonv1.CocoonHibernationPhaseWaking},
+	}
+	pod := &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{Name: "demo-0", Namespace: "ns"},
+		Status: corev1.PodStatus{
+			ContainerStatuses: []corev1.ContainerStatus{{
+				State: corev1.ContainerState{Running: &corev1.ContainerStateRunning{}},
+			}},
+		},
+	}
+	(&meta.VMSpec{VMName: "vk-ns-demo-0", Managed: true}).Apply(pod)
+	(&meta.VMRuntime{VMID: "vmid-live"}).Apply(pod) // cloned + running → fast-path
+	meta.HibernateState(true).Apply(pod)            // residue that must be cleared
+
+	scheme := testScheme(t)
+	cli := ctrlfake.NewClientBuilder().
+		WithScheme(scheme).
+		WithObjects(hib, pod).
+		WithStatusSubresource(&cocoonv1.CocoonHibernation{}).
+		Build()
+	r := &Reconciler{Client: cli, Scheme: scheme, Epoch: &fakeRegistry{}}
+
+	if _, err := r.Reconcile(t.Context(), ctrl.Request{
+		NamespacedName: types.NamespacedName{Namespace: "ns", Name: "hib"},
+	}); err != nil {
+		t.Fatalf("Reconcile: %v", err)
+	}
+
+	var outHib cocoonv1.CocoonHibernation
+	if err := cli.Get(t.Context(), types.NamespacedName{Namespace: "ns", Name: "hib"}, &outHib); err != nil {
+		t.Fatalf("get hib: %v", err)
+	}
+	if outHib.Status.Phase != cocoonv1.CocoonHibernationPhaseActive {
+		t.Errorf("phase = %q, want Active (fast-path)", outHib.Status.Phase)
+	}
+
+	var outPod corev1.Pod
+	if err := cli.Get(t.Context(), types.NamespacedName{Namespace: "ns", Name: "demo-0"}, &outPod); err != nil {
+		t.Fatalf("get pod: %v", err)
+	}
+	if meta.ReadHibernateState(&outPod) {
+		t.Error("hibernate annotation must be cleared on the wake fast-path; still true")
+	}
+}
+
 func TestHibernateDeadlineExceeded(t *testing.T) {
 	staleReady := metav1.Condition{
 		Type:               commonk8s.ConditionTypeReady,
