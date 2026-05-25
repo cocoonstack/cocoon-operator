@@ -463,11 +463,6 @@ func TestReconcileWakeRecoversFromFailed(t *testing.T) {
 	}
 }
 
-// TestReconcileWakeClearsHibernateResidueOnFastPath covers the case where a pod
-// is already cloned+running but still carries hibernate=true. The wake fast-path
-// must clear the annotation before marking the CR Active; otherwise a later
-// Desire=Hibernate no-ops PatchHibernateState and the CR can flip to Hibernated
-// against a stale tag without a fresh snapshot.
 func TestReconcileWakeClearsHibernateResidueOnFastPath(t *testing.T) {
 	hib := &cocoonv1.CocoonHibernation{
 		ObjectMeta: metav1.ObjectMeta{Name: "hib", Namespace: "ns", Finalizers: []string{finalizerName}},
@@ -486,8 +481,8 @@ func TestReconcileWakeClearsHibernateResidueOnFastPath(t *testing.T) {
 		},
 	}
 	(&meta.VMSpec{VMName: "vk-ns-demo-0", Managed: true}).Apply(pod)
-	(&meta.VMRuntime{VMID: "vmid-live"}).Apply(pod) // cloned + running → fast-path
-	meta.HibernateState(true).Apply(pod)            // residue that must be cleared
+	(&meta.VMRuntime{VMID: "vmid-live"}).Apply(pod)
+	meta.HibernateState(true).Apply(pod)
 
 	scheme := testScheme(t)
 	cli := ctrlfake.NewClientBuilder().
