@@ -17,6 +17,12 @@ func (r *Reconciler) reconcileWake(ctx context.Context, hib *cocoonv1.CocoonHibe
 	logger := log.WithFunc("hibernation.Reconciler.reconcileWake")
 	r.announceRetryFromFailed(hib, cocoonv1.HibernationDesireWake)
 
+	if meta.ReadHibernateState(pod) {
+		if err := commonk8s.PatchHibernateState(ctx, r.Client, pod, false); err != nil {
+			return ctrl.Result{}, fmt.Errorf("clear hibernate annotation: %w", err)
+		}
+	}
+
 	if vmClonedAndRunning(pod) {
 		// Drop snapshot tag (non-fatal; stale tag gets overwritten on next hibernate).
 		if err := r.Epoch.DeleteManifest(ctx, vmName, meta.HibernateSnapshotTag); err != nil {
@@ -27,12 +33,6 @@ func (r *Reconciler) reconcileWake(ctx context.Context, hib *cocoonv1.CocoonHibe
 			r.emitNormalf(hib, "WokenActive", "pod %s/%s is running", pod.Namespace, pod.Name)
 		}
 		return ctrl.Result{}, r.setPhase(ctx, hib, cocoonv1.CocoonHibernationPhaseActive, vmName)
-	}
-
-	if meta.ReadHibernateState(pod) {
-		if err := commonk8s.PatchHibernateState(ctx, r.Client, pod, false); err != nil {
-			return ctrl.Result{}, fmt.Errorf("clear hibernate annotation: %w", err)
-		}
 	}
 
 	if phaseDeadlineExceeded(hib, cocoonv1.CocoonHibernationPhaseWaking, wakeTimeout) {
