@@ -72,18 +72,10 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 		return ctrl.Result{Requeue: true}, nil
 	}
 
-	var podList corev1.PodList
-	if err := r.List(
-		ctx, &podList,
-		client.InNamespace(cs.Namespace),
-		client.MatchingLabels{meta.LabelCocoonSet: cs.Name},
-	); err != nil {
-		return ctrl.Result{}, fmt.Errorf("list owned pods: %w", err)
+	owned, listErr := r.listOwnedPods(ctx, &cs)
+	if listErr != nil {
+		return ctrl.Result{}, fmt.Errorf("list owned pods: %w", listErr)
 	}
-
-	// Filter out pods not owned by this CocoonSet to prevent stale-label
-	// pods from being counted in status or affected by suspend/delete.
-	owned := filterOwnedPods(podList.Items, &cs)
 	classified := classifyPods(owned)
 
 	// Stamp before any spec-driven patch so observed-generation reflects
@@ -166,24 +158,6 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 	return ctrl.Result{RequeueAfter: subRequeue}, nil
 }
 
-// mainPodFailedReason maps a pod's terminal signal to the Event reason that
-// the operator emits when transitioning the CocoonSet to Failed; "" means
-// the pod is not terminal.
-func mainPodFailedReason(pod *corev1.Pod) string {
-	if meta.ReadLifecycleState(pod) == meta.LifecycleStateFailed {
-		return "PodLifecycleFailed"
-	}
-	if meta.IsPodTerminal(pod) {
-		return "MainAgentFailed"
-	}
-	return ""
-}
-
-// podIsTerminal covers both the kubelet and the vk-cocoon-driven failure paths.
-func podIsTerminal(pod *corev1.Pod) bool {
-	return mainPodFailedReason(pod) != ""
-}
-
 // observeMainPodFailed records the failure on the event channel and, when the
 // signal came from a vk-cocoon lifecycle annotation, bumps the dedicated
 // counter so the Pod-Phase-only path doesn't dilute the metric's meaning.
@@ -203,4 +177,22 @@ func (r *Reconciler) observeMainPodFailed(cs *cocoonv1.CocoonSet, pod *corev1.Po
 		msg = string(pod.Status.Phase)
 	}
 	r.Recorder.Eventf(cs, corev1.EventTypeWarning, reason, "main pod %s/%s: %s", pod.Namespace, pod.Name, msg)
+}
+
+// mainPodFailedReason maps a pod's terminal signal to the Event reason that
+// the operator emits when transitioning the CocoonSet to Failed; "" means
+// the pod is not terminal.
+func mainPodFailedReason(pod *corev1.Pod) string {
+	if meta.ReadLifecycleState(pod) == meta.LifecycleStateFailed {
+		return "PodLifecycleFailed"
+	}
+	if meta.IsPodTerminal(pod) {
+		return "MainAgentFailed"
+	}
+	return ""
+}
+
+// podIsTerminal covers both the kubelet and the vk-cocoon-driven failure paths.
+func podIsTerminal(pod *corev1.Pod) bool {
+	return mainPodFailedReason(pod) != ""
 }

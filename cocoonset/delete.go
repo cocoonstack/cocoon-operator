@@ -25,15 +25,10 @@ func (r *Reconciler) reconcileDelete(ctx context.Context, cs *cocoonv1.CocoonSet
 	logger := log.WithFunc("cocoonset.Reconciler.reconcileDelete")
 	logger.Infof(ctx, "deleting cocoonset %s/%s", cs.Namespace, cs.Name)
 
-	var podList corev1.PodList
-	if err := r.List(
-		ctx, &podList,
-		client.InNamespace(cs.Namespace),
-		client.MatchingLabels{meta.LabelCocoonSet: cs.Name},
-	); err != nil {
-		return ctrl.Result{}, fmt.Errorf("list owned pods for delete: %w", err)
+	owned, listErr := r.listOwnedPods(ctx, cs)
+	if listErr != nil {
+		return ctrl.Result{}, fmt.Errorf("list owned pods for delete: %w", listErr)
 	}
-	owned := filterOwnedPods(podList.Items, cs)
 
 	// Stash VM names from live pods + Status before pods disappear.
 	if err := r.stashDeleteVMNames(ctx, cs, owned); err != nil {
@@ -53,15 +48,10 @@ func (r *Reconciler) reconcileDelete(ctx context.Context, cs *cocoonv1.CocoonSet
 
 	// Requeue if any pods still exist — vk-cocoon's DeletePod may still be running
 	// snapshot save/push. We only GC epoch tags once every pod is fully gone.
-	var remaining corev1.PodList
-	if err := r.List(
-		ctx, &remaining,
-		client.InNamespace(cs.Namespace),
-		client.MatchingLabels{meta.LabelCocoonSet: cs.Name},
-	); err != nil {
-		return ctrl.Result{}, fmt.Errorf("re-list pods after delete: %w", err)
+	remainingOwned, listErr := r.listOwnedPods(ctx, cs)
+	if listErr != nil {
+		return ctrl.Result{}, fmt.Errorf("re-list pods after delete: %w", listErr)
 	}
-	remainingOwned := filterOwnedPods(remaining.Items, cs)
 	if len(remainingOwned) > 0 {
 		logger.Infof(ctx, "waiting for %d pods to terminate before GC", len(remainingOwned))
 		return ctrl.Result{RequeueAfter: requeueWaitForMain}, nil
@@ -98,15 +88,8 @@ func (r *Reconciler) reconcileDelete(ctx context.Context, cs *cocoonv1.CocoonSet
 // annotation, and live pods, then re-writes the annotation if anything changed.
 func (r *Reconciler) stashDeleteVMNames(ctx context.Context, cs *cocoonv1.CocoonSet, owned []corev1.Pod) error {
 	have := make(map[string]struct{})
-	for _, a := range cs.Status.Agents {
-		if a.VMName != "" {
-			have[a.VMName] = struct{}{}
-		}
-	}
-	for _, tb := range cs.Status.Toolboxes {
-		if tb.VMName != "" {
-			have[tb.VMName] = struct{}{}
-		}
+	for _, n := range statusVMNames(cs) {
+		have[n] = struct{}{}
 	}
 	for _, n := range parseVMNamesAnnotation(cs.Annotations[annotationDeleteVMNames]) {
 		have[n] = struct{}{}
@@ -138,6 +121,14 @@ func vmNamesForGC(cs *cocoonv1.CocoonSet) []string {
 	if names := parseVMNamesAnnotation(cs.Annotations[annotationDeleteVMNames]); len(names) > 0 {
 		return names
 	}
+	names := statusVMNames(cs)
+	slices.Sort(names)
+	return names
+}
+
+// statusVMNames collects the non-empty VM names recorded in the CocoonSet
+// status, agents first then toolboxes, preserving insertion order.
+func statusVMNames(cs *cocoonv1.CocoonSet) []string {
 	names := make([]string, 0, len(cs.Status.Agents)+len(cs.Status.Toolboxes))
 	for _, a := range cs.Status.Agents {
 		if a.VMName != "" {
@@ -149,7 +140,6 @@ func vmNamesForGC(cs *cocoonv1.CocoonSet) []string {
 			names = append(names, tb.VMName)
 		}
 	}
-	slices.Sort(names)
 	return names
 }
 

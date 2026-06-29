@@ -29,7 +29,7 @@ func (r *Reconciler) ensureToolboxes(ctx context.Context, cs *cocoonv1.CocoonSet
 	}
 	changed := false
 	for _, tb := range cs.Spec.Toolboxes {
-		podName := fmt.Sprintf("%s-%s", cs.Name, tb.Name)
+		podName := toolboxPodName(cs.Name, tb.Name)
 		if classified.allByName[podName] != nil && classified.toolbox[tb.Name] == nil {
 			return changed, fmt.Errorf("create toolbox %s: name collision with existing pod %s", tb.Name, podName)
 		}

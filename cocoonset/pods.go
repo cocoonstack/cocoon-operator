@@ -115,7 +115,7 @@ func buildAgentPod(cs *cocoonv1.CocoonSet, slot int32, mainVMName, bindNodeName 
 }
 
 func buildToolboxPod(cs *cocoonv1.CocoonSet, tb cocoonv1.ToolboxSpec, scheme *runtime.Scheme) (*corev1.Pod, error) {
-	podName := fmt.Sprintf("%s-%s", cs.Name, tb.Name)
+	podName := toolboxPodName(cs.Name, tb.Name)
 	vmName := meta.VMNameForPod(cs.Namespace, podName)
 
 	pod, err := newManagedPod(cs, podName, meta.RoleToolbox, tb.Name, scheme)
@@ -132,6 +132,12 @@ func buildToolboxPod(cs *cocoonv1.CocoonSet, tb cocoonv1.ToolboxSpec, scheme *ru
 	pod.Spec.Containers[0].Resources = tb.Resources
 	applyStorageRequest(pod, tb.Storage)
 	return pod, nil
+}
+
+// toolboxPodName is the deterministic pod name for a toolbox, shared by the
+// builder and the collision check so the two cannot diverge.
+func toolboxPodName(csName, tbName string) string {
+	return fmt.Sprintf("%s-%s", csName, tbName)
 }
 
 func newManagedPod(cs *cocoonv1.CocoonSet, podName, role, slotLabel string, scheme *runtime.Scheme) (*corev1.Pod, error) {

@@ -187,7 +187,7 @@ func (r *Reconciler) patchRebuildHistory(ctx context.Context, cs *cocoonv1.Cocoo
 	}
 	csCopy.Annotations[annotationRebuildHistory] = enc
 	if err := r.Patch(ctx, csCopy, client.MergeFrom(cs)); err != nil {
-		return err
+		return fmt.Errorf("patch rebuild history: %w", err)
 	}
 	if cs.Annotations == nil {
 		cs.Annotations = map[string]string{}
