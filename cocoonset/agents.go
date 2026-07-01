@@ -37,6 +37,11 @@ func (r *Reconciler) ensureSubAgents(ctx context.Context, cs *cocoonv1.CocoonSet
 	changed := false
 	var requeueAfter time.Duration
 
+	restorable, err := r.restorableFromHibernateByCR(ctx, cs.Namespace)
+	if err != nil {
+		return changed, requeueAfter, err
+	}
+
 	g, gctx := errgroup.WithContext(ctx)
 	g.SetLimit(subAgentCreateConcurrency)
 	var created atomic.Bool
@@ -58,6 +63,10 @@ func (r *Reconciler) ensureSubAgents(ctx context.Context, cs *cocoonv1.CocoonSet
 			subPod, err := buildAgentPod(cs, slot, mainVMName, mainNodeName, r.Scheme)
 			if err != nil {
 				return fmt.Errorf("build sub-agent slot %d: %w", slot, err)
+			}
+			_, intent := restorable[subPod.Name]
+			if err := r.markRestoreIfHibernated(gctx, subPod, intent); err != nil {
+				return fmt.Errorf("mark restore sub-agent slot %d: %w", slot, err)
 			}
 			if err := r.Create(gctx, subPod); err != nil {
 				if apierrors.IsAlreadyExists(err) {

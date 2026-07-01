@@ -28,6 +28,9 @@ func (r *Reconciler) reconcileSuspend(ctx context.Context, cs *cocoonv1.CocoonSe
 		if err != nil {
 			return ctrl.Result{}, fmt.Errorf("build main agent before suspend: %w", err)
 		}
+		if err := r.markRestoreIfHibernated(ctx, mainPod, cs.Spec.Suspend); err != nil {
+			return ctrl.Result{}, err
+		}
 		if err := r.Create(ctx, mainPod); err != nil {
 			return ctrl.Result{}, fmt.Errorf("create main agent before suspend: %w", err)
 		}
