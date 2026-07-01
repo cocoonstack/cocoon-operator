@@ -110,11 +110,25 @@ CLI flags (`--metrics-bind-address`, `--health-probe-bind-address`, `--leader-el
 
 ## Installation
 
+The operator authenticates to an OCI registry (e.g. Artifact Registry) for
+snapshot existence checks and cleanup, so it needs a registry URL and a writer
+credential in addition to the kustomize apply:
+
 ```bash
+# 1. Install the CRDs, RBAC, and Deployment (creates the cocoon-system namespace).
 kubectl apply -k github.com/cocoonstack/cocoon-operator/config/default?ref=main
+
+# 2. Create the Artifact Registry writer credential the manager mounts. Without
+#    this Secret the manager Pod stays Pending on the missing volume.
+kubectl -n cocoon-system create secret generic cocoon-ar-writer-key \
+  --from-file=key.json=/path/to/artifactregistry-writer-key.json
+
+# 3. Point OCI_REGISTRY at your registry (the shipped manifest is a placeholder).
+kubectl -n cocoon-system set env deploy/cocoon-operator \
+  OCI_REGISTRY=REGION-docker.pkg.dev/PROJECT/REPO
 ```
 
-This installs:
+Step 1 installs:
 - `cocoon-system` namespace
 - Both CRDs (imported from `cocoon-common` via `make import-crds`)
 - `ServiceAccount`, `ClusterRole`, and `ClusterRoleBinding`
