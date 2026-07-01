@@ -56,7 +56,7 @@ func (r *Reconciler) reconcileSuspend(ctx context.Context, cs *cocoonv1.CocoonSe
 // Returns (false, nil) whenever the expected state is not yet observed so
 // the caller requeues rather than treats it as an error.
 func (r *Reconciler) allOwnedPodsHibernated(ctx context.Context, classified classifiedPods) (bool, error) {
-	if r.Epoch == nil {
+	if r.Registry == nil {
 		// No registry configured; epoch-less deployments have no snapshot to
 		// observe, so treat the annotation write as authoritative.
 		return true, nil
@@ -73,7 +73,7 @@ func (r *Reconciler) allOwnedPodsHibernated(ctx context.Context, classified clas
 		if spec.VMName == "" {
 			return false, nil
 		}
-		present, err := r.Epoch.HasManifest(ctx, spec.VMName, meta.HibernateSnapshotTag)
+		present, err := r.Registry.HasManifest(ctx, spec.VMName, meta.HibernateSnapshotTag)
 		if err != nil {
 			return false, fmt.Errorf("probe hibernate snapshot %s: %w", spec.VMName, err)
 		}

@@ -216,7 +216,7 @@ func TestAllOwnedPodsHibernatedWaitsForEachManagedPod(t *testing.T) {
 	reg := &fakeRegistry{present: map[string]bool{
 		"vk-ns-demo-0:" + meta.HibernateSnapshotTag: true,
 	}}
-	r := &Reconciler{Scheme: scheme, Epoch: reg}
+	r := &Reconciler{Scheme: scheme, Registry: reg}
 
 	done, err := r.allOwnedPodsHibernated(t.Context(), classified)
 	if err != nil {
@@ -255,7 +255,7 @@ func TestAllOwnedPodsHibernatedSkipsUnmanagedToolbox(t *testing.T) {
 	reg := &fakeRegistry{present: map[string]bool{
 		"vk-ns-demo-0:" + meta.HibernateSnapshotTag: true,
 	}}
-	r := &Reconciler{Scheme: scheme, Epoch: reg}
+	r := &Reconciler{Scheme: scheme, Registry: reg}
 
 	done, err := r.allOwnedPodsHibernated(t.Context(), classified)
 	if err != nil {
@@ -276,7 +276,7 @@ func TestAllOwnedPodsHibernatedPropagatesProbeError(t *testing.T) {
 		toolbox:   map[string]*corev1.Pod{},
 		allByName: map[string]*corev1.Pod{main.Name: main},
 	}
-	r := &Reconciler{Scheme: scheme, Epoch: &fakeRegistry{probeErr: errors.New("transport boom")}}
+	r := &Reconciler{Scheme: scheme, Registry: &fakeRegistry{probeErr: errors.New("transport boom")}}
 	if _, err := r.allOwnedPodsHibernated(t.Context(), classified); err == nil {
 		t.Fatal("expected probe error to surface")
 	}
@@ -363,7 +363,7 @@ func TestReconcileMainLifecycleFailedTransitionsToFailed(t *testing.T) {
 		WithObjects(cs, mainPod).
 		WithStatusSubresource(&cocoonv1.CocoonSet{}).
 		Build()
-	r := &Reconciler{Client: cli, Scheme: scheme, Epoch: &fakeRegistry{}}
+	r := &Reconciler{Client: cli, Scheme: scheme, Registry: &fakeRegistry{}}
 
 	if _, err := r.Reconcile(t.Context(), ctrl.Request{NamespacedName: types.NamespacedName{Namespace: cs.Namespace, Name: cs.Name}}); err != nil {
 		t.Fatalf("Reconcile: %v", err)
@@ -557,7 +557,7 @@ func TestReconcileDeleteSnapshotPolicyGC(t *testing.T) {
 
 			cli := ctrlfake.NewClientBuilder().WithScheme(scheme).WithObjects(cs).Build()
 			reg := &fakeRegistry{}
-			r := &Reconciler{Client: cli, Scheme: scheme, Epoch: reg}
+			r := &Reconciler{Client: cli, Scheme: scheme, Registry: reg}
 
 			if _, err := r.reconcileDelete(t.Context(), cs); err != nil {
 				t.Fatalf("reconcileDelete: %v", err)
@@ -583,7 +583,7 @@ func TestReconcileDeleteStashesPodVMNamesEvenWhenStatusIsEmpty(t *testing.T) {
 		WithObjects(cs, mustBuildAgentPod(t, cs, 0, "", "", scheme)).
 		Build()
 	reg := &fakeRegistry{}
-	r := &Reconciler{Client: cli, Scheme: scheme, Epoch: reg}
+	r := &Reconciler{Client: cli, Scheme: scheme, Registry: reg}
 
 	if _, err := r.reconcileDelete(t.Context(), cs); err != nil {
 		t.Fatalf("reconcileDelete: %v", err)
@@ -611,7 +611,7 @@ func TestReconcileDeleteCleansTagsAfterPodsGone(t *testing.T) {
 
 	cli := ctrlfake.NewClientBuilder().WithScheme(scheme).WithObjects(cs).Build()
 	reg := &fakeRegistry{}
-	r := &Reconciler{Client: cli, Scheme: scheme, Epoch: reg}
+	r := &Reconciler{Client: cli, Scheme: scheme, Registry: reg}
 
 	if _, err := r.reconcileDelete(t.Context(), cs); err != nil {
 		t.Fatalf("reconcileDelete: %v", err)

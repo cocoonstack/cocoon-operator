@@ -33,7 +33,7 @@ const (
 type Reconciler struct {
 	client.Client
 	Scheme   *runtime.Scheme
-	Epoch    snapshot.Registry
+	Registry snapshot.Registry
 	Recorder record.EventRecorder
 }
 

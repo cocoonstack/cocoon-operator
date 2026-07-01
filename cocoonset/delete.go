@@ -59,15 +59,15 @@ func (r *Reconciler) reconcileDelete(ctx context.Context, cs *cocoonv1.CocoonSet
 
 	// :hibernate is always orphaned at teardown — drop unconditionally. :latest
 	// is kept when shouldKeepLatestTag says vk-cocoon pushed it for retag.
-	if r.Epoch != nil {
+	if r.Registry != nil {
 		for _, name := range vmNamesForGC(cs) {
-			if err := r.Epoch.DeleteManifest(ctx, name, meta.HibernateSnapshotTag); err != nil {
+			if err := r.Registry.DeleteManifest(ctx, name, meta.HibernateSnapshotTag); err != nil {
 				logger.Warnf(ctx, "delete snapshot %s:%s: %v", name, meta.HibernateSnapshotTag, err)
 			}
 			if shouldKeepLatestTag(cs, name) {
 				continue
 			}
-			if err := r.Epoch.DeleteManifest(ctx, name, meta.DefaultSnapshotTag); err != nil {
+			if err := r.Registry.DeleteManifest(ctx, name, meta.DefaultSnapshotTag); err != nil {
 				logger.Warnf(ctx, "delete snapshot %s:%s: %v", name, meta.DefaultSnapshotTag, err)
 			}
 		}

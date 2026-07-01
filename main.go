@@ -110,7 +110,7 @@ func main() {
 	if err = (&cocoonset.Reconciler{
 		Client:   mgr.GetClient(),
 		Scheme:   mgr.GetScheme(),
-		Epoch:    registry,
+		Registry: registry,
 		Recorder: recorder,
 	}).SetupWithManager(ctx, mgr); err != nil {
 		logger.Fatalf(ctx, err, "register cocoonset.Reconciler: %v", err)
@@ -118,7 +118,7 @@ func main() {
 	if err = (&hibernation.Reconciler{
 		Client:   mgr.GetClient(),
 		Scheme:   mgr.GetScheme(),
-		Epoch:    registry,
+		Registry: registry,
 		Recorder: recorder,
 	}).SetupWithManager(ctx, mgr); err != nil {
 		logger.Fatalf(ctx, err, "register hibernation.Reconciler: %v", err)

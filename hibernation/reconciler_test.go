@@ -129,7 +129,7 @@ func TestReconcileAddsFinalizerAndRequeues(t *testing.T) {
 		WithObjects(hib).
 		WithStatusSubresource(&cocoonv1.CocoonHibernation{}).
 		Build()
-	r := &Reconciler{Client: cli, Scheme: scheme, Epoch: &fakeRegistry{}}
+	r := &Reconciler{Client: cli, Scheme: scheme, Registry: &fakeRegistry{}}
 
 	res, err := r.Reconcile(t.Context(), ctrl.Request{
 		NamespacedName: types.NamespacedName{Namespace: "ns", Name: "hib"},
@@ -171,7 +171,7 @@ func TestReconcileDeleteClearsHibernateTagAndFinalizer(t *testing.T) {
 		WithStatusSubresource(&cocoonv1.CocoonHibernation{}).
 		Build()
 	reg := &fakeRegistry{}
-	r := &Reconciler{Client: cli, Scheme: scheme, Epoch: reg}
+	r := &Reconciler{Client: cli, Scheme: scheme, Registry: reg}
 
 	if _, err := r.reconcileDelete(t.Context(), hib); err != nil {
 		t.Fatalf("reconcileDelete: %v", err)
@@ -207,7 +207,7 @@ func TestReconcileDeleteSkipsTagWhenVMNameMissing(t *testing.T) {
 		WithStatusSubresource(&cocoonv1.CocoonHibernation{}).
 		Build()
 	reg := &fakeRegistry{}
-	r := &Reconciler{Client: cli, Scheme: scheme, Epoch: reg}
+	r := &Reconciler{Client: cli, Scheme: scheme, Registry: reg}
 
 	if _, err := r.reconcileDelete(t.Context(), hib); err != nil {
 		t.Fatalf("reconcileDelete: %v", err)
@@ -248,9 +248,9 @@ func TestReconcileHibernateSurfacesProbeError(t *testing.T) {
 		Build()
 
 	r := &Reconciler{
-		Client: cli,
-		Scheme: scheme,
-		Epoch:  &fakeRegistry{manifestErr: errors.New("transport boom")},
+		Client:   cli,
+		Scheme:   scheme,
+		Registry: &fakeRegistry{manifestErr: errors.New("transport boom")},
 	}
 
 	res, err := r.Reconcile(t.Context(), ctrl.Request{
@@ -259,7 +259,7 @@ func TestReconcileHibernateSurfacesProbeError(t *testing.T) {
 	if err == nil {
 		t.Fatalf("expected probe error to surface from Reconcile, got nil")
 	}
-	if !errors.Is(err, r.Epoch.(*fakeRegistry).manifestErr) {
+	if !errors.Is(err, r.Registry.(*fakeRegistry).manifestErr) {
 		t.Errorf("Reconcile err = %v, want wrap of transport boom", err)
 	}
 	if res.RequeueAfter != 0 {
@@ -287,9 +287,9 @@ func TestReconcileHibernateFoldsAbsenceToRequeue(t *testing.T) {
 		Build()
 
 	r := &Reconciler{
-		Client: cli,
-		Scheme: scheme,
-		Epoch:  &fakeRegistry{}, // absent, no error
+		Client:   cli,
+		Scheme:   scheme,
+		Registry: &fakeRegistry{}, // absent, no error
 	}
 	res, err := r.Reconcile(t.Context(), ctrl.Request{
 		NamespacedName: types.NamespacedName{Namespace: "ns", Name: "hib"},
@@ -381,7 +381,7 @@ func TestReconcileWakeFailsOnTimeout(t *testing.T) {
 		WithObjects(hib, pod).
 		WithStatusSubresource(&cocoonv1.CocoonHibernation{}).
 		Build()
-	r := &Reconciler{Client: cli, Scheme: scheme, Epoch: &fakeRegistry{}}
+	r := &Reconciler{Client: cli, Scheme: scheme, Registry: &fakeRegistry{}}
 
 	if _, err := r.Reconcile(t.Context(), ctrl.Request{
 		NamespacedName: types.NamespacedName{Namespace: "ns", Name: "hib"},
@@ -427,7 +427,7 @@ func TestReconcileWakeRecoversFromFailed(t *testing.T) {
 		WithObjects(hib, pod).
 		WithStatusSubresource(&cocoonv1.CocoonHibernation{}).
 		Build()
-	r := &Reconciler{Client: cli, Scheme: scheme, Epoch: &fakeRegistry{}}
+	r := &Reconciler{Client: cli, Scheme: scheme, Registry: &fakeRegistry{}}
 
 	if _, err := r.Reconcile(t.Context(), ctrl.Request{
 		NamespacedName: types.NamespacedName{Namespace: "ns", Name: "hib"},
@@ -490,7 +490,7 @@ func TestReconcileWakeClearsHibernateResidueOnFastPath(t *testing.T) {
 		WithObjects(hib, pod).
 		WithStatusSubresource(&cocoonv1.CocoonHibernation{}).
 		Build()
-	r := &Reconciler{Client: cli, Scheme: scheme, Epoch: &fakeRegistry{}}
+	r := &Reconciler{Client: cli, Scheme: scheme, Registry: &fakeRegistry{}}
 
 	if _, err := r.Reconcile(t.Context(), ctrl.Request{
 		NamespacedName: types.NamespacedName{Namespace: "ns", Name: "hib"},
@@ -585,7 +585,7 @@ func TestReconcileHibernateFailsOnTimeout(t *testing.T) {
 		WithObjects(hib, pod).
 		WithStatusSubresource(&cocoonv1.CocoonHibernation{}).
 		Build()
-	r := &Reconciler{Client: cli, Scheme: scheme, Epoch: &fakeRegistry{}}
+	r := &Reconciler{Client: cli, Scheme: scheme, Registry: &fakeRegistry{}}
 
 	if _, err := r.Reconcile(t.Context(), ctrl.Request{
 		NamespacedName: types.NamespacedName{Namespace: "ns", Name: "hib"},
@@ -631,7 +631,7 @@ func TestReconcileHibernateRecoversFromFailed(t *testing.T) {
 		WithObjects(hib, pod).
 		WithStatusSubresource(&cocoonv1.CocoonHibernation{}).
 		Build()
-	r := &Reconciler{Client: cli, Scheme: scheme, Epoch: &fakeRegistry{}}
+	r := &Reconciler{Client: cli, Scheme: scheme, Registry: &fakeRegistry{}}
 
 	if _, err := r.Reconcile(t.Context(), ctrl.Request{
 		NamespacedName: types.NamespacedName{Namespace: "ns", Name: "hib"},
@@ -734,7 +734,7 @@ func TestReconcilePendingWhenPodMissing(t *testing.T) {
 		WithObjects(hib).
 		WithStatusSubresource(&cocoonv1.CocoonHibernation{}).
 		Build()
-	r := &Reconciler{Client: cli, Scheme: scheme, Epoch: &fakeRegistry{}}
+	r := &Reconciler{Client: cli, Scheme: scheme, Registry: &fakeRegistry{}}
 
 	res, err := r.Reconcile(t.Context(), ctrl.Request{
 		NamespacedName: types.NamespacedName{Namespace: "ns", Name: "hib"},
@@ -771,7 +771,7 @@ func TestReconcilePendingWhenPodMissingVMName(t *testing.T) {
 		WithObjects(hib, pod).
 		WithStatusSubresource(&cocoonv1.CocoonHibernation{}).
 		Build()
-	r := &Reconciler{Client: cli, Scheme: scheme, Epoch: &fakeRegistry{}}
+	r := &Reconciler{Client: cli, Scheme: scheme, Registry: &fakeRegistry{}}
 
 	res, err := r.Reconcile(t.Context(), ctrl.Request{
 		NamespacedName: types.NamespacedName{Namespace: "ns", Name: "hib"},
