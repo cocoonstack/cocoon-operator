@@ -29,8 +29,9 @@ spec:
           env:
             - name: OPERATOR_LOG_LEVEL
               value: info
+            # Placeholder — override per-cluster at deploy (kubectl set env or an overlay).
             - name: OCI_REGISTRY
-              value: asia-southeast1-docker.pkg.dev/simular-note/cocoon-artifacts
+              value: asia-southeast1-docker.pkg.dev/PROJECT/REPO
             - name: GOOGLE_APPLICATION_CREDENTIALS
               value: /var/run/secrets/gcp/key.json
           ports:
