@@ -61,14 +61,16 @@ func (r *Reconciler) reconcileDelete(ctx context.Context, cs *cocoonv1.CocoonSet
 	// is kept when shouldKeepLatestTag says vk-cocoon pushed it for retag.
 	if r.Registry != nil {
 		for _, name := range vmNamesForGC(cs) {
+			// Non-fatal, but log at error: a persistent delete failure (e.g. the
+			// registry SA lacking delete permission) silently leaks snapshots.
 			if err := r.Registry.DeleteManifest(ctx, name, meta.HibernateSnapshotTag); err != nil {
-				logger.Warnf(ctx, "delete snapshot %s:%s: %v", name, meta.HibernateSnapshotTag, err)
+				logger.Errorf(ctx, err, "delete snapshot %s:%s", name, meta.HibernateSnapshotTag)
 			}
 			if shouldKeepLatestTag(cs, name) {
 				continue
 			}
 			if err := r.Registry.DeleteManifest(ctx, name, meta.DefaultSnapshotTag); err != nil {
-				logger.Warnf(ctx, "delete snapshot %s:%s: %v", name, meta.DefaultSnapshotTag, err)
+				logger.Errorf(ctx, err, "delete snapshot %s:%s", name, meta.DefaultSnapshotTag)
 			}
 		}
 	} else {

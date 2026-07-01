@@ -152,7 +152,7 @@ func (r *Reconciler) reconcileDelete(ctx context.Context, hib *cocoonv1.CocoonHi
 	logger := log.WithFunc("hibernation.Reconciler.reconcileDelete")
 	if r.Registry != nil && hib.Status.VMName != "" {
 		if err := r.Registry.DeleteManifest(ctx, hib.Status.VMName, meta.HibernateSnapshotTag); err != nil {
-			logger.Warnf(ctx, "delete hibernate snapshot %s: %v", hib.Status.VMName, err)
+			logger.Errorf(ctx, err, "delete hibernate snapshot %s", hib.Status.VMName)
 		}
 	}
 	r.observed.Delete(string(hib.UID))

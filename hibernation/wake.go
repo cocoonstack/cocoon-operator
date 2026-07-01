@@ -24,9 +24,11 @@ func (r *Reconciler) reconcileWake(ctx context.Context, hib *cocoonv1.CocoonHibe
 	}
 
 	if vmClonedAndRunning(pod) {
-		// Drop snapshot tag (non-fatal; stale tag gets overwritten on next hibernate).
+		// Drop the snapshot tag. Non-fatal to the wake, but log at error: a
+		// persistent failure (e.g. the registry SA lacking delete permission)
+		// silently leaks every hibernate snapshot.
 		if err := r.Registry.DeleteManifest(ctx, vmName, meta.HibernateSnapshotTag); err != nil {
-			logger.Warnf(ctx, "delete hibernation snapshot %s: %v", vmName, err)
+			logger.Errorf(ctx, err, "delete hibernation snapshot %s", vmName)
 		}
 		if r.firstTransitionAt(hib) {
 			observePhaseExit(hib, "ok")
