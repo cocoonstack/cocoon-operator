@@ -26,7 +26,7 @@ func (r *Reconciler) reconcileHibernate(ctx context.Context, hib *cocoonv1.Cocoo
 	if present {
 		if r.firstTransitionAt(hib) {
 			observePhaseExit(hib, "ok")
-			r.emitNormalf(hib, "Hibernated", "snapshot %s pushed to epoch", vmName)
+			r.emitNormalf(hib, "Hibernated", "snapshot %s pushed to the registry", vmName)
 		}
 		return ctrl.Result{}, r.setPhase(ctx, hib, cocoonv1.CocoonHibernationPhaseHibernated, vmName)
 	}

@@ -26,7 +26,7 @@ cocoon-operator/
 │  ┌────────────────────────┐    ┌─────────────────────────────┐  │
 │  │  cocoonset.Reconciler  │    │ hibernation.Reconciler      │  │
 │  │  - finalizer + GC       │    │  - HibernateState patches   │  │
-│  │  - main → subs → tbs    │    │  - epoch.HasManifest probe  │  │
+│  │  - main → subs → tbs    │    │  - registry manifest probe  │  │
 │  │  - patch /status        │    │  - Conditions               │  │
 │  └────────┬───────────────┘    └────────────┬────────────────┘  │
 │           │                                  │                   │
@@ -44,12 +44,12 @@ cocoon-operator/
 ### CocoonSet reconcile loop
 
 1. Fetch the CocoonSet (return early on NotFound).
-2. If `DeletionTimestamp` is set, walk owned pods, delete them, `epoch.DeleteManifest` for both `:latest` and `:hibernate` tags on every owned VM (unconditional — DeleteManifest is 404-tolerant, and hibernate pushes ignore snapshotPolicy so any main-only gate would orphan `:hibernate` tags pushed by sub-agents), then drop the finalizer. VM names to GC are stashed onto an annotation before pod deletion so the cleanup survives a CocoonSet deleted before `Status.Agents` was ever patched.
+2. If `DeletionTimestamp` is set, walk owned pods, delete them, `Registry.DeleteManifest` for both `:latest` and `:hibernate` tags on every owned VM (unconditional — DeleteManifest is 404-tolerant, and hibernate pushes ignore snapshotPolicy so any main-only gate would orphan `:hibernate` tags pushed by sub-agents), then drop the finalizer. VM names to GC are stashed onto an annotation before pod deletion so the cleanup survives a CocoonSet deleted before `Status.Agents` was ever patched.
 3. Ensure the `cocoonset.cocoonstack.io/finalizer` is in place.
 4. List owned pods by `cocoonset.cocoonstack.io/name=<cs.Name>`, drop any with stale labels that aren't actually controller-owned, and classify the rest by role label.
 5. **Lifecycle-bridge stamp**: patch `cs.Generation` onto each owned pod's `cocoonset.cocoonstack.io/generation` annotation so vk-cocoon can echo it back as `lifecycle-observed-generation`, giving clients a counter-based completion signal immune to wallclock skew.
 6. **Failed-state short-circuit**: if the main pod is terminal (`Pod.Phase=Failed`, or it carries `vm.cocoonstack.io/lifecycle-state=Failed` from vk-cocoon while still Running), patch `Phase=Failed` and emit `MainAgentFailed` / `PodLifecycleFailed`. The Failed phase is recoverable: when the main pod becomes `Ready` again the operator emits `RecoveredFromFailure` and resumes normal reconciliation.
-7. **Suspend short-circuit**: if `spec.suspend == true`, write `meta.HibernateState(true)` onto every owned pod and poll epoch for `:hibernate` manifests on every managed VM. Stay in `Phase=Suspending` (requeueing every 5 s) until every required snapshot lands, then transition to `Phase=Suspended`.
+7. **Suspend short-circuit**: if `spec.suspend == true`, write `meta.HibernateState(true)` onto every owned pod and poll the registry for `:hibernate` manifests on every managed VM. Stay in `Phase=Suspending` (requeueing every 5 s) until every required snapshot lands, then transition to `Phase=Suspended`.
 8. **Un-suspend**: if `spec.suspend == false` and any owned pod still carries the hibernate annotation from a prior suspend, clear it via `PatchHibernateState(false)` so vk-cocoon wakes the VMs. Pods that are the active target of a `desire=Hibernate` CocoonHibernation CR are skipped to avoid racing the hibernation reconciler. `PatchHibernateState(false)` is a no-op on pods whose annotation is already absent, so this is cheap in the common "never suspended" case.
 9. Ensure the **main agent** (slot 0). If the existing pod has drifted from spec, delete it for recreate. If it is not yet `Ready`, requeue in 5 s and report `Phase=Pending`.
 10. Ensure sub-agents `[1..Replicas]` (creates are fanned out via an errgroup capped at 8 concurrent pod creates so a large scale-up does not burst the apiserver); delete extras above the requested count.
@@ -62,12 +62,12 @@ Pods are constructed via `meta.FromAgentSpec` / `meta.FromToolboxSpec` factory h
 
 | Spec.Desire | What the reconciler does | Terminal phase |
 |---|---|---|
-| `Hibernate` | `meta.HibernateState(true).Apply` on the target pod, then poll `epoch.HasManifest(vmName, meta.HibernateSnapshotTag)` until the snapshot lands or `hibernateTimeout` (3 minutes) trips. A probe error (transport / 5xx / auth) surfaces as a returned error so controller-runtime logs + retries with backoff. | `Hibernated` |
-| `Wake` | Check if the container is already `Running` (skip annotation patch if so), otherwise clear `meta.HibernateState` **once** (skip if already cleared to avoid triggering informer events on every requeue cycle), then wait for the container to be `Running` and drop the hibernation snapshot tag from epoch. A wake that does not complete within `wakeTimeout` (5 minutes) is escalated to `Phase=Failed` with a dated message in the `Ready` condition. | `Active` |
+| `Hibernate` | `meta.HibernateState(true).Apply` on the target pod, then poll `Registry.HasManifest(vmName, meta.HibernateSnapshotTag)` until the snapshot lands or `hibernateTimeout` (3 minutes) trips. A probe error (transport / 5xx / auth) surfaces as a returned error so controller-runtime logs + retries with backoff. | `Hibernated` |
+| `Wake` | Check if the container is already `Running` (skip annotation patch if so), otherwise clear `meta.HibernateState` **once** (skip if already cleared to avoid triggering informer events on every requeue cycle), then wait for the container to be `Running` and drop the hibernation snapshot tag from the registry. A wake that does not complete within `wakeTimeout` (5 minutes) is escalated to `Phase=Failed` with a dated message in the `Ready` condition. | `Active` |
 
-On CR deletion the reconciler runs a finalizer (`cocoonhibernation.cocoonset.cocoonstack.io/finalizer`) that clears the `:hibernate` tag from epoch (if `Status.VMName` is set) before removing itself, so deleting a CocoonHibernation never leaves an orphaned snapshot on the registry.
+On CR deletion the reconciler runs a finalizer (`cocoonhibernation.cocoonset.cocoonstack.io/finalizer`) that clears the `:hibernate` tag from the registry (if `Status.VMName` is set) before removing itself, so deleting a CocoonHibernation never leaves an orphaned snapshot on the registry.
 
-There is no `cocoon-vm-snapshots` ConfigMap bridge — epoch is the single source of truth for hibernation state. Failure paths set `Phase=Failed` with a one-shot message in the `Ready` condition instead of looping forever on a bad reference. Both `Hibernate` and `Wake` Failed phases are recoverable: on re-entry from a non-deadline phase the reconciler refreshes the Ready condition's `LastTransitionTime` so the budget resets cleanly (without the override, `apimeta.SetStatusCondition` would preserve the stale timestamp across the `False → False` transition and the recovered phase would trip the deadline on the next reconcile). Each retry emits a `RetryRequested` Normal Event so the recovery is visible in `kubectl describe`.
+There is no `cocoon-vm-snapshots` ConfigMap bridge — the registry is the single source of truth for hibernation state. Failure paths set `Phase=Failed` with a one-shot message in the `Ready` condition instead of looping forever on a bad reference. Both `Hibernate` and `Wake` Failed phases are recoverable: on re-entry from a non-deadline phase the reconciler refreshes the Ready condition's `LastTransitionTime` so the budget resets cleanly (without the override, `apimeta.SetStatusCondition` would preserve the stale timestamp across the `False → False` transition and the recovered phase would trip the deadline on the next reconcile). Each retry emits a `RetryRequested` Normal Event so the recovery is visible in `kubectl describe`.
 
 ### Observability
 
@@ -101,9 +101,7 @@ cocoon_operator_lifecycle_state_failed_observed_total{phase}
 |---|---|---|
 | `KUBECONFIG` | unset | Path to kubeconfig when running outside the cluster |
 | `OPERATOR_LOG_LEVEL` | `info` | `projecteru2/core/log` level |
-| `EPOCH_URL` | `http://epoch.cocoon-system.svc:8080` | Base URL of the epoch registry |
-| `EPOCH_TOKEN` | unset | Bearer token (read-only is enough) |
-| `EPOCH_CA_CERT` | unset | Read internally by `github.com/cocoonstack/epoch/registryclient` — see that package for the exact env names. |
+| `OCI_REGISTRY` | **required** | OCI registry base for snapshot manifests (e.g. an Artifact Registry repo). Auth resolves GCP ADC then docker config. |
 | `METRICS_ADDR` | `:8080` | Prometheus listener |
 | `PROBE_ADDR` | `:8081` | healthz / readyz listener |
 | `LEADER_ELECT` | `true` | Enable leader election so only one replica reconciles |
@@ -153,9 +151,8 @@ The Makefile detects Go workspace mode (`go env GOWORK`) and skips `go mod tidy`
 
 | Project | Role |
 |---|---|
-| [cocoon-common](https://github.com/cocoonstack/cocoon-common) | CRD types, annotation contract, shared helpers |
+| [cocoon-common](https://github.com/cocoonstack/cocoon-common) | CRD types, annotation contract, shared helpers, and the OCI registry client |
 | [cocoon-webhook](https://github.com/cocoonstack/cocoon-webhook) | Admission webhook for sticky scheduling and CocoonSet validation |
-| [epoch](https://github.com/cocoonstack/epoch) | Snapshot registry; the operator queries it via the `snapshot.Registry` interface |
 | [vk-cocoon](https://github.com/cocoonstack/vk-cocoon) | Virtual kubelet provider managing VM lifecycle |
 
 ## License

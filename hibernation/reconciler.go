@@ -41,7 +41,7 @@ const (
 	// pod watcher can resolve a pod event back to the CRs that target it.
 	indexPodRefName = "spec.podRef.name"
 
-	// finalizerName keeps the CR alive long enough to clear its :hibernate tag from epoch.
+	// finalizerName keeps the CR alive long enough to clear its :hibernate tag from the registry.
 	finalizerName = "cocoonhibernation.cocoonset.cocoonstack.io/finalizer"
 
 	conditionReasonPending = "Pending"
