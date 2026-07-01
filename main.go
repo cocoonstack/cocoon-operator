@@ -11,6 +11,8 @@ import (
 	"syscall"
 
 	"github.com/go-logr/logr"
+	"github.com/google/go-containerregistry/pkg/authn"
+	"github.com/google/go-containerregistry/pkg/v1/google"
 	"github.com/projecteru2/core/log"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -27,9 +29,11 @@ import (
 	cocoonv1 "github.com/cocoonstack/cocoon-common/apis/v1"
 	commonk8s "github.com/cocoonstack/cocoon-common/k8s"
 	commonlog "github.com/cocoonstack/cocoon-common/log"
+	"github.com/cocoonstack/cocoon-common/oci"
 	"github.com/cocoonstack/cocoon-operator/cocoonset"
 	"github.com/cocoonstack/cocoon-operator/hibernation"
 	"github.com/cocoonstack/cocoon-operator/metrics"
+	"github.com/cocoonstack/cocoon-operator/snapshot"
 	"github.com/cocoonstack/cocoon-operator/version"
 	"github.com/cocoonstack/epoch/registryclient"
 )
@@ -87,9 +91,9 @@ func main() {
 		logger.Fatalf(ctx, err, "add readyz check: %v", err)
 	}
 
-	epochClient, err := registryclient.NewFromEnv(commonk8s.EnvOrDefault("EPOCH_URL", "http://epoch.cocoon-system.svc:8080"), os.Getenv("EPOCH_TOKEN"))
+	registry, err := buildRegistry()
 	if err != nil {
-		logger.Fatalf(ctx, err, "create epoch client: %v", err)
+		logger.Fatalf(ctx, err, "create registry client: %v", err)
 	}
 
 	metrics.Register()
@@ -106,7 +110,7 @@ func main() {
 	if err = (&cocoonset.Reconciler{
 		Client:   mgr.GetClient(),
 		Scheme:   mgr.GetScheme(),
-		Epoch:    epochClient,
+		Epoch:    registry,
 		Recorder: recorder,
 	}).SetupWithManager(ctx, mgr); err != nil {
 		logger.Fatalf(ctx, err, "register cocoonset.Reconciler: %v", err)
@@ -114,7 +118,7 @@ func main() {
 	if err = (&hibernation.Reconciler{
 		Client:   mgr.GetClient(),
 		Scheme:   mgr.GetScheme(),
-		Epoch:    epochClient,
+		Epoch:    registry,
 		Recorder: recorder,
 	}).SetupWithManager(ctx, mgr); err != nil {
 		logger.Fatalf(ctx, err, "register hibernation.Reconciler: %v", err)
@@ -128,6 +132,20 @@ func main() {
 	if err = mgr.Start(signalCtx); err != nil {
 		logger.Fatalf(signalCtx, err, "manager exited with error: %v", err)
 	}
+}
+
+// buildRegistry selects the registry backend: an OCI registry when OCI_REGISTRY
+// is set (GCP ADC then docker config), else the epoch backend.
+func buildRegistry() (snapshot.Registry, error) {
+	if base := os.Getenv("OCI_REGISTRY"); base != "" {
+		keychain := authn.NewMultiKeychain(google.Keychain, authn.DefaultKeychain)
+		return oci.NewOCIRegistry(base, keychain), nil
+	}
+	client, err := registryclient.NewFromEnv(commonk8s.EnvOrDefault("EPOCH_URL", "http://epoch.cocoon-system.svc:8080"), os.Getenv("EPOCH_TOKEN"))
+	if err != nil {
+		return nil, err
+	}
+	return client, nil
 }
 
 func buildScheme() *runtime.Scheme {
