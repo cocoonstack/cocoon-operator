@@ -19,7 +19,7 @@ func (r *Reconciler) reconcileHibernate(ctx context.Context, hib *cocoonv1.Cocoo
 		return ctrl.Result{}, fmt.Errorf("patch hibernate annotation: %w", err)
 	}
 
-	present, err := r.Epoch.HasManifest(ctx, vmName, meta.HibernateSnapshotTag)
+	present, err := r.Registry.HasManifest(ctx, vmName, meta.HibernateSnapshotTag)
 	if err != nil {
 		return ctrl.Result{}, fmt.Errorf("probe hibernate snapshot %s: %w", vmName, err)
 	}

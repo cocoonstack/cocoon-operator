@@ -54,7 +54,7 @@ const (
 type Reconciler struct {
 	client.Client
 	Scheme   *runtime.Scheme
-	Epoch    snapshot.Registry
+	Registry snapshot.Registry
 	Recorder record.EventRecorder
 
 	// observed[UID] = last recorded Ready.LastTransitionTime, dedups
@@ -150,8 +150,8 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 // reconcileDelete clears the :hibernate tag (if Status.VMName is set) and removes the finalizer.
 func (r *Reconciler) reconcileDelete(ctx context.Context, hib *cocoonv1.CocoonHibernation) (ctrl.Result, error) {
 	logger := log.WithFunc("hibernation.Reconciler.reconcileDelete")
-	if r.Epoch != nil && hib.Status.VMName != "" {
-		if err := r.Epoch.DeleteManifest(ctx, hib.Status.VMName, meta.HibernateSnapshotTag); err != nil {
+	if r.Registry != nil && hib.Status.VMName != "" {
+		if err := r.Registry.DeleteManifest(ctx, hib.Status.VMName, meta.HibernateSnapshotTag); err != nil {
 			logger.Warnf(ctx, "delete hibernate snapshot %s: %v", hib.Status.VMName, err)
 		}
 	}
