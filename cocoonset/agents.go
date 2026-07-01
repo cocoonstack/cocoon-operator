@@ -37,7 +37,7 @@ func (r *Reconciler) ensureSubAgents(ctx context.Context, cs *cocoonv1.CocoonSet
 	changed := false
 	var requeueAfter time.Duration
 
-	restorable, err := r.restorableFromHibernateByCR(ctx, cs.Namespace)
+	restorable, err := r.podsRestorableByCR(ctx, cs.Namespace)
 	if err != nil {
 		return changed, requeueAfter, err
 	}

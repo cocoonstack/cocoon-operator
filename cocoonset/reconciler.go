@@ -156,7 +156,7 @@ func (r *Reconciler) createMainAgent(ctx context.Context, cs *cocoonv1.CocoonSet
 	if err != nil {
 		return ctrl.Result{}, fmt.Errorf("build main agent: %w", err)
 	}
-	restorable, err := r.restorableFromHibernateByCR(ctx, cs.Namespace)
+	restorable, err := r.podsRestorableByCR(ctx, cs.Namespace)
 	if err != nil {
 		return ctrl.Result{}, err
 	}

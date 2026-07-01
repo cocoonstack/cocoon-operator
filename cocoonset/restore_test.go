@@ -57,7 +57,7 @@ func TestMarkRestoreIfHibernatedNoRegistry(t *testing.T) {
 	}
 }
 
-func TestRestorableFromHibernateByCR(t *testing.T) {
+func TestPodsRestorableByCR(t *testing.T) {
 	hib := func(pod string, phase cocoonv1.CocoonHibernationPhase) *cocoonv1.CocoonHibernation {
 		return &cocoonv1.CocoonHibernation{
 			ObjectMeta: metav1.ObjectMeta{Name: "h-" + pod, Namespace: "ns"},
@@ -76,9 +76,9 @@ func TestRestorableFromHibernateByCR(t *testing.T) {
 		hib("hibernating", cocoonv1.CocoonHibernationPhaseHibernating),
 	).Build()
 	r := &Reconciler{Client: cli, Scheme: scheme}
-	got, err := r.restorableFromHibernateByCR(t.Context(), "ns")
+	got, err := r.podsRestorableByCR(t.Context(), "ns")
 	if err != nil {
-		t.Fatalf("restorableFromHibernateByCR: %v", err)
+		t.Fatalf("podsRestorableByCR: %v", err)
 	}
 	for _, want := range []string{"hibernated", "waking"} {
 		if _, ok := got[want]; !ok {
