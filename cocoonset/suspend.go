@@ -18,7 +18,7 @@ import (
 )
 
 // reconcileSuspend ensures the main agent exists, applies the hibernate
-// annotation to every owned pod, then polls epoch to observe when all
+// annotation to every owned pod, then polls the registry to observe when all
 // managed VMs have been pushed to snapshot. Stays in Suspending with a
 // periodic requeue until every required snapshot lands.
 func (r *Reconciler) reconcileSuspend(ctx context.Context, cs *cocoonv1.CocoonSet, classified classifiedPods) (ctrl.Result, error) {
@@ -51,13 +51,13 @@ func (r *Reconciler) reconcileSuspend(ctx context.Context, cs *cocoonv1.CocoonSe
 }
 
 // allOwnedPodsHibernated reports whether every managed owned pod has a
-// hibernate snapshot published to epoch. Unmanaged pods (e.g. static
+// hibernate snapshot published to the registry. Unmanaged pods (e.g. static
 // toolboxes) are skipped since they have no VM lifecycle to observe.
 // Returns (false, nil) whenever the expected state is not yet observed so
 // the caller requeues rather than treats it as an error.
 func (r *Reconciler) allOwnedPodsHibernated(ctx context.Context, classified classifiedPods) (bool, error) {
 	if r.Registry == nil {
-		// No registry configured; epoch-less deployments have no snapshot to
+		// No registry configured; such deployments have no snapshot to
 		// observe, so treat the annotation write as authoritative.
 		return true, nil
 	}

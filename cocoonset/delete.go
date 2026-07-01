@@ -47,7 +47,7 @@ func (r *Reconciler) reconcileDelete(ctx context.Context, cs *cocoonv1.CocoonSet
 	}
 
 	// Requeue if any pods still exist — vk-cocoon's DeletePod may still be running
-	// snapshot save/push. We only GC epoch tags once every pod is fully gone.
+	// snapshot save/push. We only GC registry tags once every pod is fully gone.
 	remainingOwned, listErr := r.listOwnedPods(ctx, cs)
 	if listErr != nil {
 		return ctrl.Result{}, fmt.Errorf("re-list pods after delete: %w", listErr)
@@ -72,7 +72,7 @@ func (r *Reconciler) reconcileDelete(ctx context.Context, cs *cocoonv1.CocoonSet
 			}
 		}
 	} else {
-		logger.Warnf(ctx, "skipping epoch tag GC for cocoonset %s/%s: registry not configured", cs.Namespace, cs.Name)
+		logger.Warnf(ctx, "skipping registry tag GC for cocoonset %s/%s: registry not configured", cs.Namespace, cs.Name)
 	}
 
 	if controllerutil.ContainsFinalizer(cs, finalizerName) {

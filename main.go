@@ -4,6 +4,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"flag"
 	"fmt"
 	"os"
@@ -35,7 +36,6 @@ import (
 	"github.com/cocoonstack/cocoon-operator/metrics"
 	"github.com/cocoonstack/cocoon-operator/snapshot"
 	"github.com/cocoonstack/cocoon-operator/version"
-	"github.com/cocoonstack/epoch/registryclient"
 )
 
 const (
@@ -134,18 +134,15 @@ func main() {
 	}
 }
 
-// buildRegistry selects the registry backend: an OCI registry when OCI_REGISTRY
-// is set (GCP ADC then docker config), else the epoch backend.
+// buildRegistry builds the OCI registry backend from OCI_REGISTRY. The keychain
+// resolves GCP ADC (google.Keychain) then docker config.
 func buildRegistry() (snapshot.Registry, error) {
-	if base := os.Getenv("OCI_REGISTRY"); base != "" {
-		keychain := authn.NewMultiKeychain(google.Keychain, authn.DefaultKeychain)
-		return oci.NewOCIRegistry(base, keychain), nil
+	base := os.Getenv("OCI_REGISTRY")
+	if base == "" {
+		return nil, errors.New("OCI_REGISTRY must be set")
 	}
-	client, err := registryclient.NewFromEnv(commonk8s.EnvOrDefault("EPOCH_URL", "http://epoch.cocoon-system.svc:8080"), os.Getenv("EPOCH_TOKEN"))
-	if err != nil {
-		return nil, err
-	}
-	return client, nil
+	keychain := authn.NewMultiKeychain(google.Keychain, authn.DefaultKeychain)
+	return oci.NewOCIRegistry(base, keychain), nil
 }
 
 func buildScheme() *runtime.Scheme {
