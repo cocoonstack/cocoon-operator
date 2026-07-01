@@ -6,6 +6,7 @@ import (
 
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 	ctrlfake "sigs.k8s.io/controller-runtime/pkg/client/fake"
 
 	cocoonv1 "github.com/cocoonstack/cocoon-common/apis/v1"
@@ -89,5 +90,50 @@ func TestPodsRestorableByCR(t *testing.T) {
 		if _, ok := got[no]; ok {
 			t.Errorf("pod %q must not be restorable (phase excludes it)", no)
 		}
+	}
+}
+
+// TestEnsureToolboxesRestoresHibernated guards the toolbox recreate path: a
+// managed toolbox hibernated via CR must be stamped restore-from-hibernate when
+// ensureToolboxes rebuilds it, so it restores rather than cold-boots (a fresh
+// boot would let a later hibernate overwrite the real snapshot).
+func TestEnsureToolboxesRestoresHibernated(t *testing.T) {
+	scheme := testScheme(t)
+	cs := &cocoonv1.CocoonSet{
+		ObjectMeta: metav1.ObjectMeta{Name: "demo", Namespace: "ns"},
+		Spec: cocoonv1.CocoonSetSpec{
+			Toolboxes: []cocoonv1.ToolboxSpec{{Name: "tb", Image: "img", Mode: cocoonv1.ToolboxModeRun}},
+		},
+	}
+	tbPodName := toolboxPodName(cs.Name, "tb")
+	tbVMName := meta.VMNameForPod(cs.Namespace, tbPodName)
+	hib := &cocoonv1.CocoonHibernation{
+		ObjectMeta: metav1.ObjectMeta{Name: "h-tb", Namespace: "ns"},
+		Spec: cocoonv1.CocoonHibernationSpec{
+			PodRef: cocoonv1.HibernationPodRef{Name: tbPodName},
+			Desire: cocoonv1.HibernationDesireHibernate,
+		},
+		Status: cocoonv1.CocoonHibernationStatus{Phase: cocoonv1.CocoonHibernationPhaseHibernated},
+	}
+	cli := ctrlfake.NewClientBuilder().WithScheme(scheme).WithObjects(cs, hib).Build()
+	r := &Reconciler{
+		Client:   cli,
+		Scheme:   scheme,
+		Registry: &fakeRegistry{present: map[string]bool{tbVMName + ":hibernate": true}},
+	}
+
+	changed, err := r.ensureToolboxes(t.Context(), cs, classifyPods(nil))
+	if err != nil {
+		t.Fatalf("ensureToolboxes: %v", err)
+	}
+	if !changed {
+		t.Fatal("expected the missing toolbox to be created")
+	}
+	var created corev1.Pod
+	if err := cli.Get(t.Context(), client.ObjectKey{Namespace: "ns", Name: tbPodName}, &created); err != nil {
+		t.Fatalf("get created toolbox: %v", err)
+	}
+	if !meta.ReadRestoreFromHibernate(&created) {
+		t.Error("recreated hibernated toolbox must be flagged restore-from-hibernate")
 	}
 }
