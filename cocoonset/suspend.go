@@ -10,7 +10,6 @@ import (
 	"github.com/projecteru2/core/log"
 	corev1 "k8s.io/api/core/v1"
 	ctrl "sigs.k8s.io/controller-runtime"
-	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	cocoonv1 "github.com/cocoonstack/cocoon-common/apis/v1"
 	commonk8s "github.com/cocoonstack/cocoon-common/k8s"
@@ -27,6 +26,10 @@ func (r *Reconciler) reconcileSuspend(ctx context.Context, cs *cocoonv1.CocoonSe
 		mainPod, err := buildAgentPod(cs, 0, "", "", r.Scheme)
 		if err != nil {
 			return ctrl.Result{}, fmt.Errorf("build main agent before suspend: %w", err)
+		}
+		// reconcileSuspend only runs under Spec.Suspend, so restore intent is unconditional.
+		if err := r.markRestoreIfHibernated(ctx, mainPod, true); err != nil {
+			return ctrl.Result{}, err
 		}
 		if err := r.Create(ctx, mainPod); err != nil {
 			return ctrl.Result{}, fmt.Errorf("create main agent before suspend: %w", err)
@@ -73,9 +76,9 @@ func (r *Reconciler) allOwnedPodsHibernated(ctx context.Context, classified clas
 		if spec.VMName == "" {
 			return false, nil
 		}
-		present, err := r.Registry.HasManifest(ctx, spec.VMName, meta.HibernateSnapshotTag)
+		present, err := r.hasHibernateSnapshot(ctx, spec.VMName)
 		if err != nil {
-			return false, fmt.Errorf("probe hibernate snapshot %s: %w", spec.VMName, err)
+			return false, err
 		}
 		if !present {
 			return false, nil
@@ -130,20 +133,7 @@ func (r *Reconciler) applyUnsuspend(ctx context.Context, namespace string, class
 
 // podsHibernatedByCR returns pod names targeted by a desire=Hibernate CR.
 func (r *Reconciler) podsHibernatedByCR(ctx context.Context, namespace string) (map[string]struct{}, error) {
-	var hibList cocoonv1.CocoonHibernationList
-	if err := r.List(ctx, &hibList, client.InNamespace(namespace)); err != nil {
-		return nil, fmt.Errorf("list cocoonhibernations in %s: %w", namespace, err)
-	}
-	out := make(map[string]struct{}, len(hibList.Items))
-	for i := range hibList.Items {
-		hib := &hibList.Items[i]
-		if hib.Spec.Desire != cocoonv1.HibernationDesireHibernate {
-			continue
-		}
-		if hib.Spec.PodRef.Name == "" {
-			continue
-		}
-		out[hib.Spec.PodRef.Name] = struct{}{}
-	}
-	return out, nil
+	return r.hibernationPodNames(ctx, namespace, func(h *cocoonv1.CocoonHibernation) bool {
+		return h.Spec.Desire == cocoonv1.HibernationDesireHibernate
+	})
 }

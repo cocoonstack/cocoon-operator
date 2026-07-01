@@ -27,6 +27,10 @@ func (r *Reconciler) ensureToolboxes(ctx context.Context, cs *cocoonv1.CocoonSet
 		}
 		desired[tb.Name] = true
 	}
+	restorable, err := r.podsRestorableByCR(ctx, cs.Namespace)
+	if err != nil {
+		return false, err
+	}
 	changed := false
 	for _, tb := range cs.Spec.Toolboxes {
 		podName := toolboxPodName(cs.Name, tb.Name)
@@ -46,6 +50,10 @@ func (r *Reconciler) ensureToolboxes(ctx context.Context, cs *cocoonv1.CocoonSet
 		tbPod, err := buildToolboxPod(cs, tb, r.Scheme)
 		if err != nil {
 			return changed, fmt.Errorf("build toolbox %s: %w", tb.Name, err)
+		}
+		_, intent := restorable[tbPod.Name]
+		if err := r.markRestoreIfHibernated(ctx, tbPod, intent); err != nil {
+			return changed, fmt.Errorf("mark restore toolbox %s: %w", tb.Name, err)
 		}
 		if err := r.Create(ctx, tbPod); err != nil {
 			if !apierrors.IsAlreadyExists(err) {

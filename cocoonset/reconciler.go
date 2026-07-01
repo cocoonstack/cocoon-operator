@@ -116,19 +116,7 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 		return ctrl.Result{Requeue: true}, nil
 	}
 	if classified.main == nil {
-		mainPod, err := buildAgentPod(&cs, 0, "", "", r.Scheme)
-		if err != nil {
-			return ctrl.Result{}, fmt.Errorf("build main agent: %w", err)
-		}
-		if err := r.Create(ctx, mainPod); err != nil {
-			if apierrors.IsAlreadyExists(err) {
-				// Old pod still Terminating; requeue and wait.
-				return ctrl.Result{RequeueAfter: requeueWaitForMain}, nil
-			}
-			return ctrl.Result{}, fmt.Errorf("create main agent: %w", err)
-		}
-		logger.Infof(ctx, "created main agent %s/%s", mainPod.Namespace, mainPod.Name)
-		return ctrl.Result{Requeue: true}, nil
+		return r.createMainAgent(ctx, &cs)
 	}
 
 	// Sub-agents fork from main and need it live before creation.
@@ -156,6 +144,35 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 		return ctrl.Result{}, err
 	}
 	return ctrl.Result{RequeueAfter: subRequeue}, nil
+}
+
+// createMainAgent builds and creates the missing main agent pod, stamping
+// restore-from-hibernate when the agent is hibernated so a cross-node recreate
+// restores from the :hibernate snapshot instead of booting fresh. It always
+// requeues so sub-agents fork off the now-created main.
+func (r *Reconciler) createMainAgent(ctx context.Context, cs *cocoonv1.CocoonSet) (ctrl.Result, error) {
+	logger := log.WithFunc("cocoonset.Reconciler.createMainAgent")
+	mainPod, err := buildAgentPod(cs, 0, "", "", r.Scheme)
+	if err != nil {
+		return ctrl.Result{}, fmt.Errorf("build main agent: %w", err)
+	}
+	restorable, err := r.podsRestorableByCR(ctx, cs.Namespace)
+	if err != nil {
+		return ctrl.Result{}, err
+	}
+	_, intent := restorable[mainPod.Name]
+	if err := r.markRestoreIfHibernated(ctx, mainPod, intent); err != nil {
+		return ctrl.Result{}, err
+	}
+	if err := r.Create(ctx, mainPod); err != nil {
+		if apierrors.IsAlreadyExists(err) {
+			// Old pod still Terminating; requeue and wait.
+			return ctrl.Result{RequeueAfter: requeueWaitForMain}, nil
+		}
+		return ctrl.Result{}, fmt.Errorf("create main agent: %w", err)
+	}
+	logger.Infof(ctx, "created main agent %s/%s", mainPod.Namespace, mainPod.Name)
+	return ctrl.Result{Requeue: true}, nil
 }
 
 // observeMainPodFailed records the failure on the event channel and, when the
