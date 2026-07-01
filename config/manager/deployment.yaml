@@ -29,8 +29,10 @@ spec:
           env:
             - name: OPERATOR_LOG_LEVEL
               value: info
-            - name: EPOCH_URL
-              value: http://epoch.cocoon-system.svc:8080
+            - name: OCI_REGISTRY
+              value: asia-southeast1-docker.pkg.dev/simular-note/cocoon-artifacts
+            - name: GOOGLE_APPLICATION_CREDENTIALS
+              value: /var/run/secrets/gcp/key.json
           ports:
             - name: metrics
               containerPort: 8080
@@ -57,3 +59,11 @@ spec:
             limits:
               cpu: 1000m
               memory: 512Mi
+          volumeMounts:
+            - name: gcp-ar-writer-key
+              mountPath: /var/run/secrets/gcp
+              readOnly: true
+      volumes:
+        - name: gcp-ar-writer-key
+          secret:
+            secretName: cocoon-ar-writer-key
