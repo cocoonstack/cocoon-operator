@@ -24,6 +24,7 @@ import (
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/healthz"
 	crlog "sigs.k8s.io/controller-runtime/pkg/log"
+	ctrlmetrics "sigs.k8s.io/controller-runtime/pkg/metrics"
 	metricsserver "sigs.k8s.io/controller-runtime/pkg/metrics/server"
 
 	cocoonv1 "github.com/cocoonstack/cocoon-common/apis/v1"
@@ -96,7 +97,7 @@ func main() {
 		logger.Fatalf(ctx, err, "create registry client")
 	}
 
-	metrics.Register()
+	metrics.Register(ctrlmetrics.Registry)
 
 	clientset, err := kubernetes.NewForConfig(mgr.GetConfig())
 	if err != nil {
