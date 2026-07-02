@@ -319,10 +319,8 @@ func TestMainPodFailedReason(t *testing.T) {
 	}
 }
 
-// TestReconcileMainLifecycleFailedTransitionsToFailed verifies the
-// vk-cocoon-driven failure path: a main pod carrying
-// lifecycle-state=Failed annotation must flip the CocoonSet to Failed
-// even when Pod.Status.Phase is still Running.
+// A main pod carrying lifecycle-state=Failed must flip the CocoonSet to
+// Failed even while Pod.Status.Phase is still Running (vk-driven path).
 func TestReconcileMainLifecycleFailedTransitionsToFailed(t *testing.T) {
 	scheme := testScheme(t)
 	cs := newCocoonSet("demo", func(cs *cocoonv1.CocoonSet) {
@@ -355,9 +353,8 @@ func TestReconcileMainLifecycleFailedTransitionsToFailed(t *testing.T) {
 	}
 }
 
-// TestEnsureSubAgentsTreatsLifecycleFailedAsTerminal guards the rebuild path: a
-// sub-agent carrying lifecycle-state=Failed but still in PodPhase=Running must be
-// rebuilt so the backoff / dead-letter logic runs.
+// A sub-agent carrying lifecycle-state=Failed but still PodPhase=Running must
+// be rebuilt so the backoff / dead-letter logic runs.
 func TestEnsureSubAgentsTreatsLifecycleFailedAsTerminal(t *testing.T) {
 	scheme := testScheme(t)
 	cs := newCocoonSet("demo", func(cs *cocoonv1.CocoonSet) {
@@ -459,9 +456,8 @@ func TestReconcileDeleteSkipsUnownedPods(t *testing.T) {
 	}
 }
 
-// :hibernate is always orphaned at CocoonSet teardown so it's always cleaned;
-// :latest is only orphaned when snapshotPolicy says no push happened for that
-// slot. Always/main-only-slot-0 leave :latest in place for downstream retag.
+// Teardown always GCs :hibernate; :latest only when snapshotPolicy says no
+// push happened for that slot (always/main-only-slot-0 keep it for retag).
 func TestReconcileDeleteSnapshotPolicyGC(t *testing.T) {
 	scheme := testScheme(t)
 	cases := []struct {
@@ -546,10 +542,8 @@ func TestReconcileDeleteSnapshotPolicyGC(t *testing.T) {
 	}
 }
 
-// Race window: pod created but Status.Agents not yet patched with VMName.
-// reconcileDelete's first pass sees the pod and stashes its VMName onto the
-// annotation, so the second pass still GCs :hibernate (default policy
-// preserves :latest per TestReconcileDeleteAlwaysPolicyPreservesLatest).
+// Race window: pod exists but Status.Agents lacks VMName yet — pass 1 stashes
+// the pod's VMName onto the annotation so pass 2 still GCs :hibernate.
 func TestReconcileDeleteStashesPodVMNamesEvenWhenStatusIsEmpty(t *testing.T) {
 	scheme := testScheme(t)
 	cs := newCocoonSet("demo")
@@ -659,7 +653,6 @@ func TestApplyUnsuspendSkipsPodHibernatedByCR(t *testing.T) {
 	}
 }
 
-// fakeRegistry simulates manifest presence and records DeleteManifest calls.
 type fakeRegistry struct {
 	present   map[string]bool
 	probeErr  error

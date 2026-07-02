@@ -13,6 +13,10 @@ func TestRegisterEmitsStableNames(t *testing.T) {
 	reg := prometheus.NewRegistry()
 	Register(reg)
 	SubAgentRebuildTotal.WithLabelValues("ns", "cs").Inc()
+	SubAgentDeadLetterTotal.WithLabelValues("ns", "cs").Inc()
+	HibernatePhaseDurationSeconds.WithLabelValues("ok").Observe(1)
+	WakePhaseDurationSeconds.WithLabelValues("ok").Observe(1)
+	LifecycleStateFailedObservedTotal.WithLabelValues("Pending").Inc()
 
 	families, err := reg.Gather()
 	if err != nil {
@@ -22,7 +26,15 @@ func TestRegisterEmitsStableNames(t *testing.T) {
 	for _, f := range families {
 		names = append(names, f.GetName())
 	}
-	if !slices.Contains(names, "cocoon_operator_subagent_rebuild_total") {
-		t.Errorf("want metric cocoon_operator_subagent_rebuild_total, got %v", names)
+	for _, want := range []string{
+		"cocoon_operator_subagent_rebuild_total",
+		"cocoon_operator_subagent_dead_letter_total",
+		"cocoon_operator_hibernate_phase_duration_seconds",
+		"cocoon_operator_wake_phase_duration_seconds",
+		"cocoon_operator_lifecycle_state_failed_observed_total",
+	} {
+		if !slices.Contains(names, want) {
+			t.Errorf("want metric %s, got %v", want, names)
+		}
 	}
 }

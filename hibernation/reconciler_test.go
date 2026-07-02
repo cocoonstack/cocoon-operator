@@ -570,7 +570,6 @@ func TestReconcileHibernateFailsOnTimeout(t *testing.T) {
 	}
 }
 
-// TestReconcileHibernateRecoversFromFailed mirrors the wake recovery test:
 // Failed→Hibernating re-entry must refresh LastTransitionTime so the new
 // hibernate deadline starts from zero.
 func TestReconcileHibernateRecoversFromFailed(t *testing.T) {

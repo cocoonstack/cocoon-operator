@@ -196,9 +196,8 @@ func TestNewManagedPodStampsCocoonSetGeneration(t *testing.T) {
 	}
 }
 
-// Guards against a future cocoon-common change where VMSpec.Apply replaces
-// pod.Annotations instead of merging — that would silently strip the
-// generation stamp set by newManagedPod.
+// If VMSpec.Apply ever replaces pod.Annotations instead of merging, it would
+// silently strip newManagedPod's generation stamp.
 func TestBuildAgentPodPreservesCocoonSetGeneration(t *testing.T) {
 	cs := newCocoonSet("demo", func(cs *cocoonv1.CocoonSet) {
 		cs.Generation = 11
