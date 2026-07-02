@@ -131,7 +131,7 @@ func TestMigrationWaitsWhileRestoring(t *testing.T) {
 
 func TestMigrationDropsSnapshotWhenRestored(t *testing.T) {
 	cs := migCocoonSet("node-b")
-	cs.Status.Phase = cocoonv1.CocoonSetPhaseMigrating // the settled fast-path defers to the in-flight migration
+	cs.Status.Phase = cocoonv1.CocoonSetPhaseMigrating    // the settled fast-path defers to the in-flight migration
 	main := migMainPod(t, cs, "node-b", "vmid-new", true) // restored on target
 	reg := &fakeRegistry{present: map[string]bool{migVMName + ":" + meta.HibernateSnapshotTag: true}}
 	cli := ctrlfake.NewClientBuilder().WithScheme(testScheme(t)).
