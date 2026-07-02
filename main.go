@@ -11,7 +11,6 @@ import (
 	"os/signal"
 	"syscall"
 
-	"github.com/go-logr/logr"
 	"github.com/google/go-containerregistry/pkg/authn"
 	"github.com/google/go-containerregistry/pkg/v1/google"
 	"github.com/projecteru2/core/log"
@@ -62,8 +61,9 @@ func main() {
 		fmt.Fprintf(os.Stderr, "setup log: %v\n", err)
 		os.Exit(1)
 	}
-	// Silence controller-runtime's own logger; we use core/log instead.
-	crlog.SetLogger(logr.Discard())
+	// Route controller-runtime's logger through core/log: reconcile errors
+	// surface only there, so discarding it hides every one of them.
+	crlog.SetLogger(newCRLogger(ctx))
 	logger := log.WithFunc("main")
 
 	logger.Infof(ctx, "cocoon-operator %s starting (rev=%s built=%s)",

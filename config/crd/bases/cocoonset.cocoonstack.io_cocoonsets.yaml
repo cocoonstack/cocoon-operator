@@ -160,6 +160,7 @@ spec:
                     - linux
                     - windows
                     - android
+                    - macos
                     type: string
                   probePort:
                     description: ProbePort overrides the default ICMP probe with a
@@ -247,6 +248,12 @@ spec:
                 required:
                 - image
                 type: object
+              nodeName:
+                description: |-
+                  NodeName pins the VM to a node (cross-node migrate). Empty = let the
+                  scheduler place it within NodePool and leave it alone; a value adds a
+                  hostname nodeAffinity so the pod lands there or stays Pending if it won't fit.
+                type: string
               nodePool:
                 default: default
                 type: string
@@ -322,6 +329,7 @@ spec:
                       - linux
                       - windows
                       - android
+                      - macos
                       type: string
                     probePort:
                       description: ProbePort overrides the default ICMP probe with
@@ -522,6 +530,7 @@ spec:
                 - Scaling
                 - Suspending
                 - Suspended
+                - Migrating
                 - Failed
                 type: string
               readyAgents:
