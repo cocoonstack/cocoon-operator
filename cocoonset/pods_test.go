@@ -554,3 +554,61 @@ func TestPodSpecMatchesToolboxDetectsNodePoolDrift(t *testing.T) {
 		t.Error("toolbox pod with old node pool should not match updated spec")
 	}
 }
+
+func TestBuildAgentPodMainPinnedViaHostnameAffinity(t *testing.T) {
+	cs := newCocoonSet("demo", func(cs *cocoonv1.CocoonSet) {
+		cs.Spec.NodeName = "node-b"
+	})
+	pod := mustBuildAgentPod(t, cs, 0, "", "", testScheme(t))
+
+	if pod.Spec.NodeName != "" {
+		t.Errorf("main must not be hard-bound; NodeName=%q", pod.Spec.NodeName)
+	}
+	if pod.Spec.Affinity == nil || pod.Spec.Affinity.NodeAffinity == nil {
+		t.Fatalf("expected node affinity, got %+v", pod.Spec.Affinity)
+	}
+	na := pod.Spec.Affinity.NodeAffinity.RequiredDuringSchedulingIgnoredDuringExecution
+	if na == nil || len(na.NodeSelectorTerms) != 1 || len(na.NodeSelectorTerms[0].MatchExpressions) != 1 {
+		t.Fatalf("expected one hostname node-affinity term, got %+v", pod.Spec.Affinity)
+	}
+	req := na.NodeSelectorTerms[0].MatchExpressions[0]
+	if req.Key != corev1.LabelHostname || req.Operator != corev1.NodeSelectorOpIn || len(req.Values) != 1 || req.Values[0] != "node-b" {
+		t.Errorf("affinity req = %+v, want %s In [node-b]", req, corev1.LabelHostname)
+	}
+}
+
+func TestBuildAgentPodNoAffinityWhenNodeNameEmpty(t *testing.T) {
+	cs := newCocoonSet("demo")
+	pod := mustBuildAgentPod(t, cs, 0, "", "", testScheme(t))
+	if pod.Spec.Affinity != nil {
+		t.Errorf("no nodeName => no affinity, got %+v", pod.Spec.Affinity)
+	}
+}
+
+func TestBuildAgentPodSubAgentIgnoresNodeNameAffinity(t *testing.T) {
+	cs := newCocoonSet("demo", func(cs *cocoonv1.CocoonSet) {
+		cs.Spec.Agent.Replicas = 2
+		cs.Spec.NodeName = "node-b"
+	})
+	pod := mustBuildAgentPod(t, cs, 1, "vk-ns-demo-0", "node-a", testScheme(t))
+	if pod.Spec.NodeName != "node-a" {
+		t.Errorf("sub-agent must hard-bind to main's node; NodeName=%q want node-a", pod.Spec.NodeName)
+	}
+	if pod.Spec.Affinity != nil {
+		t.Errorf("sub-agent must not get hostname affinity, got %+v", pod.Spec.Affinity)
+	}
+}
+
+// Affinity/nodeName are placement-only: if podSpecMatchesAgent ever compared
+// them, every pinned CocoonSet would drift into a delete/recreate loop.
+func TestPodSpecMatchesAgentIgnoresAffinity(t *testing.T) {
+	cs := newCocoonSet("demo", func(cs *cocoonv1.CocoonSet) {
+		cs.Spec.NodeName = "node-b"
+	})
+	// A pre-migration pod: built before nodeName was set, so no affinity.
+	pre := newCocoonSet("demo")
+	pod := mustBuildAgentPod(t, pre, 0, "", "", testScheme(t))
+	if !podSpecMatchesAgent(pod, cs, 0) {
+		t.Error("setting spec.nodeName must not drift-delete the existing pod")
+	}
+}

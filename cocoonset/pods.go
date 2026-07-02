@@ -110,8 +110,28 @@ func buildAgentPod(cs *cocoonv1.CocoonSet, slot int32, mainVMName, bindNodeName 
 	}
 	if bindNodeName != "" {
 		pod.Spec.NodeName = bindNodeName
+	} else if slot == 0 && cs.Spec.NodeName != "" {
+		// Scheduler affinity, not a hard NodeName bind: the main lands only if
+		// it fits and the node is schedulable, else stays Pending.
+		pod.Spec.Affinity = hostnameAffinity(cs.Spec.NodeName)
 	}
 	return pod, nil
+}
+
+func hostnameAffinity(nodeName string) *corev1.Affinity {
+	return &corev1.Affinity{
+		NodeAffinity: &corev1.NodeAffinity{
+			RequiredDuringSchedulingIgnoredDuringExecution: &corev1.NodeSelector{
+				NodeSelectorTerms: []corev1.NodeSelectorTerm{{
+					MatchExpressions: []corev1.NodeSelectorRequirement{{
+						Key:      corev1.LabelHostname,
+						Operator: corev1.NodeSelectorOpIn,
+						Values:   []string{nodeName},
+					}},
+				}},
+			},
+		},
+	}
 }
 
 func buildToolboxPod(cs *cocoonv1.CocoonSet, tb cocoonv1.ToolboxSpec, scheme *runtime.Scheme) (*corev1.Pod, error) {

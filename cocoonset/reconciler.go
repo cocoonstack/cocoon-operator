@@ -26,6 +26,7 @@ const (
 	finalizerName      = "cocoonset.cocoonstack.io/finalizer"
 	requeueWaitForMain = 5 * time.Second
 	requeueSuspendPoll = 5 * time.Second
+	requeueMigratePoll = 5 * time.Second
 )
 
 // Reconciler watches CocoonSet resources and manages the lifecycle of agent
@@ -101,6 +102,12 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 
 	if cs.Spec.Suspend {
 		return r.reconcileSuspend(ctx, &cs, classified)
+	}
+
+	// Cross-node migration owns the reconcile while in flight; runs before
+	// applyUnsuspend so its internal hibernate annotation is not cleared.
+	if handled, res, err := r.reconcileMigration(ctx, &cs, classified); handled {
+		return res, err
 	}
 
 	// Clear stale hibernate annotations from a prior suspend pass.
