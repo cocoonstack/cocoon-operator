@@ -19,37 +19,6 @@ import (
 	"github.com/cocoonstack/cocoon-common/meta"
 )
 
-func testScheme(t *testing.T) *runtime.Scheme {
-	t.Helper()
-	sch := runtime.NewScheme()
-	if err := clientgoscheme.AddToScheme(sch); err != nil {
-		t.Fatalf("add client-go scheme: %v", err)
-	}
-	if err := cocoonv1.AddToScheme(sch); err != nil {
-		t.Fatalf("add cocoonv1 scheme: %v", err)
-	}
-	return sch
-}
-
-type fakeRegistry struct {
-	manifestPresent bool
-	manifestErr     error
-	deleteCalled    bool
-	deleteErr       error
-}
-
-func (f *fakeRegistry) HasManifest(_ context.Context, _, _ string) (bool, error) {
-	if f.manifestErr != nil {
-		return false, f.manifestErr
-	}
-	return f.manifestPresent, nil
-}
-
-func (f *fakeRegistry) DeleteManifest(_ context.Context, _, _ string) error {
-	f.deleteCalled = true
-	return f.deleteErr
-}
-
 func TestReadyConditionMaps(t *testing.T) {
 	cases := []struct {
 		phase  cocoonv1.CocoonHibernationPhase
@@ -799,4 +768,35 @@ func findReadyCondition(conds []metav1.Condition) *metav1.Condition {
 		}
 	}
 	return nil
+}
+
+func testScheme(t *testing.T) *runtime.Scheme {
+	t.Helper()
+	sch := runtime.NewScheme()
+	if err := clientgoscheme.AddToScheme(sch); err != nil {
+		t.Fatalf("add client-go scheme: %v", err)
+	}
+	if err := cocoonv1.AddToScheme(sch); err != nil {
+		t.Fatalf("add cocoonv1 scheme: %v", err)
+	}
+	return sch
+}
+
+type fakeRegistry struct {
+	manifestPresent bool
+	manifestErr     error
+	deleteCalled    bool
+	deleteErr       error
+}
+
+func (f *fakeRegistry) HasManifest(_ context.Context, _, _ string) (bool, error) {
+	if f.manifestErr != nil {
+		return false, f.manifestErr
+	}
+	return f.manifestPresent, nil
+}
+
+func (f *fakeRegistry) DeleteManifest(_ context.Context, _, _ string) error {
+	f.deleteCalled = true
+	return f.deleteErr
 }

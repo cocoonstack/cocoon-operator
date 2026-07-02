@@ -12,15 +12,6 @@ import (
 	"github.com/cocoonstack/cocoon-common/meta"
 )
 
-func readyPod(p *corev1.Pod) *corev1.Pod {
-	p.Status.Phase = corev1.PodRunning
-	p.Status.Conditions = append(p.Status.Conditions, corev1.PodCondition{
-		Type:   corev1.PodReady,
-		Status: corev1.ConditionTrue,
-	})
-	return p
-}
-
 func TestBuildStatusPendingWhenNoMain(t *testing.T) {
 	cs := newCocoonSet("demo", func(cs *cocoonv1.CocoonSet) {
 		cs.Spec.Agent.Replicas = 1
@@ -185,4 +176,13 @@ func TestBuildStatusScalingWhenToolboxesPending(t *testing.T) {
 	if status.DesiredToolboxes != 1 || status.ReadyToolboxes != 0 {
 		t.Errorf("toolbox counts: ready=%d desired=%d, want 0/1", status.ReadyToolboxes, status.DesiredToolboxes)
 	}
+}
+
+func readyPod(p *corev1.Pod) *corev1.Pod {
+	p.Status.Phase = corev1.PodRunning
+	p.Status.Conditions = append(p.Status.Conditions, corev1.PodCondition{
+		Type:   corev1.PodReady,
+		Status: corev1.ConditionTrue,
+	})
+	return p
 }

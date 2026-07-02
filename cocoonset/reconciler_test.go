@@ -17,28 +17,6 @@ import (
 	"github.com/cocoonstack/cocoon-common/meta"
 )
 
-// fakeRegistry simulates manifest presence and records DeleteManifest calls.
-type fakeRegistry struct {
-	present   map[string]bool
-	probeErr  error
-	deletedMu sync.Mutex
-	deleted   []string
-}
-
-func (f *fakeRegistry) HasManifest(_ context.Context, name, tag string) (bool, error) {
-	if f.probeErr != nil {
-		return false, f.probeErr
-	}
-	return f.present[name+":"+tag], nil
-}
-
-func (f *fakeRegistry) DeleteManifest(_ context.Context, name, tag string) error {
-	f.deletedMu.Lock()
-	defer f.deletedMu.Unlock()
-	f.deleted = append(f.deleted, name+":"+tag)
-	return nil
-}
-
 func TestApplyUnsuspendClearsHibernateAnnotation(t *testing.T) {
 	scheme := testScheme(t)
 
@@ -377,10 +355,9 @@ func TestReconcileMainLifecycleFailedTransitionsToFailed(t *testing.T) {
 	}
 }
 
-// TestEnsureSubAgentsTreatsLifecycleFailedAsTerminal pins the Codex finding:
-// a sub-agent carrying vm.cocoonstack.io/lifecycle-state=Failed annotation but
-// still in PodPhase=Running must trigger the rebuild path so the rebuild
-// backoff / dead-letter logic runs.
+// TestEnsureSubAgentsTreatsLifecycleFailedAsTerminal guards the rebuild path: a
+// sub-agent carrying lifecycle-state=Failed but still in PodPhase=Running must be
+// rebuilt so the backoff / dead-letter logic runs.
 func TestEnsureSubAgentsTreatsLifecycleFailedAsTerminal(t *testing.T) {
 	scheme := testScheme(t)
 	cs := newCocoonSet("demo", func(cs *cocoonv1.CocoonSet) {
@@ -680,4 +657,26 @@ func TestApplyUnsuspendSkipsPodHibernatedByCR(t *testing.T) {
 	if bool(meta.ReadHibernateState(&got)) {
 		t.Errorf("demo-1 had no CR; applyUnsuspend must clear it")
 	}
+}
+
+// fakeRegistry simulates manifest presence and records DeleteManifest calls.
+type fakeRegistry struct {
+	present   map[string]bool
+	probeErr  error
+	deletedMu sync.Mutex
+	deleted   []string
+}
+
+func (f *fakeRegistry) HasManifest(_ context.Context, name, tag string) (bool, error) {
+	if f.probeErr != nil {
+		return false, f.probeErr
+	}
+	return f.present[name+":"+tag], nil
+}
+
+func (f *fakeRegistry) DeleteManifest(_ context.Context, name, tag string) error {
+	f.deletedMu.Lock()
+	defer f.deletedMu.Unlock()
+	f.deleted = append(f.deleted, name+":"+tag)
+	return nil
 }

@@ -81,26 +81,26 @@ func main() {
 		LeaderElectionID:       leaderElectionID,
 	})
 	if err != nil {
-		logger.Fatalf(ctx, err, "create manager: %v", err)
+		logger.Fatalf(ctx, err, "create manager")
 	}
 
 	if err = mgr.AddHealthzCheck("healthz", healthz.Ping); err != nil {
-		logger.Fatalf(ctx, err, "add healthz check: %v", err)
+		logger.Fatalf(ctx, err, "add healthz check")
 	}
 	if err = mgr.AddReadyzCheck("readyz", healthz.Ping); err != nil {
-		logger.Fatalf(ctx, err, "add readyz check: %v", err)
+		logger.Fatalf(ctx, err, "add readyz check")
 	}
 
 	registry, err := buildRegistry()
 	if err != nil {
-		logger.Fatalf(ctx, err, "create registry client: %v", err)
+		logger.Fatalf(ctx, err, "create registry client")
 	}
 
 	metrics.Register()
 
 	clientset, err := kubernetes.NewForConfig(mgr.GetConfig())
 	if err != nil {
-		logger.Fatalf(ctx, err, "build clientset: %v", err)
+		logger.Fatalf(ctx, err, "build clientset")
 	}
 	broadcaster := record.NewBroadcaster()
 	broadcaster.StartRecordingToSink(&typedcorev1.EventSinkImpl{Interface: clientset.CoreV1().Events("")})
@@ -113,7 +113,7 @@ func main() {
 		Registry: registry,
 		Recorder: recorder,
 	}).SetupWithManager(ctx, mgr); err != nil {
-		logger.Fatalf(ctx, err, "register cocoonset.Reconciler: %v", err)
+		logger.Fatalf(ctx, err, "register cocoonset.Reconciler")
 	}
 	if err = (&hibernation.Reconciler{
 		Client:   mgr.GetClient(),
@@ -121,7 +121,7 @@ func main() {
 		Registry: registry,
 		Recorder: recorder,
 	}).SetupWithManager(ctx, mgr); err != nil {
-		logger.Fatalf(ctx, err, "register hibernation.Reconciler: %v", err)
+		logger.Fatalf(ctx, err, "register hibernation.Reconciler")
 	}
 
 	signalCtx, cancel := signal.NotifyContext(ctx, syscall.SIGINT, syscall.SIGTERM)
@@ -130,7 +130,7 @@ func main() {
 	logger.Infof(signalCtx, "starting controller manager (metrics=%s probe=%s leader=%t)",
 		metricsAddr, probeAddr, enableLeaderElection)
 	if err = mgr.Start(signalCtx); err != nil {
-		logger.Fatalf(signalCtx, err, "manager exited with error: %v", err)
+		logger.Fatalf(signalCtx, err, "run manager")
 	}
 }
 

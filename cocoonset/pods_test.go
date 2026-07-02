@@ -14,56 +14,6 @@ import (
 	"github.com/cocoonstack/cocoon-common/meta"
 )
 
-func testScheme(t *testing.T) *runtime.Scheme {
-	t.Helper()
-	scheme := runtime.NewScheme()
-	utilruntime.Must(clientgoscheme.AddToScheme(scheme))
-	utilruntime.Must(cocoonv1.AddToScheme(scheme))
-	return scheme
-}
-
-func mustBuildAgentPod(t *testing.T, cs *cocoonv1.CocoonSet, slot int32, mainVMName, bindNodeName string, scheme *runtime.Scheme) *corev1.Pod {
-	t.Helper()
-	pod, err := buildAgentPod(cs, slot, mainVMName, bindNodeName, scheme)
-	if err != nil {
-		t.Fatalf("build agent pod: %v", err)
-	}
-	return pod
-}
-
-func mustBuildToolboxPod(t *testing.T, cs *cocoonv1.CocoonSet, tb cocoonv1.ToolboxSpec, scheme *runtime.Scheme) *corev1.Pod {
-	t.Helper()
-	pod, err := buildToolboxPod(cs, tb, scheme)
-	if err != nil {
-		t.Fatalf("build toolbox pod: %v", err)
-	}
-	return pod
-}
-
-func mustNewManagedPod(t *testing.T, cs *cocoonv1.CocoonSet, podName, role, slotLabel string, scheme *runtime.Scheme) *corev1.Pod {
-	t.Helper()
-	pod, err := newManagedPod(cs, podName, role, slotLabel, scheme)
-	if err != nil {
-		t.Fatalf("new managed pod: %v", err)
-	}
-	return pod
-}
-
-func newCocoonSet(name string, modifiers ...func(*cocoonv1.CocoonSet)) *cocoonv1.CocoonSet {
-	cs := &cocoonv1.CocoonSet{
-		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: "ns", UID: "test-uid"},
-		Spec: cocoonv1.CocoonSetSpec{
-			Agent: cocoonv1.AgentSpec{
-				Image: "ghcr.io/cocoonstack/cocoon/ubuntu:24.04",
-			},
-		},
-	}
-	for _, m := range modifiers {
-		m(cs)
-	}
-	return cs
-}
-
 func TestBuildAgentPodSlot0IsMain(t *testing.T) {
 	cs := newCocoonSet("demo")
 	pod := mustBuildAgentPod(t, cs, 0, "", "", testScheme(t))
@@ -611,4 +561,54 @@ func TestPodSpecMatchesAgentIgnoresAffinity(t *testing.T) {
 	if !podSpecMatchesAgent(pod, cs, 0) {
 		t.Error("setting spec.nodeName must not drift-delete the existing pod")
 	}
+}
+
+func testScheme(t *testing.T) *runtime.Scheme {
+	t.Helper()
+	scheme := runtime.NewScheme()
+	utilruntime.Must(clientgoscheme.AddToScheme(scheme))
+	utilruntime.Must(cocoonv1.AddToScheme(scheme))
+	return scheme
+}
+
+func mustBuildAgentPod(t *testing.T, cs *cocoonv1.CocoonSet, slot int32, mainVMName, bindNodeName string, scheme *runtime.Scheme) *corev1.Pod {
+	t.Helper()
+	pod, err := buildAgentPod(cs, slot, mainVMName, bindNodeName, scheme)
+	if err != nil {
+		t.Fatalf("build agent pod: %v", err)
+	}
+	return pod
+}
+
+func mustBuildToolboxPod(t *testing.T, cs *cocoonv1.CocoonSet, tb cocoonv1.ToolboxSpec, scheme *runtime.Scheme) *corev1.Pod {
+	t.Helper()
+	pod, err := buildToolboxPod(cs, tb, scheme)
+	if err != nil {
+		t.Fatalf("build toolbox pod: %v", err)
+	}
+	return pod
+}
+
+func mustNewManagedPod(t *testing.T, cs *cocoonv1.CocoonSet, podName, role, slotLabel string, scheme *runtime.Scheme) *corev1.Pod {
+	t.Helper()
+	pod, err := newManagedPod(cs, podName, role, slotLabel, scheme)
+	if err != nil {
+		t.Fatalf("new managed pod: %v", err)
+	}
+	return pod
+}
+
+func newCocoonSet(name string, modifiers ...func(*cocoonv1.CocoonSet)) *cocoonv1.CocoonSet {
+	cs := &cocoonv1.CocoonSet{
+		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: "ns", UID: "test-uid"},
+		Spec: cocoonv1.CocoonSetSpec{
+			Agent: cocoonv1.AgentSpec{
+				Image: "ghcr.io/cocoonstack/cocoon/ubuntu:24.04",
+			},
+		},
+	}
+	for _, m := range modifiers {
+		m(cs)
+	}
+	return cs
 }
