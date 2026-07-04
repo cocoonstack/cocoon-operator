@@ -110,22 +110,27 @@ CLI flags (`--metrics-bind-address`, `--health-probe-bind-address`, `--leader-el
 
 ## Installation
 
-The operator authenticates to an OCI registry (e.g. Artifact Registry) for
-snapshot existence checks and cleanup, so it needs a registry URL and a writer
-credential in addition to the kustomize apply:
+The operator authenticates to the OCI registry (e.g. Artifact Registry) via
+GCP ADC (Workload Identity / instance metadata) by default — no Secret to
+pre-create:
 
 ```bash
 # 1. Install the CRDs, RBAC, and Deployment (creates the cocoon-system namespace).
 kubectl apply -k github.com/cocoonstack/cocoon-operator/config/default?ref=main
 
-# 2. Create the Artifact Registry writer credential the manager mounts. Without
-#    this Secret the manager Pod stays Pending on the missing volume.
-kubectl -n cocoon-system create secret generic cocoon-ar-writer-key \
-  --from-file=key.json=/path/to/artifactregistry-writer-key.json
-
-# 3. Point OCI_REGISTRY at your registry (the shipped manifest is a placeholder).
+# 2. Point OCI_REGISTRY at your registry (ships empty; the manager fails fast
+#    at startup until it is set).
 kubectl -n cocoon-system set env deploy/cocoon-operator \
   OCI_REGISTRY=REGION-docker.pkg.dev/PROJECT/REPO
+```
+
+Clusters without ADC apply the `config/overlays/sa-key` overlay instead of
+`config/default`; it mounts a service-account key from a Secret you create:
+
+```bash
+kubectl -n cocoon-system create secret generic cocoon-ar-writer-key \
+  --from-file=key.json=/path/to/artifactregistry-writer-key.json
+kubectl apply -k github.com/cocoonstack/cocoon-operator/config/overlays/sa-key?ref=main
 ```
 
 Step 1 installs:

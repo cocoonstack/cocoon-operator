@@ -1,0 +1,21 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: cocoon-operator
+  namespace: cocoon-system
+spec:
+  template:
+    spec:
+      containers:
+        - name: manager
+          env:
+            - name: GOOGLE_APPLICATION_CREDENTIALS
+              value: /var/run/secrets/gcp/key.json
+          volumeMounts:
+            - name: gcp-ar-writer-key
+              mountPath: /var/run/secrets/gcp
+              readOnly: true
+      volumes:
+        - name: gcp-ar-writer-key
+          secret:
+            secretName: cocoon-ar-writer-key

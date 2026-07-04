@@ -29,11 +29,10 @@ spec:
           env:
             - name: OPERATOR_LOG_LEVEL
               value: info
-            # Placeholder — override per-cluster at deploy (kubectl set env or an overlay).
+            # Must be set per cluster (kubectl set env or an overlay); empty
+            # makes the operator fail fast at startup with a clear error.
             - name: OCI_REGISTRY
-              value: asia-southeast1-docker.pkg.dev/PROJECT/REPO
-            - name: GOOGLE_APPLICATION_CREDENTIALS
-              value: /var/run/secrets/gcp/key.json
+              value: ""
           ports:
             - name: metrics
               containerPort: 8080
@@ -60,11 +59,3 @@ spec:
             limits:
               cpu: 1000m
               memory: 512Mi
-          volumeMounts:
-            - name: gcp-ar-writer-key
-              mountPath: /var/run/secrets/gcp
-              readOnly: true
-      volumes:
-        - name: gcp-ar-writer-key
-          secret:
-            secretName: cocoon-ar-writer-key

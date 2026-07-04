@@ -1,0 +1,11 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+# For non-GCP clusters without Workload Identity / ADC: mounts a
+# service-account key Secret (create it yourself: kubectl create secret
+# generic cocoon-ar-writer-key --from-file=key.json=<path> -n cocoon-system).
+resources:
+  - ../../default
+
+patches:
+  - path: deployment-sa-key-patch.yaml
