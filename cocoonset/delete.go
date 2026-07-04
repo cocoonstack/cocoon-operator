@@ -145,9 +145,8 @@ func statusVMNames(cs *cocoonv1.CocoonSet) []string {
 	return names
 }
 
-// shouldKeepLatestTag avoids meta.ShouldSnapshotVM because that wraps the
-// deprecated ExtractSlotFromVMName, which mis-classifies toolbox names with
-// a "-N" suffix (e.g. "vk-ns-demo-db-0") as slot 0 under main-only.
+// shouldKeepLatestTag has only (CocoonSet, vmName) — no Pod/VMSpec — so it
+// derives the role via meta.ExtractAgentSlot directly instead of meta.ShouldSnapshotVM.
 func shouldKeepLatestTag(cs *cocoonv1.CocoonSet, vmName string) bool {
 	switch cs.Spec.SnapshotPolicy.Default() {
 	case cocoonv1.SnapshotPolicyNever:
