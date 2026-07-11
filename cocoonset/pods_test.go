@@ -1,6 +1,7 @@
 package cocoonset
 
 import (
+	"slices"
 	"testing"
 
 	corev1 "k8s.io/api/core/v1"
@@ -175,13 +176,9 @@ func TestNewManagedPodHasOwnerReference(t *testing.T) {
 func TestNewManagedPodCarriesCocoonToleration(t *testing.T) {
 	cs := newCocoonSet("demo")
 	pod := mustNewManagedPod(t, cs, "demo-0", meta.RoleMain, "0", testScheme(t))
-	found := false
-	for _, tol := range pod.Spec.Tolerations {
-		if tol.Key == meta.TolerationKey {
-			found = true
-		}
-	}
-	if !found {
+	if !slices.ContainsFunc(pod.Spec.Tolerations, func(tol corev1.Toleration) bool {
+		return tol.Key == meta.TolerationKey
+	}) {
 		t.Errorf("toleration %s missing", meta.TolerationKey)
 	}
 }

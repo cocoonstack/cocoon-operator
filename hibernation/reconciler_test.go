@@ -7,6 +7,7 @@ import (
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
+	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
@@ -411,7 +412,7 @@ func TestReconcileWakeRecoversFromFailed(t *testing.T) {
 	if out.Status.Phase != cocoonv1.CocoonHibernationPhaseWaking {
 		t.Fatalf("phase = %q, want Waking (recovery path)", out.Status.Phase)
 	}
-	ready := findReadyCondition(out.Status.Conditions)
+	ready := apimeta.FindStatusCondition(out.Status.Conditions, commonk8s.ConditionTypeReady)
 	if ready == nil {
 		t.Fatalf("Ready condition missing after recovery reconcile")
 	}
@@ -613,7 +614,7 @@ func TestReconcileHibernateRecoversFromFailed(t *testing.T) {
 	if out.Status.Phase != cocoonv1.CocoonHibernationPhaseHibernating {
 		t.Fatalf("phase = %q, want Hibernating (recovery path)", out.Status.Phase)
 	}
-	ready := findReadyCondition(out.Status.Conditions)
+	ready := apimeta.FindStatusCondition(out.Status.Conditions, commonk8s.ConditionTypeReady)
 	if ready == nil {
 		t.Fatal("Ready condition missing after recovery reconcile")
 	}
@@ -758,15 +759,6 @@ func TestReconcilePendingWhenPodMissingVMName(t *testing.T) {
 	if out.Status.Phase != cocoonv1.CocoonHibernationPhasePending {
 		t.Errorf("phase = %q, want Pending", out.Status.Phase)
 	}
-}
-
-func findReadyCondition(conds []metav1.Condition) *metav1.Condition {
-	for i := range conds {
-		if conds[i].Type == commonk8s.ConditionTypeReady {
-			return &conds[i]
-		}
-	}
-	return nil
 }
 
 func testScheme(t *testing.T) *runtime.Scheme {
