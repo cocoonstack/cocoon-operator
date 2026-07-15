@@ -13,28 +13,17 @@ import (
 	"github.com/cocoonstack/cocoon-common/meta"
 )
 
-// restoreIntent memoizes the namespace's restore-intent set for one reconcile.
-// The List behind it is O(CocoonHibernations in the namespace), so the steady
-// path (every desired pod already present) must never pay it, and the agent and
-// toolbox passes must not pay it twice.
-type restoreIntent struct {
-	load  func(context.Context) (map[string]struct{}, error)
-	once  sync.Once
-	names map[string]struct{}
-	err   error
-}
+// restoreIntent returns the namespace's restore-intent set, loading it at most
+// once however many pods ask.
+type restoreIntent func() (map[string]struct{}, error)
 
-// resolve loads the set on first call; safe under the sub-agent create fan-out.
-func (ri *restoreIntent) resolve(ctx context.Context) (map[string]struct{}, error) {
-	ri.once.Do(func() { ri.names, ri.err = ri.load(ctx) })
-	return ri.names, ri.err
-}
-
-// newRestoreIntent defers the List until a pod actually has to be built.
-func (r *Reconciler) newRestoreIntent(namespace string) *restoreIntent {
-	return &restoreIntent{load: func(ctx context.Context) (map[string]struct{}, error) {
+// newRestoreIntent defers the List until a pod actually has to be built: it is
+// O(CocoonHibernations in the namespace), so the steady path must not pay it and
+// the agent and toolbox passes must not pay it twice.
+func (r *Reconciler) newRestoreIntent(ctx context.Context, namespace string) restoreIntent {
+	return sync.OnceValues(func() (map[string]struct{}, error) {
 		return r.podsRestorableByCR(ctx, namespace)
-	}}
+	})
 }
 
 // hibernationPodNames lists the namespace's CocoonHibernations and returns the

@@ -95,21 +95,14 @@ func newBenchFixture(b *testing.B) (*Reconciler, []*cocoonv1.CocoonSet) {
 			},
 		}
 		sets = append(sets, cs)
-		objs = append(objs, cs, &cocoonv1.CocoonHibernation{
-			ObjectMeta: metav1.ObjectMeta{Name: fmt.Sprintf("h-%d", i), Namespace: "ns"},
-			Spec: cocoonv1.CocoonHibernationSpec{
-				PodRef: cocoonv1.HibernationPodRef{Name: cs.Name + "-0"},
-				Desire: cocoonv1.HibernationDesireHibernate,
-			},
-			Status: cocoonv1.CocoonHibernationStatus{Phase: cocoonv1.CocoonHibernationPhaseHibernated},
-		})
+		objs = append(objs, cs, hibernatedFor(cs))
 	}
 	cli := ctrlfake.NewClientBuilder().
 		WithScheme(scheme).
 		WithObjects(objs...).
 		WithStatusSubresource(&cocoonv1.CocoonSet{}).
 		Build()
-	return &Reconciler{Client: cli, Scheme: scheme, Registry: &slowRegistry{delay: benchRegistryDelay}}, sets
+	return &Reconciler{Client: cli, Scheme: scheme, Registry: &fakeRegistry{delay: benchRegistryDelay}}, sets
 }
 
 func percentile(sorted []time.Duration, p int) time.Duration {
@@ -118,19 +111,4 @@ func percentile(sorted []time.Duration, p int) time.Duration {
 	}
 	i := min(len(sorted)*p/100, len(sorted)-1)
 	return sorted[i]
-}
-
-// slowRegistry models a remote registry: every probe costs a fixed round trip.
-type slowRegistry struct {
-	delay time.Duration
-}
-
-func (s *slowRegistry) HasManifest(_ context.Context, _, _ string) (bool, error) {
-	time.Sleep(s.delay)
-	return false, nil
-}
-
-func (s *slowRegistry) DeleteManifest(_ context.Context, _, _ string) error {
-	time.Sleep(s.delay)
-	return nil
 }

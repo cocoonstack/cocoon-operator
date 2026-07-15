@@ -16,7 +16,7 @@ import (
 	"github.com/cocoonstack/cocoon-common/meta"
 )
 
-func (r *Reconciler) ensureToolboxes(ctx context.Context, cs *cocoonv1.CocoonSet, classified classifiedPods, intent *restoreIntent) (bool, error) {
+func (r *Reconciler) ensureToolboxes(ctx context.Context, cs *cocoonv1.CocoonSet, classified classifiedPods, intent restoreIntent) (bool, error) {
 	logger := log.WithFunc("cocoonset.Reconciler.ensureToolboxes")
 	// Defense in depth: webhook should already reject duplicates. Validate
 	// upfront before any Create/Delete so a bypass can't leave partial state.
@@ -47,7 +47,7 @@ func (r *Reconciler) ensureToolboxes(ctx context.Context, cs *cocoonv1.CocoonSet
 		if err != nil {
 			return changed, fmt.Errorf("build toolbox %s: %w", tb.Name, err)
 		}
-		restorable, err := intent.resolve(ctx)
+		restorable, err := intent()
 		if err != nil {
 			return changed, err
 		}

@@ -167,11 +167,7 @@ func buildScheme() *runtime.Scheme {
 
 // envInt parses an int env var, falling back when unset or invalid.
 func envInt(key string, fallback int) int {
-	v := os.Getenv(key)
-	if v == "" {
-		return fallback
-	}
-	n, err := strconv.Atoi(v)
+	n, err := strconv.Atoi(os.Getenv(key))
 	if err != nil {
 		return fallback
 	}

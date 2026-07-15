@@ -93,28 +93,6 @@ func TestReconcileMissingPodsListsHibernationsOnce(t *testing.T) {
 	}
 }
 
-// TestRestoreIntentResolvesOnce guards the memo itself: the loader must run once
-// however many creates ask for the set.
-func TestRestoreIntentResolvesOnce(t *testing.T) {
-	var loads int
-	intent := &restoreIntent{load: func(context.Context) (map[string]struct{}, error) {
-		loads++
-		return map[string]struct{}{"p": {}}, nil
-	}}
-	for range 3 {
-		got, err := intent.resolve(t.Context())
-		if err != nil {
-			t.Fatalf("resolve: %v", err)
-		}
-		if _, ok := got["p"]; !ok {
-			t.Fatal("resolve returned the wrong set")
-		}
-	}
-	if loads != 1 {
-		t.Errorf("loader ran %d times, want 1", loads)
-	}
-}
-
 // TestReconcileUnrelatedKeyProgressesWhileProbeBlocks pins what concurrency
 // buys: with one CocoonSet's registry probe wedged, a second must still finish.
 // At MaxConcurrentReconciles=1 the worker pool would serialize them.
@@ -129,7 +107,7 @@ func TestReconcileUnrelatedKeyProgressesWhileProbeBlocks(t *testing.T) {
 		WithObjects(blocked, wedged, hibernatedFor(blocked), hibernatedFor(wedged)).
 		WithStatusSubresource(&cocoonv1.CocoonSet{}).
 		Build()
-	r := &Reconciler{Client: cli, Scheme: scheme, Registry: &gatedRegistry{
+	r := &Reconciler{Client: cli, Scheme: scheme, Registry: &fakeRegistry{
 		block: map[string]chan struct{}{meta.VMNameForPod("ns", "blocked-0"): release},
 	}}
 
@@ -159,20 +137,6 @@ func hibernatedFor(cs *cocoonv1.CocoonSet) *cocoonv1.CocoonHibernation {
 		Status: cocoonv1.CocoonHibernationStatus{Phase: cocoonv1.CocoonHibernationPhaseHibernated},
 	}
 }
-
-// gatedRegistry wedges the probe for the named VMs until their channel closes.
-type gatedRegistry struct {
-	block map[string]chan struct{}
-}
-
-func (g *gatedRegistry) HasManifest(_ context.Context, name, _ string) (bool, error) {
-	if ch, ok := g.block[name]; ok {
-		<-ch
-	}
-	return false, nil
-}
-
-func (g *gatedRegistry) DeleteManifest(context.Context, string, string) error { return nil }
 
 func countHibernationLists(counter *atomic.Int32) interceptor.Funcs {
 	return interceptor.Funcs{

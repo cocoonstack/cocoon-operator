@@ -131,7 +131,7 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 		return ctrl.Result{Requeue: true}, nil
 	}
 	// One lazily-loaded CocoonHibernation List, shared by every create below.
-	intent := r.newRestoreIntent(cs.Namespace)
+	intent := r.newRestoreIntent(ctx, cs.Namespace)
 	if classified.main == nil {
 		return r.createMainAgent(ctx, &cs, intent)
 	}
@@ -167,13 +167,13 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 // restore-from-hibernate when the agent is hibernated so a cross-node recreate
 // restores from the :hibernate snapshot instead of booting fresh. It always
 // requeues so sub-agents fork off the now-created main.
-func (r *Reconciler) createMainAgent(ctx context.Context, cs *cocoonv1.CocoonSet, intent *restoreIntent) (ctrl.Result, error) {
+func (r *Reconciler) createMainAgent(ctx context.Context, cs *cocoonv1.CocoonSet, intent restoreIntent) (ctrl.Result, error) {
 	logger := log.WithFunc("cocoonset.Reconciler.createMainAgent")
 	mainPod, err := buildAgentPod(cs, 0, "", "", r.Scheme)
 	if err != nil {
 		return ctrl.Result{}, fmt.Errorf("build main agent: %w", err)
 	}
-	restorable, err := intent.resolve(ctx)
+	restorable, err := intent()
 	if err != nil {
 		return ctrl.Result{}, err
 	}
