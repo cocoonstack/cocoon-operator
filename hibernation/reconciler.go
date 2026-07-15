@@ -70,10 +70,9 @@ type Reconciler struct {
 	// phase-exit observations against controller-runtime cache lag.
 	observed sync.Map
 
-	// podLocks serializes the distinct CRs that may target one pod: controller-
-	// runtime only serializes a single key, so above one worker opposing
-	// Hibernate/Wake desires would interleave their patch of the shared hibernate
-	// annotation and their HasManifest/DeleteManifest of the one :hibernate tag.
+	// podLocks serializes the distinct CRs that may target one pod: above one
+	// worker their opposing desires would race the shared hibernate annotation
+	// and the one :hibernate tag.
 	podLocks [podLockStripes]sync.Mutex
 }
 
@@ -173,10 +172,9 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 	}
 }
 
-// lockPod locks the CR's target pod and returns its release. Striping keeps the
-// table fixed-size: pod names come and go with CocoonSets, so a per-name map
-// would grow for the process lifetime, and a collision only costs two unrelated
-// pods an occasional serialization.
+// lockPod locks the CR's target pod and returns its release. Striping bounds the
+// table because pod names come and go with CocoonSets; a collision only costs two
+// unrelated pods an occasional serialization.
 func (r *Reconciler) lockPod(namespace, podName string) func() {
 	h := fnv.New32a()
 	_, _ = h.Write([]byte(meta.PodKey(namespace, podName)))
