@@ -120,7 +120,7 @@ func TestEnsureToolboxesCollisionReturnsError(t *testing.T) {
 		allByName: map[string]*corev1.Pod{agentPod.Name: agentPod},
 	}
 
-	_, err := r.ensureToolboxes(t.Context(), cs, classified)
+	_, err := r.ensureToolboxes(t.Context(), cs, classified, r.newRestoreIntent(cs.Namespace))
 	if err == nil {
 		t.Fatal("ensureToolboxes should return error on name collision with agent pod")
 	}
@@ -143,7 +143,7 @@ func TestEnsureToolboxesRejectsDuplicateNames(t *testing.T) {
 		allByName: map[string]*corev1.Pod{},
 	}
 
-	_, err := r.ensureToolboxes(t.Context(), cs, classified)
+	_, err := r.ensureToolboxes(t.Context(), cs, classified, r.newRestoreIntent(cs.Namespace))
 	if err == nil {
 		t.Fatal("ensureToolboxes must reject a spec with duplicate toolbox names")
 	}
@@ -169,7 +169,7 @@ func TestEnsureToolboxesIdempotentOnExistingToolbox(t *testing.T) {
 		allByName: map[string]*corev1.Pod{},
 	}
 
-	changed, err := r.ensureToolboxes(t.Context(), cs, classified)
+	changed, err := r.ensureToolboxes(t.Context(), cs, classified, r.newRestoreIntent(cs.Namespace))
 	if err != nil {
 		t.Fatalf("ensureToolboxes: %v", err)
 	}
@@ -280,7 +280,7 @@ func TestEnsureSubAgentsReplacesTerminalPod(t *testing.T) {
 		allByName: map[string]*corev1.Pod{subPod.Name: subPod},
 	}
 
-	changed, _, err := r.ensureSubAgents(t.Context(), cs, classified, "vk-ns-demo-0", "")
+	changed, _, err := r.ensureSubAgents(t.Context(), cs, classified, "vk-ns-demo-0", "", r.newRestoreIntent(cs.Namespace))
 	if err != nil {
 		t.Fatalf("ensureSubAgents: %v", err)
 	}
@@ -378,7 +378,7 @@ func TestEnsureSubAgentsTreatsLifecycleFailedAsTerminal(t *testing.T) {
 		allByName: map[string]*corev1.Pod{subPod.Name: subPod},
 	}
 
-	changed, _, err := r.ensureSubAgents(t.Context(), cs, classified, "vk-ns-demo-0", "")
+	changed, _, err := r.ensureSubAgents(t.Context(), cs, classified, "vk-ns-demo-0", "", r.newRestoreIntent(cs.Namespace))
 	if err != nil {
 		t.Fatalf("ensureSubAgents: %v", err)
 	}
@@ -412,7 +412,7 @@ func TestEnsureToolboxesReplacesTerminalPod(t *testing.T) {
 		allByName: map[string]*corev1.Pod{tbPod.Name: tbPod},
 	}
 
-	changed, err := r.ensureToolboxes(t.Context(), cs, classified)
+	changed, err := r.ensureToolboxes(t.Context(), cs, classified, r.newRestoreIntent(cs.Namespace))
 	if err != nil {
 		t.Fatalf("ensureToolboxes: %v", err)
 	}

@@ -3,6 +3,7 @@ package cocoonset
 import (
 	"context"
 	"fmt"
+	"sync"
 
 	"github.com/projecteru2/core/log"
 	corev1 "k8s.io/api/core/v1"
@@ -11,6 +12,30 @@ import (
 	cocoonv1 "github.com/cocoonstack/cocoon-common/apis/v1"
 	"github.com/cocoonstack/cocoon-common/meta"
 )
+
+// restoreIntent memoizes the namespace's restore-intent set for one reconcile.
+// The List behind it is O(CocoonHibernations in the namespace), so the steady
+// path (every desired pod already present) must never pay it, and the agent and
+// toolbox passes must not pay it twice.
+type restoreIntent struct {
+	load  func(context.Context) (map[string]struct{}, error)
+	once  sync.Once
+	names map[string]struct{}
+	err   error
+}
+
+// resolve loads the set on first call; safe under the sub-agent create fan-out.
+func (ri *restoreIntent) resolve(ctx context.Context) (map[string]struct{}, error) {
+	ri.once.Do(func() { ri.names, ri.err = ri.load(ctx) })
+	return ri.names, ri.err
+}
+
+// newRestoreIntent defers the List until a pod actually has to be built.
+func (r *Reconciler) newRestoreIntent(namespace string) *restoreIntent {
+	return &restoreIntent{load: func(ctx context.Context) (map[string]struct{}, error) {
+		return r.podsRestorableByCR(ctx, namespace)
+	}}
+}
 
 // hibernationPodNames lists the namespace's CocoonHibernations and returns the
 // set of PodRef names whose CR satisfies accept.

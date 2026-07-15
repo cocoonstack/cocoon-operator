@@ -559,7 +559,7 @@ func TestPodSpecMatchesAgentIgnoresAffinity(t *testing.T) {
 	}
 }
 
-func testScheme(t *testing.T) *runtime.Scheme {
+func testScheme(t testing.TB) *runtime.Scheme {
 	t.Helper()
 	scheme := runtime.NewScheme()
 	utilruntime.Must(clientgoscheme.AddToScheme(scheme))

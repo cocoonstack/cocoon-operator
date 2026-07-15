@@ -32,59 +32,69 @@ const subAgentCreateConcurrency = 8
 // (non-zero when a sub-agent is in rebuild backoff and the caller should
 // re-reconcile when backoff elapses). Missing slots are created concurrently
 // so batch scale-ups do not serialize N apiserver round trips.
-func (r *Reconciler) ensureSubAgents(ctx context.Context, cs *cocoonv1.CocoonSet, classified classifiedPods, mainVMName, mainNodeName string) (bool, time.Duration, error) {
+func (r *Reconciler) ensureSubAgents(ctx context.Context, cs *cocoonv1.CocoonSet, classified classifiedPods, mainVMName, mainNodeName string, intent *restoreIntent) (bool, time.Duration, error) {
 	logger := log.WithFunc("cocoonset.Reconciler.ensureSubAgents")
 	changed := false
 	var requeueAfter time.Duration
 
-	restorable, err := r.podsRestorableByCR(ctx, cs.Namespace)
-	if err != nil {
-		return changed, requeueAfter, err
-	}
-
-	g, gctx := errgroup.WithContext(ctx)
-	g.SetLimit(subAgentCreateConcurrency)
-	var created atomic.Bool
+	var missing []int32
 	for slot := int32(1); slot <= cs.Spec.Agent.Replicas; slot++ {
-		if pod, exists := classified.sub[slot]; exists {
-			deleted, wait, err := r.triageSubAgent(ctx, logger, pod, cs, slot)
-			if err != nil {
-				return changed, requeueAfter, err
-			}
-			if deleted {
-				changed = true
-			}
-			if wait > 0 && (requeueAfter == 0 || wait < requeueAfter) {
-				requeueAfter = wait
-			}
+		pod, exists := classified.sub[slot]
+		if !exists {
+			missing = append(missing, slot)
 			continue
 		}
-		g.Go(func() error {
-			subPod, err := buildAgentPod(cs, slot, mainVMName, mainNodeName, r.Scheme)
-			if err != nil {
-				return fmt.Errorf("build sub-agent slot %d: %w", slot, err)
-			}
-			_, intent := restorable[subPod.Name]
-			if err := r.markRestoreIfHibernated(gctx, subPod, intent); err != nil {
-				return fmt.Errorf("mark restore sub-agent slot %d: %w", slot, err)
-			}
-			if err := r.Create(gctx, subPod); err != nil {
-				if apierrors.IsAlreadyExists(err) {
-					return nil
+		deleted, wait, err := r.triageSubAgent(ctx, logger, pod, cs, slot)
+		if err != nil {
+			return changed, requeueAfter, err
+		}
+		if deleted {
+			changed = true
+		}
+		if wait > 0 && (requeueAfter == 0 || wait < requeueAfter) {
+			requeueAfter = wait
+		}
+	}
+
+	if len(missing) > 0 {
+		// Resolved before the fan-out so the goroutines only ever read it.
+		restorable, err := intent.resolve(ctx)
+		if err != nil {
+			return changed, requeueAfter, err
+		}
+		g, gctx := errgroup.WithContext(ctx)
+		g.SetLimit(subAgentCreateConcurrency)
+		var created atomic.Bool
+		for _, slot := range missing {
+			g.Go(func() error {
+				subPod, err := buildAgentPod(cs, slot, mainVMName, mainNodeName, r.Scheme)
+				if err != nil {
+					return fmt.Errorf("build sub-agent slot %d: %w", slot, err)
 				}
-				return fmt.Errorf("create sub-agent slot %d: %w", slot, err)
-			}
-			logger.Infof(gctx, "created sub-agent %s/%s", subPod.Namespace, subPod.Name)
-			created.Store(true)
-			return nil
-		})
+				_, wantRestore := restorable[subPod.Name]
+				if err := r.markRestoreIfHibernated(gctx, subPod, wantRestore); err != nil {
+					return fmt.Errorf("mark restore sub-agent slot %d: %w", slot, err)
+				}
+				if err := r.Create(gctx, subPod); err != nil {
+					if apierrors.IsAlreadyExists(err) {
+						return nil
+					}
+					return fmt.Errorf("create sub-agent slot %d: %w", slot, err)
+				}
+				logger.Infof(gctx, "created sub-agent %s/%s", subPod.Namespace, subPod.Name)
+				created.Store(true)
+				return nil
+			})
+		}
+		err = g.Wait()
+		if created.Load() {
+			changed = true
+		}
+		if err != nil {
+			return changed, requeueAfter, err
+		}
 	}
-	if err := g.Wait(); err != nil {
-		return changed || created.Load(), requeueAfter, err
-	}
-	if created.Load() {
-		changed = true
-	}
+
 	for _, slot := range slices.Sorted(maps.Keys(classified.sub)) {
 		if slot <= cs.Spec.Agent.Replicas {
 			continue

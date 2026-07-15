@@ -130,8 +130,10 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 		}
 		return ctrl.Result{Requeue: true}, nil
 	}
+	// One lazily-loaded CocoonHibernation List, shared by every create below.
+	intent := r.newRestoreIntent(cs.Namespace)
 	if classified.main == nil {
-		return r.createMainAgent(ctx, &cs)
+		return r.createMainAgent(ctx, &cs, intent)
 	}
 
 	// Sub-agents fork from main and need it live before creation.
@@ -143,11 +145,11 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 	mainVMName := meta.ParseVMSpec(classified.main).VMName
 	mainNodeName := classified.main.Spec.NodeName
 
-	subChanged, subRequeue, err := r.ensureSubAgents(ctx, &cs, classified, mainVMName, mainNodeName)
+	subChanged, subRequeue, err := r.ensureSubAgents(ctx, &cs, classified, mainVMName, mainNodeName, intent)
 	if err != nil {
 		return ctrl.Result{}, err
 	}
-	tbChanged, err := r.ensureToolboxes(ctx, &cs, classified)
+	tbChanged, err := r.ensureToolboxes(ctx, &cs, classified, intent)
 	if err != nil {
 		return ctrl.Result{}, err
 	}
@@ -165,18 +167,18 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 // restore-from-hibernate when the agent is hibernated so a cross-node recreate
 // restores from the :hibernate snapshot instead of booting fresh. It always
 // requeues so sub-agents fork off the now-created main.
-func (r *Reconciler) createMainAgent(ctx context.Context, cs *cocoonv1.CocoonSet) (ctrl.Result, error) {
+func (r *Reconciler) createMainAgent(ctx context.Context, cs *cocoonv1.CocoonSet, intent *restoreIntent) (ctrl.Result, error) {
 	logger := log.WithFunc("cocoonset.Reconciler.createMainAgent")
 	mainPod, err := buildAgentPod(cs, 0, "", "", r.Scheme)
 	if err != nil {
 		return ctrl.Result{}, fmt.Errorf("build main agent: %w", err)
 	}
-	restorable, err := r.podsRestorableByCR(ctx, cs.Namespace)
+	restorable, err := intent.resolve(ctx)
 	if err != nil {
 		return ctrl.Result{}, err
 	}
-	_, intent := restorable[mainPod.Name]
-	if err := r.markRestoreIfHibernated(ctx, mainPod, intent); err != nil {
+	_, wantRestore := restorable[mainPod.Name]
+	if err := r.markRestoreIfHibernated(ctx, mainPod, wantRestore); err != nil {
 		return ctrl.Result{}, err
 	}
 	if err := r.Create(ctx, mainPod); err != nil {

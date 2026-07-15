@@ -16,7 +16,7 @@ import (
 	"github.com/cocoonstack/cocoon-common/meta"
 )
 
-func (r *Reconciler) ensureToolboxes(ctx context.Context, cs *cocoonv1.CocoonSet, classified classifiedPods) (bool, error) {
+func (r *Reconciler) ensureToolboxes(ctx context.Context, cs *cocoonv1.CocoonSet, classified classifiedPods, intent *restoreIntent) (bool, error) {
 	logger := log.WithFunc("cocoonset.Reconciler.ensureToolboxes")
 	// Defense in depth: webhook should already reject duplicates. Validate
 	// upfront before any Create/Delete so a bypass can't leave partial state.
@@ -26,10 +26,6 @@ func (r *Reconciler) ensureToolboxes(ctx context.Context, cs *cocoonv1.CocoonSet
 			return false, fmt.Errorf("duplicate toolbox name %q in spec", tb.Name)
 		}
 		desired[tb.Name] = true
-	}
-	restorable, err := r.podsRestorableByCR(ctx, cs.Namespace)
-	if err != nil {
-		return false, err
 	}
 	changed := false
 	for _, tb := range cs.Spec.Toolboxes {
@@ -51,8 +47,12 @@ func (r *Reconciler) ensureToolboxes(ctx context.Context, cs *cocoonv1.CocoonSet
 		if err != nil {
 			return changed, fmt.Errorf("build toolbox %s: %w", tb.Name, err)
 		}
-		_, intent := restorable[tbPod.Name]
-		if err := r.markRestoreIfHibernated(ctx, tbPod, intent); err != nil {
+		restorable, err := intent.resolve(ctx)
+		if err != nil {
+			return changed, err
+		}
+		_, wantRestore := restorable[tbPod.Name]
+		if err := r.markRestoreIfHibernated(ctx, tbPod, wantRestore); err != nil {
 			return changed, fmt.Errorf("mark restore toolbox %s: %w", tb.Name, err)
 		}
 		if err := r.Create(ctx, tbPod); err != nil {
