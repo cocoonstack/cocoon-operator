@@ -863,6 +863,59 @@ func TestReconcileSerializesDeletingCRAgainstLiveCR(t *testing.T) {
 	}
 }
 
+// TestReconcileSerializesRetargetedCRAgainstItsStaleVM covers the podRef/status
+// split: spec.podRef is mutable and markPending never rewrites Status.VMName, so
+// a CR retargeted to demo-1 still deletes demo-0's tag on the way out. Keying the
+// lock on spec.podRef would lock demo-1 while touching demo-0's tag, leaving a
+// live CR on demo-0 free to probe the tag being deleted.
+func TestReconcileSerializesRetargetedCRAgainstItsStaleVM(t *testing.T) {
+	retargeted := &cocoonv1.CocoonHibernation{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: "a", Namespace: "ns",
+			Finalizers:        []string{finalizerName},
+			DeletionTimestamp: &metav1.Time{Time: time.Now()},
+		},
+		Spec: cocoonv1.CocoonHibernationSpec{
+			Desire: cocoonv1.HibernationDesireHibernate,
+			PodRef: cocoonv1.HibernationPodRef{Name: "demo-1"},
+		},
+		// Status still names demo-0's VM: the tag this CR will delete.
+		Status: cocoonv1.CocoonHibernationStatus{VMName: "vk-ns-demo-0"},
+	}
+	live := &cocoonv1.CocoonHibernation{
+		ObjectMeta: metav1.ObjectMeta{Name: "b", Namespace: "ns", Finalizers: []string{finalizerName}},
+		Spec: cocoonv1.CocoonHibernationSpec{
+			Desire: cocoonv1.HibernationDesireHibernate,
+			PodRef: cocoonv1.HibernationPodRef{Name: "demo-0"},
+		},
+	}
+	pod := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{
+		Name: "demo-0", Namespace: "ns",
+		Annotations: map[string]string{meta.AnnotationVMName: "vk-ns-demo-0"},
+	}}
+	scheme := testScheme(t)
+	cli := ctrlfake.NewClientBuilder().
+		WithScheme(scheme).
+		WithObjects(retargeted, live, pod).
+		WithStatusSubresource(&cocoonv1.CocoonHibernation{}).
+		Build()
+	reg := &concurrencyProbe{}
+	r := &Reconciler{Client: cli, Scheme: scheme, Registry: reg}
+
+	var wg sync.WaitGroup
+	for _, name := range []string{"a", "b"} {
+		wg.Go(func() {
+			_, _ = r.Reconcile(context.Background(), ctrl.Request{
+				NamespacedName: types.NamespacedName{Namespace: "ns", Name: name},
+			})
+		})
+	}
+	wg.Wait()
+	if reg.maxInFlight.Load() > 1 {
+		t.Errorf("retargeted CR ran %d registry calls in flight against its stale VM, want serialized", reg.maxInFlight.Load())
+	}
+}
+
 // concurrencyProbe records the peak number of registry calls in flight.
 type concurrencyProbe struct {
 	inFlight    atomic.Int32
