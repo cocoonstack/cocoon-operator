@@ -22,9 +22,8 @@ const (
 	benchRegistryDelay = 5 * time.Millisecond
 )
 
-// BenchmarkReconcileThroughput drives independent CocoonSets whose reconciles
-// each block on one fixed-latency registry probe, mirroring how the controller
-// worker pool overlaps those waits. Concurrency 1 is the pre-change behavior.
+// BenchmarkReconcileThroughput drives independent CocoonSets that each block on
+// one fixed-latency registry probe; concurrency 1 is the pre-change behavior.
 func BenchmarkReconcileThroughput(b *testing.B) {
 	for _, concurrency := range []int{1, 4, 8} {
 		b.Run(fmt.Sprintf("concurrency=%d", concurrency), func(b *testing.B) {
@@ -46,9 +45,8 @@ func BenchmarkReconcileThroughput(b *testing.B) {
 	}
 }
 
-// runReconciles drains sets through a pool of `concurrency` workers, the shape
-// controller-runtime gives MaxConcurrentReconciles, and returns per-reconcile
-// latencies.
+// runReconciles drains sets through a worker pool, the shape controller-runtime
+// gives MaxConcurrentReconciles.
 func runReconciles(b *testing.B, r *Reconciler, sets []*cocoonv1.CocoonSet, concurrency int) []time.Duration {
 	b.Helper()
 	queue := make(chan *cocoonv1.CocoonSet, len(sets))

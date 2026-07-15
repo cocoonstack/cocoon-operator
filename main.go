@@ -44,9 +44,7 @@ const (
 	defaultProbeAddr   = ":8081"
 	leaderElectionID   = "cocoon-operator.cocoonset.cocoonstack.io"
 
-	// defaultConcurrency stays well inside the client-go QPS budget: reconciles
-	// block on registry probes, so the win comes from overlapping those waits,
-	// not from saturating the apiserver.
+	// defaultConcurrency overlaps registry waits without straining client-go QPS.
 	defaultConcurrency = 4
 )
 

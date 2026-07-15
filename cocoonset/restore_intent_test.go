@@ -19,8 +19,7 @@ import (
 )
 
 // TestReconcileSteadyStateSkipsHibernationList pins the lazy load: with every
-// desired pod already present, the reconcile must not pay the namespace-wide
-// CocoonHibernation List.
+// desired pod present, the reconcile must not pay the CocoonHibernation List.
 func TestReconcileSteadyStateSkipsHibernationList(t *testing.T) {
 	scheme := testScheme(t)
 	cs := newCocoonSet("demo", func(cs *cocoonv1.CocoonSet) {
@@ -94,8 +93,7 @@ func TestReconcileMissingPodsListsHibernationsOnce(t *testing.T) {
 }
 
 // TestReconcileUnrelatedKeyProgressesWhileProbeBlocks pins what concurrency
-// buys: with one CocoonSet's registry probe wedged, a second must still finish.
-// At MaxConcurrentReconciles=1 the worker pool would serialize them.
+// buys: with one CocoonSet's probe wedged, a second must still finish.
 func TestReconcileUnrelatedKeyProgressesWhileProbeBlocks(t *testing.T) {
 	scheme := testScheme(t)
 	blocked, wedged := newCocoonSet("blocked", withMainRestore), newCocoonSet("free", withMainRestore)

@@ -82,7 +82,7 @@ func (r *Reconciler) ensureSubAgents(ctx context.Context, cs *cocoonv1.CocoonSet
 }
 
 // createSubAgents builds the missing slots concurrently so a batch scale-up does
-// not serialize N apiserver round trips. Reports whether any pod was created.
+// not serialize N apiserver round trips.
 func (r *Reconciler) createSubAgents(ctx context.Context, logger *log.Fields, cs *cocoonv1.CocoonSet, missing []int32, mainVMName, mainNodeName string, intent restoreIntent) (bool, error) {
 	if len(missing) == 0 {
 		return false, nil

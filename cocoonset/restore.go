@@ -13,13 +13,11 @@ import (
 	"github.com/cocoonstack/cocoon-common/meta"
 )
 
-// restoreIntent returns the namespace's restore-intent set, loading it at most
-// once however many pods ask.
+// restoreIntent returns the namespace's restore-intent set, loaded at most once.
 type restoreIntent func() (map[string]struct{}, error)
 
 // newRestoreIntent defers the List until a pod actually has to be built: it is
-// O(CocoonHibernations in the namespace), so the steady path must not pay it and
-// the agent and toolbox passes must not pay it twice.
+// O(CocoonHibernations in the namespace) and the steady path must not pay it.
 func (r *Reconciler) newRestoreIntent(ctx context.Context, namespace string) restoreIntent {
 	return sync.OnceValues(func() (map[string]struct{}, error) {
 		return r.podsRestorableByCR(ctx, namespace)

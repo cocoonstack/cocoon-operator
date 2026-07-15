@@ -37,8 +37,8 @@ type Reconciler struct {
 	Scheme   *runtime.Scheme
 	Registry snapshot.Registry
 	Recorder record.EventRecorder
-	// Concurrency caps in-flight reconciles. Reconciles block on registry
-	// probes, so at 1 a single slow probe stalls every other CocoonSet.
+	// Concurrency caps in-flight reconciles; at 1 one slow registry probe
+	// stalls every other CocoonSet.
 	Concurrency int
 }
 
@@ -130,7 +130,6 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 		}
 		return ctrl.Result{Requeue: true}, nil
 	}
-	// One lazily-loaded CocoonHibernation List, shared by every create below.
 	intent := r.newRestoreIntent(ctx, cs.Namespace)
 	if classified.main == nil {
 		return r.createMainAgent(ctx, &cs, intent)

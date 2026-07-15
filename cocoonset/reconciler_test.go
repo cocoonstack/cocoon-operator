@@ -666,8 +666,7 @@ func TestSetupWithManagerRejectsInvalidConcurrency(t *testing.T) {
 type fakeRegistry struct {
 	present  map[string]bool
 	probeErr error
-	// delay models a remote round trip; block wedges the named VM's probe
-	// until its channel closes.
+	// delay models a remote round trip; block wedges the named VM's probe.
 	delay     time.Duration
 	block     map[string]chan struct{}
 	deletedMu sync.Mutex

@@ -57,8 +57,8 @@ type Reconciler struct {
 	Scheme   *runtime.Scheme
 	Registry snapshot.Registry
 	Recorder record.EventRecorder
-	// Concurrency caps in-flight reconciles. Reconciles block on registry
-	// pushes and deletes, so at 1 a single slow request stalls every other CR.
+	// Concurrency caps in-flight reconciles; at 1 one slow registry request
+	// stalls every other CR.
 	Concurrency int
 
 	// observed[UID] = last recorded Ready.LastTransitionTime, dedups
