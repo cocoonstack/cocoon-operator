@@ -813,6 +813,56 @@ func TestReconcileSerializesCRsTargetingOnePod(t *testing.T) {
 	}
 }
 
+// TestReconcileSerializesDeletingCRAgainstLiveCR covers the delete fast path:
+// reconcileDelete drops the same :hibernate tag a live CR on that pod probes, so
+// it must take the pod lock too rather than return ahead of it.
+func TestReconcileSerializesDeletingCRAgainstLiveCR(t *testing.T) {
+	deleting := &cocoonv1.CocoonHibernation{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: "a", Namespace: "ns",
+			Finalizers:        []string{finalizerName},
+			DeletionTimestamp: &metav1.Time{Time: time.Now()},
+		},
+		Spec: cocoonv1.CocoonHibernationSpec{
+			Desire: cocoonv1.HibernationDesireHibernate,
+			PodRef: cocoonv1.HibernationPodRef{Name: "demo-0"},
+		},
+		Status: cocoonv1.CocoonHibernationStatus{VMName: "vk-ns-demo-0"},
+	}
+	live := &cocoonv1.CocoonHibernation{
+		ObjectMeta: metav1.ObjectMeta{Name: "b", Namespace: "ns", Finalizers: []string{finalizerName}},
+		Spec: cocoonv1.CocoonHibernationSpec{
+			Desire: cocoonv1.HibernationDesireHibernate,
+			PodRef: cocoonv1.HibernationPodRef{Name: "demo-0"},
+		},
+	}
+	pod := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{
+		Name: "demo-0", Namespace: "ns",
+		Annotations: map[string]string{meta.AnnotationVMName: "vk-ns-demo-0"},
+	}}
+	scheme := testScheme(t)
+	cli := ctrlfake.NewClientBuilder().
+		WithScheme(scheme).
+		WithObjects(deleting, live, pod).
+		WithStatusSubresource(&cocoonv1.CocoonHibernation{}).
+		Build()
+	reg := &concurrencyProbe{}
+	r := &Reconciler{Client: cli, Scheme: scheme, Registry: reg}
+
+	var wg sync.WaitGroup
+	for _, name := range []string{"a", "b"} {
+		wg.Go(func() {
+			_, _ = r.Reconcile(context.Background(), ctrl.Request{
+				NamespacedName: types.NamespacedName{Namespace: "ns", Name: name},
+			})
+		})
+	}
+	wg.Wait()
+	if reg.maxInFlight.Load() > 1 {
+		t.Errorf("deleting CR ran %d registry calls in flight with a live CR on the same pod, want serialized", reg.maxInFlight.Load())
+	}
+}
+
 // concurrencyProbe records the peak number of registry calls in flight.
 type concurrencyProbe struct {
 	inFlight    atomic.Int32
@@ -833,9 +883,15 @@ func (c *concurrencyProbe) DeleteManifest(context.Context, string, string) error
 	return nil
 }
 
+// enter raises the peak by CAS: a plain load-then-store lets a later, smaller
+// caller overwrite a peak of 2 with 1 and pass the test falsely.
 func (c *concurrencyProbe) enter() {
-	if n := c.inFlight.Add(1); n > c.maxInFlight.Load() {
-		c.maxInFlight.Store(n)
+	n := c.inFlight.Add(1)
+	for {
+		peak := c.maxInFlight.Load()
+		if n <= peak || c.maxInFlight.CompareAndSwap(peak, n) {
+			return
+		}
 	}
 }
 

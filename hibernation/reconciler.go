@@ -4,6 +4,7 @@ package hibernation
 import (
 	"context"
 	"fmt"
+	"hash/fnv"
 	"sync"
 	"time"
 
@@ -45,6 +46,10 @@ const (
 	// finalizerName keeps the CR alive long enough to clear its :hibernate tag from the registry.
 	finalizerName = "cocoonhibernation.cocoonset.cocoonstack.io/finalizer"
 
+	// podLockStripes bounds the per-pod lock table; 64 keeps collisions rare
+	// against realistic per-namespace pod counts.
+	podLockStripes = 64
+
 	conditionReasonPending = "Pending"
 	conditionReasonDone    = "Done"
 	conditionReasonFailed  = "Failed"
@@ -65,12 +70,11 @@ type Reconciler struct {
 	// phase-exit observations against controller-runtime cache lag.
 	observed sync.Map
 
-	// podLocks[namespace/podRef] serializes the distinct CRs that may target one
-	// pod: controller-runtime only serializes a single key, so above one worker
-	// opposing Hibernate/Wake desires would interleave their patch of the shared
-	// hibernate annotation and their HasManifest/DeleteManifest of the one
-	// :hibernate tag. Different pods stay concurrent.
-	podLocks sync.Map
+	// podLocks serializes the distinct CRs that may target one pod: controller-
+	// runtime only serializes a single key, so above one worker opposing
+	// Hibernate/Wake desires would interleave their patch of the shared hibernate
+	// annotation and their HasManifest/DeleteManifest of the one :hibernate tag.
+	podLocks [podLockStripes]sync.Mutex
 }
 
 // SetupWithManager registers the reconciler with the controller manager.
@@ -119,6 +123,12 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 		return ctrl.Result{}, fmt.Errorf("get hibernation %s: %w", req.NamespacedName, err)
 	}
 
+	// Ahead of the delete fast path: reconcileDelete drops the same :hibernate
+	// tag another CR on this pod may be probing.
+	if hib.Spec.PodRef.Name != "" {
+		defer r.lockPod(hib.Namespace, hib.Spec.PodRef.Name)()
+	}
+
 	if !hib.DeletionTimestamp.IsZero() {
 		return ctrl.Result{}, r.reconcileDelete(ctx, &hib)
 	}
@@ -133,7 +143,6 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 	if hib.Spec.PodRef.Name == "" {
 		return ctrl.Result{}, r.markFailed(ctx, &hib, "spec.podRef.name is required")
 	}
-	defer r.lockPod(hib.Namespace, hib.Spec.PodRef.Name)()
 
 	var pod corev1.Pod
 	err := r.Get(ctx, types.NamespacedName{Namespace: hib.Namespace, Name: hib.Spec.PodRef.Name}, &pod)
@@ -164,13 +173,14 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 	}
 }
 
-// lockPod locks the CR's target pod and returns its release. Entries are keyed
-// by pod name, which is stable and bounded by the CocoonSet's pods, so they are
-// never evicted: a live holder would otherwise keep a mutex that a later CR no
-// longer shares.
+// lockPod locks the CR's target pod and returns its release. Striping keeps the
+// table fixed-size: pod names come and go with CocoonSets, so a per-name map
+// would grow for the process lifetime, and a collision only costs two unrelated
+// pods an occasional serialization.
 func (r *Reconciler) lockPod(namespace, podName string) func() {
-	lock, _ := r.podLocks.LoadOrStore(meta.PodKey(namespace, podName), &sync.Mutex{})
-	mu := lock.(*sync.Mutex)
+	h := fnv.New32a()
+	_, _ = h.Write([]byte(meta.PodKey(namespace, podName)))
+	mu := &r.podLocks[h.Sum32()%podLockStripes]
 	mu.Lock()
 	return mu.Unlock
 }
