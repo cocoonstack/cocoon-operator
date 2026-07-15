@@ -13,6 +13,7 @@ import (
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/builder"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/controller"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	"sigs.k8s.io/controller-runtime/pkg/predicate"
 
@@ -36,15 +37,22 @@ type Reconciler struct {
 	Scheme   *runtime.Scheme
 	Registry snapshot.Registry
 	Recorder record.EventRecorder
+	// Concurrency caps in-flight reconciles; at 1 one slow registry probe
+	// stalls every other CocoonSet.
+	Concurrency int
 }
 
 // SetupWithManager registers the reconciler. `For` uses GenerationChangedPredicate
 // to avoid status-update loops; Owns filters pod events to creation, deletion,
 // and readiness transitions to prevent reconcile storms from VK status churn.
 func (r *Reconciler) SetupWithManager(_ context.Context, mgr ctrl.Manager) error {
+	if r.Concurrency < 1 {
+		return fmt.Errorf("cocoonset concurrency must be at least 1, got %d", r.Concurrency)
+	}
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&cocoonv1.CocoonSet{}, builder.WithPredicates(predicate.GenerationChangedPredicate{})).
 		Owns(&corev1.Pod{}, builder.WithPredicates(podRelevantChange{})).
+		WithOptions(controller.Options{MaxConcurrentReconciles: r.Concurrency}).
 		Complete(r)
 }
 
@@ -122,8 +130,9 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 		}
 		return ctrl.Result{Requeue: true}, nil
 	}
+	intent := r.newRestoreIntent(ctx, cs.Namespace)
 	if classified.main == nil {
-		return r.createMainAgent(ctx, &cs)
+		return r.createMainAgent(ctx, &cs, intent)
 	}
 
 	// Sub-agents fork from main and need it live before creation.
@@ -135,11 +144,11 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 	mainVMName := meta.ParseVMSpec(classified.main).VMName
 	mainNodeName := classified.main.Spec.NodeName
 
-	subChanged, subRequeue, err := r.ensureSubAgents(ctx, &cs, classified, mainVMName, mainNodeName)
+	subChanged, subRequeue, err := r.ensureSubAgents(ctx, &cs, classified, mainVMName, mainNodeName, intent)
 	if err != nil {
 		return ctrl.Result{}, err
 	}
-	tbChanged, err := r.ensureToolboxes(ctx, &cs, classified)
+	tbChanged, err := r.ensureToolboxes(ctx, &cs, classified, intent)
 	if err != nil {
 		return ctrl.Result{}, err
 	}
@@ -157,18 +166,18 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 // restore-from-hibernate when the agent is hibernated so a cross-node recreate
 // restores from the :hibernate snapshot instead of booting fresh. It always
 // requeues so sub-agents fork off the now-created main.
-func (r *Reconciler) createMainAgent(ctx context.Context, cs *cocoonv1.CocoonSet) (ctrl.Result, error) {
+func (r *Reconciler) createMainAgent(ctx context.Context, cs *cocoonv1.CocoonSet, intent restoreIntent) (ctrl.Result, error) {
 	logger := log.WithFunc("cocoonset.Reconciler.createMainAgent")
 	mainPod, err := buildAgentPod(cs, 0, "", "", r.Scheme)
 	if err != nil {
 		return ctrl.Result{}, fmt.Errorf("build main agent: %w", err)
 	}
-	restorable, err := r.podsRestorableByCR(ctx, cs.Namespace)
+	restorable, err := intent()
 	if err != nil {
 		return ctrl.Result{}, err
 	}
-	_, intent := restorable[mainPod.Name]
-	if err := r.markRestoreIfHibernated(ctx, mainPod, intent); err != nil {
+	_, wantRestore := restorable[mainPod.Name]
+	if err := r.markRestoreIfHibernated(ctx, mainPod, wantRestore); err != nil {
 		return ctrl.Result{}, err
 	}
 	if err := r.Create(ctx, mainPod); err != nil {

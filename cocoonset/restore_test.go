@@ -122,7 +122,7 @@ func TestEnsureToolboxesRestoresHibernated(t *testing.T) {
 		Registry: &fakeRegistry{present: map[string]bool{tbVMName + ":hibernate": true}},
 	}
 
-	changed, err := r.ensureToolboxes(t.Context(), cs, classifyPods(nil))
+	changed, err := r.ensureToolboxes(t.Context(), cs, classifyPods(nil), r.newRestoreIntent(t.Context(), cs.Namespace))
 	if err != nil {
 		t.Fatalf("ensureToolboxes: %v", err)
 	}

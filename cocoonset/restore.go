@@ -3,6 +3,7 @@ package cocoonset
 import (
 	"context"
 	"fmt"
+	"sync"
 
 	"github.com/projecteru2/core/log"
 	corev1 "k8s.io/api/core/v1"
@@ -11,6 +12,17 @@ import (
 	cocoonv1 "github.com/cocoonstack/cocoon-common/apis/v1"
 	"github.com/cocoonstack/cocoon-common/meta"
 )
+
+// restoreIntent returns the namespace's restore-intent set, loaded at most once.
+type restoreIntent func() (map[string]struct{}, error)
+
+// newRestoreIntent defers the List until a pod actually has to be built: it is
+// O(CocoonHibernations in the namespace) and the steady path must not pay it.
+func (r *Reconciler) newRestoreIntent(ctx context.Context, namespace string) restoreIntent {
+	return sync.OnceValues(func() (map[string]struct{}, error) {
+		return r.podsRestorableByCR(ctx, namespace)
+	})
+}
 
 // hibernationPodNames lists the namespace's CocoonHibernations and returns the
 // set of PodRef names whose CR satisfies accept.

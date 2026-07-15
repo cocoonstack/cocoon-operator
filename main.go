@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"os"
 	"os/signal"
+	"strconv"
 	"syscall"
 
 	"github.com/google/go-containerregistry/pkg/authn"
@@ -42,19 +43,26 @@ const (
 	defaultMetricsAddr = ":8080"
 	defaultProbeAddr   = ":8081"
 	leaderElectionID   = "cocoon-operator.cocoonset.cocoonstack.io"
+
+	// defaultConcurrency overlaps registry waits without straining client-go QPS.
+	defaultConcurrency = 4
 )
 
 func main() {
 	leaderDefault := commonk8s.EnvBool("LEADER_ELECT", true)
 
 	var (
-		metricsAddr          string
-		probeAddr            string
-		enableLeaderElection bool
+		metricsAddr            string
+		probeAddr              string
+		enableLeaderElection   bool
+		cocoonSetConcurrency   int
+		hibernationConcurrency int
 	)
 	flag.StringVar(&metricsAddr, "metrics-bind-address", commonk8s.EnvOrDefault("METRICS_ADDR", defaultMetricsAddr), "The address the metric endpoint binds to.")
 	flag.StringVar(&probeAddr, "health-probe-bind-address", commonk8s.EnvOrDefault("PROBE_ADDR", defaultProbeAddr), "The address the probe endpoint binds to.")
 	flag.BoolVar(&enableLeaderElection, "leader-elect", leaderDefault, "Enable leader election so only one operator instance reconciles at a time.")
+	flag.IntVar(&cocoonSetConcurrency, "cocoonset-concurrency", envInt("COCOONSET_CONCURRENCY", defaultConcurrency), "Maximum concurrent CocoonSet reconciles.")
+	flag.IntVar(&hibernationConcurrency, "hibernation-concurrency", envInt("HIBERNATION_CONCURRENCY", defaultConcurrency), "Maximum concurrent CocoonHibernation reconciles.")
 	flag.Parse()
 
 	ctx := context.Background()
@@ -109,18 +117,20 @@ func main() {
 	recorder := broadcaster.NewRecorder(mgr.GetScheme(), corev1.EventSource{Component: "cocoon-operator"})
 
 	if err = (&cocoonset.Reconciler{
-		Client:   mgr.GetClient(),
-		Scheme:   mgr.GetScheme(),
-		Registry: registry,
-		Recorder: recorder,
+		Client:      mgr.GetClient(),
+		Scheme:      mgr.GetScheme(),
+		Registry:    registry,
+		Recorder:    recorder,
+		Concurrency: cocoonSetConcurrency,
 	}).SetupWithManager(ctx, mgr); err != nil {
 		logger.Fatalf(ctx, err, "register cocoonset.Reconciler")
 	}
 	if err = (&hibernation.Reconciler{
-		Client:   mgr.GetClient(),
-		Scheme:   mgr.GetScheme(),
-		Registry: registry,
-		Recorder: recorder,
+		Client:      mgr.GetClient(),
+		Scheme:      mgr.GetScheme(),
+		Registry:    registry,
+		Recorder:    recorder,
+		Concurrency: hibernationConcurrency,
 	}).SetupWithManager(ctx, mgr); err != nil {
 		logger.Fatalf(ctx, err, "register hibernation.Reconciler")
 	}
@@ -128,8 +138,8 @@ func main() {
 	signalCtx, cancel := signal.NotifyContext(ctx, syscall.SIGINT, syscall.SIGTERM)
 	defer cancel()
 
-	logger.Infof(signalCtx, "starting controller manager (metrics=%s probe=%s leader=%t)",
-		metricsAddr, probeAddr, enableLeaderElection)
+	logger.Infof(signalCtx, "starting controller manager (metrics=%s probe=%s leader=%t cocoonset-concurrency=%d hibernation-concurrency=%d)",
+		metricsAddr, probeAddr, enableLeaderElection, cocoonSetConcurrency, hibernationConcurrency)
 	if err = mgr.Start(signalCtx); err != nil {
 		logger.Fatalf(signalCtx, err, "run manager")
 	}
@@ -151,4 +161,13 @@ func buildScheme() *runtime.Scheme {
 	utilruntime.Must(clientgoscheme.AddToScheme(scheme))
 	utilruntime.Must(cocoonv1.AddToScheme(scheme))
 	return scheme
+}
+
+// envInt parses an int env var, falling back when unset or invalid.
+func envInt(key string, fallback int) int {
+	n, err := strconv.Atoi(os.Getenv(key))
+	if err != nil {
+		return fallback
+	}
+	return n
 }

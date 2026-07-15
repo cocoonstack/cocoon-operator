@@ -4,6 +4,7 @@ package hibernation
 import (
 	"context"
 	"fmt"
+	"hash/fnv"
 	"sync"
 	"time"
 
@@ -18,6 +19,7 @@ import (
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/builder"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/controller"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	"sigs.k8s.io/controller-runtime/pkg/event"
 	"sigs.k8s.io/controller-runtime/pkg/handler"
@@ -44,6 +46,10 @@ const (
 	// finalizerName keeps the CR alive long enough to clear its :hibernate tag from the registry.
 	finalizerName = "cocoonhibernation.cocoonset.cocoonstack.io/finalizer"
 
+	// vmLockStripes bounds the per-VM lock table; 64 keeps collisions rare
+	// against realistic per-namespace VM counts.
+	vmLockStripes = 64
+
 	conditionReasonPending = "Pending"
 	conditionReasonDone    = "Done"
 	conditionReasonFailed  = "Failed"
@@ -56,16 +62,27 @@ type Reconciler struct {
 	Scheme   *runtime.Scheme
 	Registry snapshot.Registry
 	Recorder record.EventRecorder
+	// Concurrency caps in-flight reconciles; at 1 one slow registry request
+	// stalls every other CR.
+	Concurrency int
 
 	// observed[UID] = last recorded Ready.LastTransitionTime, dedups
 	// phase-exit observations against controller-runtime cache lag.
 	observed sync.Map
+
+	// vmLocks serializes the distinct CRs that may reach one VM: above one worker
+	// their opposing desires would race that VM's :hibernate tag and its pod's
+	// hibernate annotation.
+	vmLocks [vmLockStripes]sync.Mutex
 }
 
 // SetupWithManager registers the reconciler with the controller manager.
 // An index on spec.podRef.name lets the pod watcher fan out events to every
 // CR targeting a given pod, so late-arriving pods self-heal without user edits.
 func (r *Reconciler) SetupWithManager(ctx context.Context, mgr ctrl.Manager) error {
+	if r.Concurrency < 1 {
+		return fmt.Errorf("hibernation concurrency must be at least 1, got %d", r.Concurrency)
+	}
 	if err := mgr.GetFieldIndexer().IndexField(
 		ctx, &cocoonv1.CocoonHibernation{}, indexPodRefName,
 		func(o client.Object) []string {
@@ -89,6 +106,7 @@ func (r *Reconciler) SetupWithManager(ctx context.Context, mgr ctrl.Manager) err
 				},
 			)),
 		).
+		WithOptions(controller.Options{MaxConcurrentReconciles: r.Concurrency}).
 		Complete(r)
 }
 
@@ -105,7 +123,7 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 	}
 
 	if !hib.DeletionTimestamp.IsZero() {
-		return r.reconcileDelete(ctx, &hib)
+		return ctrl.Result{}, r.reconcileDelete(ctx, &hib)
 	}
 	if !controllerutil.ContainsFinalizer(&hib, finalizerName) {
 		controllerutil.AddFinalizer(&hib, finalizerName)
@@ -118,6 +136,7 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 	if hib.Spec.PodRef.Name == "" {
 		return ctrl.Result{}, r.markFailed(ctx, &hib, "spec.podRef.name is required")
 	}
+
 	var pod corev1.Pod
 	err := r.Get(ctx, types.NamespacedName{Namespace: hib.Namespace, Name: hib.Spec.PodRef.Name}, &pod)
 	if err != nil {
@@ -134,6 +153,7 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 		// VMName is filled by vk-cocoon once the VM is provisioned; wait.
 		return ctrl.Result{RequeueAfter: requeueInterval}, r.markPending(ctx, &hib, fmt.Sprintf("pod %s/%s has no %s annotation yet", pod.Namespace, pod.Name, meta.AnnotationVMName))
 	}
+	defer r.lockVM(vmName)()
 
 	logger.Debugf(ctx, "reconcile hibernation %s/%s desire=%s vm=%s", hib.Namespace, hib.Name, hib.Spec.Desire, vmName)
 
@@ -147,9 +167,26 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 	}
 }
 
+// lockVM locks the VM whose :hibernate tag and pod annotation are about to be
+// touched, and returns its release. Striping bounds the table because VM names
+// come and go with CocoonSets; a collision only costs two unrelated VMs an
+// occasional serialization.
+func (r *Reconciler) lockVM(vmName string) func() {
+	h := fnv.New32a()
+	_, _ = h.Write([]byte(vmName))
+	mu := &r.vmLocks[h.Sum32()%vmLockStripes]
+	mu.Lock()
+	return mu.Unlock
+}
+
 // reconcileDelete clears the :hibernate tag (if Status.VMName is set) and removes the finalizer.
-func (r *Reconciler) reconcileDelete(ctx context.Context, hib *cocoonv1.CocoonHibernation) (ctrl.Result, error) {
+func (r *Reconciler) reconcileDelete(ctx context.Context, hib *cocoonv1.CocoonHibernation) error {
 	logger := log.WithFunc("hibernation.Reconciler.reconcileDelete")
+	// spec.podRef is mutable, so a retargeted CR still owns the tag its status
+	// names: lock that VM, not whichever pod spec points at now.
+	if hib.Status.VMName != "" {
+		defer r.lockVM(hib.Status.VMName)()
+	}
 	if r.Registry != nil && hib.Status.VMName != "" {
 		if err := r.Registry.DeleteManifest(ctx, hib.Status.VMName, meta.HibernateSnapshotTag); err != nil {
 			logger.Errorf(ctx, err, "delete hibernate snapshot %s", hib.Status.VMName)
@@ -159,10 +196,10 @@ func (r *Reconciler) reconcileDelete(ctx context.Context, hib *cocoonv1.CocoonHi
 	if controllerutil.ContainsFinalizer(hib, finalizerName) {
 		controllerutil.RemoveFinalizer(hib, finalizerName)
 		if err := r.Update(ctx, hib); err != nil {
-			return ctrl.Result{}, fmt.Errorf("remove finalizer: %w", err)
+			return fmt.Errorf("remove finalizer: %w", err)
 		}
 	}
-	return ctrl.Result{}, nil
+	return nil
 }
 
 // hibernationsTargetingPod returns reconcile requests for every CocoonHibernation
