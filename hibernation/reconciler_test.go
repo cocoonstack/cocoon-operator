@@ -761,6 +761,15 @@ func TestReconcilePendingWhenPodMissingVMName(t *testing.T) {
 	}
 }
 
+// A nil manager suffices: the guard rejects before mgr is touched.
+func TestSetupWithManagerRejectsInvalidConcurrency(t *testing.T) {
+	for _, n := range []int{0, -1} {
+		if err := (&Reconciler{Concurrency: n}).SetupWithManager(t.Context(), nil); err == nil {
+			t.Errorf("concurrency %d must be rejected", n)
+		}
+	}
+}
+
 func testScheme(t *testing.T) *runtime.Scheme {
 	t.Helper()
 	sch := runtime.NewScheme()

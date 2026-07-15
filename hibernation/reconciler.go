@@ -18,6 +18,7 @@ import (
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/builder"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/controller"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	"sigs.k8s.io/controller-runtime/pkg/event"
 	"sigs.k8s.io/controller-runtime/pkg/handler"
@@ -56,6 +57,9 @@ type Reconciler struct {
 	Scheme   *runtime.Scheme
 	Registry snapshot.Registry
 	Recorder record.EventRecorder
+	// Concurrency caps in-flight reconciles. Reconciles block on registry
+	// pushes and deletes, so at 1 a single slow request stalls every other CR.
+	Concurrency int
 
 	// observed[UID] = last recorded Ready.LastTransitionTime, dedups
 	// phase-exit observations against controller-runtime cache lag.
@@ -66,6 +70,9 @@ type Reconciler struct {
 // An index on spec.podRef.name lets the pod watcher fan out events to every
 // CR targeting a given pod, so late-arriving pods self-heal without user edits.
 func (r *Reconciler) SetupWithManager(ctx context.Context, mgr ctrl.Manager) error {
+	if r.Concurrency < 1 {
+		return fmt.Errorf("hibernation concurrency must be at least 1, got %d", r.Concurrency)
+	}
 	if err := mgr.GetFieldIndexer().IndexField(
 		ctx, &cocoonv1.CocoonHibernation{}, indexPodRefName,
 		func(o client.Object) []string {
@@ -89,6 +96,7 @@ func (r *Reconciler) SetupWithManager(ctx context.Context, mgr ctrl.Manager) err
 				},
 			)),
 		).
+		WithOptions(controller.Options{MaxConcurrentReconciles: r.Concurrency}).
 		Complete(r)
 }
 

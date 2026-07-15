@@ -13,6 +13,7 @@ import (
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/builder"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/controller"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	"sigs.k8s.io/controller-runtime/pkg/predicate"
 
@@ -36,15 +37,22 @@ type Reconciler struct {
 	Scheme   *runtime.Scheme
 	Registry snapshot.Registry
 	Recorder record.EventRecorder
+	// Concurrency caps in-flight reconciles. Reconciles block on registry
+	// probes, so at 1 a single slow probe stalls every other CocoonSet.
+	Concurrency int
 }
 
 // SetupWithManager registers the reconciler. `For` uses GenerationChangedPredicate
 // to avoid status-update loops; Owns filters pod events to creation, deletion,
 // and readiness transitions to prevent reconcile storms from VK status churn.
 func (r *Reconciler) SetupWithManager(_ context.Context, mgr ctrl.Manager) error {
+	if r.Concurrency < 1 {
+		return fmt.Errorf("cocoonset concurrency must be at least 1, got %d", r.Concurrency)
+	}
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&cocoonv1.CocoonSet{}, builder.WithPredicates(predicate.GenerationChangedPredicate{})).
 		Owns(&corev1.Pod{}, builder.WithPredicates(podRelevantChange{})).
+		WithOptions(controller.Options{MaxConcurrentReconciles: r.Concurrency}).
 		Complete(r)
 }
 

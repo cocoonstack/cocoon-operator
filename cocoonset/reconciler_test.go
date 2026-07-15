@@ -653,6 +653,15 @@ func TestApplyUnsuspendSkipsPodHibernatedByCR(t *testing.T) {
 	}
 }
 
+// A nil manager suffices: the guard rejects before mgr is touched.
+func TestSetupWithManagerRejectsInvalidConcurrency(t *testing.T) {
+	for _, n := range []int{0, -1} {
+		if err := (&Reconciler{Concurrency: n}).SetupWithManager(t.Context(), nil); err == nil {
+			t.Errorf("concurrency %d must be rejected", n)
+		}
+	}
+}
+
 type fakeRegistry struct {
 	present   map[string]bool
 	probeErr  error
