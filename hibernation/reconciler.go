@@ -64,6 +64,13 @@ type Reconciler struct {
 	// observed[UID] = last recorded Ready.LastTransitionTime, dedups
 	// phase-exit observations against controller-runtime cache lag.
 	observed sync.Map
+
+	// podLocks[namespace/podRef] serializes the distinct CRs that may target one
+	// pod: controller-runtime only serializes a single key, so above one worker
+	// opposing Hibernate/Wake desires would interleave their patch of the shared
+	// hibernate annotation and their HasManifest/DeleteManifest of the one
+	// :hibernate tag. Different pods stay concurrent.
+	podLocks sync.Map
 }
 
 // SetupWithManager registers the reconciler with the controller manager.
@@ -113,7 +120,7 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 	}
 
 	if !hib.DeletionTimestamp.IsZero() {
-		return r.reconcileDelete(ctx, &hib)
+		return ctrl.Result{}, r.reconcileDelete(ctx, &hib)
 	}
 	if !controllerutil.ContainsFinalizer(&hib, finalizerName) {
 		controllerutil.AddFinalizer(&hib, finalizerName)
@@ -126,6 +133,8 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 	if hib.Spec.PodRef.Name == "" {
 		return ctrl.Result{}, r.markFailed(ctx, &hib, "spec.podRef.name is required")
 	}
+	defer r.lockPod(hib.Namespace, hib.Spec.PodRef.Name)()
+
 	var pod corev1.Pod
 	err := r.Get(ctx, types.NamespacedName{Namespace: hib.Namespace, Name: hib.Spec.PodRef.Name}, &pod)
 	if err != nil {
@@ -155,8 +164,19 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 	}
 }
 
+// lockPod locks the CR's target pod and returns its release. Entries are keyed
+// by pod name, which is stable and bounded by the CocoonSet's pods, so they are
+// never evicted: a live holder would otherwise keep a mutex that a later CR no
+// longer shares.
+func (r *Reconciler) lockPod(namespace, podName string) func() {
+	lock, _ := r.podLocks.LoadOrStore(meta.PodKey(namespace, podName), &sync.Mutex{})
+	mu := lock.(*sync.Mutex)
+	mu.Lock()
+	return mu.Unlock
+}
+
 // reconcileDelete clears the :hibernate tag (if Status.VMName is set) and removes the finalizer.
-func (r *Reconciler) reconcileDelete(ctx context.Context, hib *cocoonv1.CocoonHibernation) (ctrl.Result, error) {
+func (r *Reconciler) reconcileDelete(ctx context.Context, hib *cocoonv1.CocoonHibernation) error {
 	logger := log.WithFunc("hibernation.Reconciler.reconcileDelete")
 	if r.Registry != nil && hib.Status.VMName != "" {
 		if err := r.Registry.DeleteManifest(ctx, hib.Status.VMName, meta.HibernateSnapshotTag); err != nil {
@@ -167,10 +187,10 @@ func (r *Reconciler) reconcileDelete(ctx context.Context, hib *cocoonv1.CocoonHi
 	if controllerutil.ContainsFinalizer(hib, finalizerName) {
 		controllerutil.RemoveFinalizer(hib, finalizerName)
 		if err := r.Update(ctx, hib); err != nil {
-			return ctrl.Result{}, fmt.Errorf("remove finalizer: %w", err)
+			return fmt.Errorf("remove finalizer: %w", err)
 		}
 	}
-	return ctrl.Result{}, nil
+	return nil
 }
 
 // hibernationsTargetingPod returns reconcile requests for every CocoonHibernation

@@ -3,6 +3,8 @@ package hibernation
 import (
 	"context"
 	"errors"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -143,7 +145,7 @@ func TestReconcileDeleteClearsHibernateTagAndFinalizer(t *testing.T) {
 	reg := &fakeRegistry{}
 	r := &Reconciler{Client: cli, Scheme: scheme, Registry: reg}
 
-	if _, err := r.reconcileDelete(t.Context(), hib); err != nil {
+	if err := r.reconcileDelete(t.Context(), hib); err != nil {
 		t.Fatalf("reconcileDelete: %v", err)
 	}
 	if !reg.deleteCalled {
@@ -179,7 +181,7 @@ func TestReconcileDeleteSkipsTagWhenVMNameMissing(t *testing.T) {
 	reg := &fakeRegistry{}
 	r := &Reconciler{Client: cli, Scheme: scheme, Registry: reg}
 
-	if _, err := r.reconcileDelete(t.Context(), hib); err != nil {
+	if err := r.reconcileDelete(t.Context(), hib); err != nil {
 		t.Fatalf("reconcileDelete: %v", err)
 	}
 	if reg.deleteCalled {
@@ -758,6 +760,82 @@ func TestReconcilePendingWhenPodMissingVMName(t *testing.T) {
 	}
 	if out.Status.Phase != cocoonv1.CocoonHibernationPhasePending {
 		t.Errorf("phase = %q, want Pending", out.Status.Phase)
+	}
+}
+
+// TestReconcileSerializesCRsTargetingOnePod pins the pod lock: nothing stops two
+// CRs from naming one pod with opposing desires, and above one worker they would
+// otherwise interleave the shared hibernate annotation and :hibernate tag.
+func TestReconcileSerializesCRsTargetingOnePod(t *testing.T) {
+	hib := func(name string, desire cocoonv1.HibernationDesire) *cocoonv1.CocoonHibernation {
+		return &cocoonv1.CocoonHibernation{
+			ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: "ns", Finalizers: []string{finalizerName}},
+			Spec: cocoonv1.CocoonHibernationSpec{
+				Desire: desire,
+				PodRef: cocoonv1.HibernationPodRef{Name: "demo-0"},
+			},
+		}
+	}
+	// Running + a VMID is what drives the wake path all the way to DeleteManifest,
+	// so both desires actually reach the registry and can be observed racing.
+	pod := &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: "demo-0", Namespace: "ns",
+			Annotations: map[string]string{
+				meta.AnnotationVMName: "vk-ns-demo-0",
+				meta.AnnotationVMID:   "vmid-1",
+			},
+		},
+		Status: corev1.PodStatus{ContainerStatuses: []corev1.ContainerStatus{
+			{State: corev1.ContainerState{Running: &corev1.ContainerStateRunning{}}},
+		}},
+	}
+	scheme := testScheme(t)
+	cli := ctrlfake.NewClientBuilder().
+		WithScheme(scheme).
+		WithObjects(hib("a", cocoonv1.HibernationDesireHibernate), hib("b", cocoonv1.HibernationDesireWake), pod).
+		WithStatusSubresource(&cocoonv1.CocoonHibernation{}).
+		Build()
+	reg := &concurrencyProbe{}
+	r := &Reconciler{Client: cli, Scheme: scheme, Registry: reg}
+
+	var wg sync.WaitGroup
+	for _, name := range []string{"a", "b"} {
+		wg.Go(func() {
+			_, _ = r.Reconcile(context.Background(), ctrl.Request{
+				NamespacedName: types.NamespacedName{Namespace: "ns", Name: name},
+			})
+		})
+	}
+	wg.Wait()
+	if reg.maxInFlight.Load() > 1 {
+		t.Errorf("CRs targeting one pod ran %d registry calls in flight, want serialized", reg.maxInFlight.Load())
+	}
+}
+
+// concurrencyProbe records the peak number of registry calls in flight.
+type concurrencyProbe struct {
+	inFlight    atomic.Int32
+	maxInFlight atomic.Int32
+}
+
+func (c *concurrencyProbe) HasManifest(context.Context, string, string) (bool, error) {
+	c.enter()
+	defer c.inFlight.Add(-1)
+	time.Sleep(20 * time.Millisecond)
+	return false, nil
+}
+
+func (c *concurrencyProbe) DeleteManifest(context.Context, string, string) error {
+	c.enter()
+	defer c.inFlight.Add(-1)
+	time.Sleep(20 * time.Millisecond)
+	return nil
+}
+
+func (c *concurrencyProbe) enter() {
+	if n := c.inFlight.Add(1); n > c.maxInFlight.Load() {
+		c.maxInFlight.Store(n)
 	}
 }
 

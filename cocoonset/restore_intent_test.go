@@ -105,11 +105,20 @@ func TestReconcileUnrelatedKeyProgressesWhileProbeBlocks(t *testing.T) {
 		WithObjects(blocked, wedged, hibernatedFor(blocked), hibernatedFor(wedged)).
 		WithStatusSubresource(&cocoonv1.CocoonSet{}).
 		Build()
+	entered := make(chan string, 1)
 	r := &Reconciler{Client: cli, Scheme: scheme, Registry: &fakeRegistry{
-		block: map[string]chan struct{}{meta.VMNameForPod("ns", "blocked-0"): release},
+		block:   map[string]chan struct{}{meta.VMNameForPod("ns", "blocked-0"): release},
+		entered: entered,
 	}}
 
 	go func() { _, _ = r.Reconcile(context.Background(), reqFor(blocked)) }()
+	// Wait until the probe is genuinely wedged; otherwise the second reconcile
+	// could finish first and pass even under full serialization.
+	select {
+	case <-entered:
+	case <-time.After(5 * time.Second):
+		t.Fatal("blocked reconcile never reached the registry probe")
+	}
 
 	done := make(chan error, 1)
 	go func() { _, err := r.Reconcile(context.Background(), reqFor(wedged)); done <- err }()

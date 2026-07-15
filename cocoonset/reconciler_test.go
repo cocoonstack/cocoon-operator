@@ -666,9 +666,11 @@ func TestSetupWithManagerRejectsInvalidConcurrency(t *testing.T) {
 type fakeRegistry struct {
 	present  map[string]bool
 	probeErr error
-	// delay models a remote round trip; block wedges the named VM's probe.
+	// delay models a remote round trip; block wedges the named VM's probe and
+	// entered reports that the probe is actually wedged.
 	delay     time.Duration
 	block     map[string]chan struct{}
+	entered   chan string
 	deletedMu sync.Mutex
 	deleted   []string
 }
@@ -678,6 +680,9 @@ func (f *fakeRegistry) HasManifest(_ context.Context, name, tag string) (bool, e
 		return false, f.probeErr
 	}
 	if ch, ok := f.block[name]; ok {
+		if f.entered != nil {
+			f.entered <- name
+		}
 		<-ch
 	}
 	time.Sleep(f.delay)
