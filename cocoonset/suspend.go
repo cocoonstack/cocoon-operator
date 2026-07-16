@@ -1,6 +1,7 @@
 package cocoonset
 
 import (
+	"cmp"
 	"context"
 	"fmt"
 	"maps"
@@ -99,27 +100,38 @@ func (r *Reconciler) applySuspend(ctx context.Context, classified classifiedPods
 
 // applyUnsuspend clears HibernateState from owned pods, skipping pods that are
 // targets of an active CocoonHibernation CR to avoid racing the hibernation
-// reconciler. The CR list loads lazily so the steady path never pays it.
+// reconciler. The unsorted pre-scan keeps the steady path (nothing hibernated)
+// zero-alloc: no key sort, no CR list.
 func (r *Reconciler) applyUnsuspend(ctx context.Context, namespace string, classified classifiedPods) error {
-	var hibernatedByCR map[string]struct{}
-	return classified.forEachSorted(ctx, func(pod *corev1.Pod) error {
-		if !meta.ReadHibernateState(pod) {
-			return nil
+	var hibernated []*corev1.Pod
+	for _, pod := range classified.allByName {
+		if meta.ReadHibernateState(pod) {
+			hibernated = append(hibernated, pod)
 		}
-		if hibernatedByCR == nil {
-			var err error
-			if hibernatedByCR, err = r.podsHibernatedByCR(ctx, namespace); err != nil {
-				return err
-			}
+	}
+	if len(hibernated) == 0 {
+		return nil
+	}
+	slices.SortFunc(hibernated, func(a, b *corev1.Pod) int {
+		return cmp.Compare(a.Name, b.Name)
+	})
+
+	hibernatedByCR, err := r.podsHibernatedByCR(ctx, namespace)
+	if err != nil {
+		return err
+	}
+	for _, pod := range hibernated {
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return ctxErr
 		}
 		if _, ownedByCR := hibernatedByCR[pod.Name]; ownedByCR {
-			return nil
+			continue
 		}
 		if err := commonk8s.PatchHibernateState(ctx, r.Client, pod, false); err != nil {
 			return fmt.Errorf("clear hibernate annotation on %s/%s: %w", pod.Namespace, pod.Name, err)
 		}
-		return nil
-	})
+	}
+	return nil
 }
 
 // podsHibernatedByCR returns pod names targeted by a desire=Hibernate CR.
