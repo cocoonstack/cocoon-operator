@@ -1,6 +1,7 @@
 package cocoonset
 
 import (
+	"cmp"
 	"context"
 	"fmt"
 	"maps"
@@ -82,9 +83,7 @@ func buildStatus(cs *cocoonv1.CocoonSet, classified classifiedPods, phase cocoon
 		tbStatuses = append(tbStatuses, toolboxStatusFromPod(pod, name))
 	}
 
-	if phase == "" {
-		phase = derivePhase(classified.main, ready, desired, tbReady, tbDesired)
-	}
+	phase = cmp.Or(phase, derivePhase(classified.main, ready, desired, tbReady, tbDesired))
 
 	return cocoonv1.CocoonSetStatus{
 		ObservedGeneration: cs.Generation,

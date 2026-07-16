@@ -1,6 +1,7 @@
 package main
 
 import (
+	"cmp"
 	"context"
 	"fmt"
 	"strings"
@@ -60,10 +61,7 @@ func (s *crSink) WithName(name string) logr.LogSink {
 
 // funcName labels unnamed root output so its origin stays identifiable.
 func (s *crSink) funcName() string {
-	if s.name == "" {
-		return "controller-runtime"
-	}
-	return s.name
+	return cmp.Or(s.name, "controller-runtime")
 }
 
 func (s *crSink) line(msg string, kvs []any) string {

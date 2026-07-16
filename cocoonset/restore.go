@@ -63,9 +63,6 @@ func (r *Reconciler) markRestoreIfHibernated(ctx context.Context, pod *corev1.Po
 		return nil
 	}
 	vmName := meta.ParseVMSpec(pod).VMName
-	if vmName == "" {
-		return nil
-	}
 	present, err := snapshot.HasHibernateSnapshot(ctx, r.Registry, vmName)
 	if err != nil {
 		return err

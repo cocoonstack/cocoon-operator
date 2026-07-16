@@ -30,7 +30,6 @@ type classifiedPods struct {
 	main      *corev1.Pod
 	sub       map[int32]*corev1.Pod
 	toolbox   map[string]*corev1.Pod
-	unknowns  []*corev1.Pod
 	allByName map[string]*corev1.Pod
 }
 
@@ -48,7 +47,8 @@ func (c classifiedPods) forEachSorted(ctx context.Context, fn func(*corev1.Pod) 
 	return nil
 }
 
-// classifyPods groups pods by role label; unlabelled pods go into unknowns.
+// classifyPods groups pods by role label; pods with an unknown role or an
+// unparsable slot stay visible through allByName only.
 func classifyPods(pods []corev1.Pod) classifiedPods {
 	out := classifiedPods{
 		sub:       map[int32]*corev1.Pod{},
@@ -62,21 +62,15 @@ func classifyPods(pods []corev1.Pod) classifiedPods {
 			continue
 		}
 		out.allByName[p.Name] = p
-		role := p.Labels[meta.LabelRole]
-		switch role {
+		switch p.Labels[meta.LabelRole] {
 		case meta.RoleMain:
 			out.main = p
 		case meta.RoleSubAgent:
-			slot, err := strconv.ParseInt(p.Labels[meta.LabelSlot], 10, 32)
-			if err != nil {
-				out.unknowns = append(out.unknowns, p)
-				continue
+			if slot, err := strconv.ParseInt(p.Labels[meta.LabelSlot], 10, 32); err == nil {
+				out.sub[int32(slot)] = p
 			}
-			out.sub[int32(slot)] = p
 		case meta.RoleToolbox:
 			out.toolbox[p.Labels[meta.LabelSlot]] = p
-		default:
-			out.unknowns = append(out.unknowns, p)
 		}
 	}
 	return out

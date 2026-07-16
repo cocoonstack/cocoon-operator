@@ -1,6 +1,7 @@
 package cocoonset
 
 import (
+	"cmp"
 	"context"
 	"fmt"
 	"time"
@@ -193,19 +194,13 @@ func (r *Reconciler) createMainAgent(ctx context.Context, cs *cocoonv1.CocoonSet
 // counter so the Pod-Phase-only path doesn't dilute the metric's meaning.
 func (r *Reconciler) observeMainPodFailed(cs *cocoonv1.CocoonSet, pod *corev1.Pod, reason string) {
 	if reason == "PodLifecycleFailed" {
-		phase := string(cs.Status.Phase)
-		if phase == "" {
-			phase = string(cocoonv1.CocoonSetPhasePending)
-		}
+		phase := cmp.Or(string(cs.Status.Phase), string(cocoonv1.CocoonSetPhasePending))
 		metrics.LifecycleStateFailedObservedTotal.WithLabelValues(phase).Inc()
 	}
 	if r.Recorder == nil {
 		return
 	}
-	msg := pod.Annotations[meta.AnnotationLifecycleStateMessage]
-	if msg == "" {
-		msg = string(pod.Status.Phase)
-	}
+	msg := cmp.Or(pod.Annotations[meta.AnnotationLifecycleStateMessage], string(pod.Status.Phase))
 	r.Recorder.Eventf(cs, corev1.EventTypeWarning, reason, "main pod %s/%s: %s", pod.Namespace, pod.Name, msg)
 }
 

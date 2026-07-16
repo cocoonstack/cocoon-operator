@@ -145,7 +145,7 @@ func TestClassifyPodsGroupsByRole(t *testing.T) {
 	}
 }
 
-func TestClassifyPodsUnknownsBucket(t *testing.T) {
+func TestClassifyPodsUnknownRoleStaysInAllByName(t *testing.T) {
 	pod := corev1.Pod{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:   "stranger",
@@ -153,8 +153,11 @@ func TestClassifyPodsUnknownsBucket(t *testing.T) {
 		},
 	}
 	got := classifyPods([]corev1.Pod{pod})
-	if len(got.unknowns) != 1 {
-		t.Errorf("unknowns: %d, want 1", len(got.unknowns))
+	if got.main != nil || len(got.sub) != 0 || len(got.toolbox) != 0 {
+		t.Errorf("unlabelled pod must not be classified into a role: %+v", got)
+	}
+	if got.allByName["stranger"] == nil {
+		t.Error("unlabelled pod must stay visible in allByName")
 	}
 }
 
