@@ -1,7 +1,7 @@
 # CocoonSet reconcile loop
 
 1. Fetch the CocoonSet (return early on NotFound).
-2. If `DeletionTimestamp` is set, walk owned pods, delete them, `Registry.DeleteManifest` for both `:latest` and `:hibernate` tags on every owned VM (unconditional — DeleteManifest is 404-tolerant, and hibernate pushes ignore snapshotPolicy so any main-only gate would orphan `:hibernate` tags pushed by sub-agents), then drop the finalizer. VM names to GC are stashed onto an annotation before pod deletion so the cleanup survives a CocoonSet deleted before `Status.Agents` was ever patched.
+2. If `DeletionTimestamp` is set, walk owned pods, delete them, then GC registry tags on every owned VM: `:hibernate` unconditionally (DeleteManifest is 404-tolerant, and hibernate pushes ignore snapshotPolicy so any main-only gate would orphan `:hibernate` tags pushed by sub-agents), and `:latest` only where `shouldKeepLatestTag` says vk-cocoon never pushed one for that VM (`always` keeps every `:latest`, `main-only` keeps slot 0's, `never` drops them all). Then drop the finalizer. VM names to GC are stashed onto an annotation before pod deletion so the cleanup survives a CocoonSet deleted before `Status.Agents` was ever patched.
 3. Ensure the `cocoonset.cocoonstack.io/finalizer` is in place.
 4. List owned pods by `cocoonset.cocoonstack.io/name=<cs.Name>`, drop any with stale labels that aren't actually controller-owned, and classify the rest by role label.
 5. **Lifecycle-bridge stamp**: patch `cs.Generation` onto each owned pod's `cocoonset.cocoonstack.io/generation` annotation so vk-cocoon can echo it back as `lifecycle-observed-generation`, giving clients a counter-based completion signal immune to wallclock skew.

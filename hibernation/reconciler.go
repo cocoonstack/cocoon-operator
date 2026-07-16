@@ -4,7 +4,7 @@ package hibernation
 import (
 	"context"
 	"fmt"
-	"hash/fnv"
+	"hash/maphash"
 	"sync"
 	"time"
 
@@ -54,6 +54,8 @@ const (
 	conditionReasonDone    = "Done"
 	conditionReasonFailed  = "Failed"
 )
+
+var vmLockSeed = maphash.MakeSeed()
 
 // Reconciler watches CocoonHibernation resources and drives hibernate/wake
 // transitions by toggling pod annotations and polling the snapshot registry.
@@ -172,9 +174,7 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 // come and go with CocoonSets; a collision only costs two unrelated VMs an
 // occasional serialization.
 func (r *Reconciler) lockVM(vmName string) func() {
-	h := fnv.New32a()
-	_, _ = h.Write([]byte(vmName))
-	mu := &r.vmLocks[h.Sum32()%vmLockStripes]
+	mu := &r.vmLocks[maphash.String(vmLockSeed, vmName)%vmLockStripes]
 	mu.Lock()
 	return mu.Unlock
 }
@@ -182,8 +182,8 @@ func (r *Reconciler) lockVM(vmName string) func() {
 // reconcileDelete clears the :hibernate tag (if Status.VMName is set) and removes the finalizer.
 func (r *Reconciler) reconcileDelete(ctx context.Context, hib *cocoonv1.CocoonHibernation) error {
 	logger := log.WithFunc("hibernation.Reconciler.reconcileDelete")
-	// spec.podRef is mutable, so a retargeted CR still owns the tag its status
-	// names: lock that VM, not whichever pod spec points at now.
+	// Lock Status.VMName — the VM this CR actually owns. Defense in depth for
+	// CRs retargeted before spec.podRef became CEL-immutable.
 	if hib.Status.VMName != "" {
 		defer r.lockVM(hib.Status.VMName)()
 	}

@@ -160,6 +160,38 @@ func TestReconcileDeleteClearsHibernateTagAndFinalizer(t *testing.T) {
 	}
 }
 
+func TestReconcileDeleteTagErrorStillRemovesFinalizer(t *testing.T) {
+	hib := &cocoonv1.CocoonHibernation{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:              "hib",
+			Namespace:         "ns",
+			Finalizers:        []string{finalizerName},
+			DeletionTimestamp: &metav1.Time{Time: time.Now()},
+		},
+		Spec:   cocoonv1.CocoonHibernationSpec{PodRef: cocoonv1.HibernationPodRef{Name: "demo-0"}},
+		Status: cocoonv1.CocoonHibernationStatus{VMName: "vk-ns-demo-0"},
+	}
+
+	scheme := testScheme(t)
+	cli := ctrlfake.NewClientBuilder().
+		WithScheme(scheme).
+		WithObjects(hib).
+		WithStatusSubresource(&cocoonv1.CocoonHibernation{}).
+		Build()
+	reg := &fakeRegistry{deleteErr: errors.New("registry unavailable")}
+	r := &Reconciler{Client: cli, Scheme: scheme, Registry: reg}
+
+	// Tag deletion is best-effort: a registry outage must not wedge CR deletion.
+	if err := r.reconcileDelete(t.Context(), hib); err != nil {
+		t.Fatalf("reconcileDelete must tolerate DeleteManifest errors, got %v", err)
+	}
+	var got cocoonv1.CocoonHibernation
+	err := cli.Get(t.Context(), types.NamespacedName{Namespace: "ns", Name: "hib"}, &got)
+	if err == nil && len(got.Finalizers) != 0 {
+		t.Errorf("finalizer must be removed despite tag-delete failure, got %v", got.Finalizers)
+	}
+}
+
 func TestReconcileDeleteSkipsTagWhenVMNameMissing(t *testing.T) {
 	hib := &cocoonv1.CocoonHibernation{
 		ObjectMeta: metav1.ObjectMeta{

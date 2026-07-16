@@ -52,14 +52,9 @@ func (r *Reconciler) reconcileWake(ctx context.Context, hib *cocoonv1.CocoonHibe
 	return ctrl.Result{RequeueAfter: requeueInterval}, nil
 }
 
-// vmClonedAndRunning reports whether vk-cocoon has finished cloning from the
-// hibernation snapshot and the container is live on the new VM. Gated on BOTH
-// container Running AND a freshly applied VMID: during hibernate, vk-cocoon
-// clears the VMID annotation; on wake it writes a new VMID only after the
-// snapshot clone succeeds. Checking IsContainerRunning alone is unreliable
-// because pod.status.containerStatuses can momentarily show Running during
-// the pod-recreate → wake race, causing the snapshot tag to be dropped before
-// vk-cocoon has pulled it.
+// vmClonedAndRunning gates on BOTH container Running and a fresh VMID:
+// containerStatuses can momentarily show Running during the pod-recreate →
+// wake race, and vk-cocoon rewrites the VMID only after the clone succeeds.
 func vmClonedAndRunning(pod *corev1.Pod) bool {
 	return meta.IsContainerRunning(pod) && meta.ParseVMRuntime(pod).VMID != ""
 }

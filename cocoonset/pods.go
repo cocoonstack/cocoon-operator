@@ -259,15 +259,10 @@ func resourcesMatch(pod *corev1.Pod, want corev1.ResourceRequirements) bool {
 		return false
 	}
 	got := pod.Spec.Containers[0].Resources
-	// Compare only CPU and memory. Ephemeral-storage is injected by
-	// applyStorageRequest and tracked via the Storage annotation; K8s
-	// defaulting copies it into both Limits and Requests, which would
-	// always mismatch the CocoonSet spec's Resources (which only has
-	// CPU and memory).
-	//
-	// K8s also fills Requests = Limits for Guaranteed QoS when only
-	// Limits are specified. Normalize: if want.Requests is empty,
-	// treat want.Limits as the expected Requests.
+	// Only CPU and memory: K8s defaulting copies the injected
+	// ephemeral-storage into both Limits and Requests, which would always
+	// mismatch a spec that never carries it.
+	// Guaranteed-QoS defaulting fills Requests from Limits; mirror it.
 	wantReq := want.Requests
 	if len(wantReq) == 0 {
 		wantReq = want.Limits

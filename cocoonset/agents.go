@@ -142,13 +142,10 @@ func (r *Reconciler) triageSubAgent(ctx context.Context, logger *log.Fields, pod
 	}
 }
 
-// rebuildSubAgent deletes pod with exponential backoff and a dead-letter
-// gate. Past maxRebuildAttempts the pod is marked dead-letter and left in
-// place so the failure stays visible and rebuild storms cannot consume
-// the apiserver budget. The history annotation is persisted **before** the
-// delete so a failed delete cannot bypass maxRebuildAttempts on retry, and
-// the patch goes through a DeepCopy so concurrent ensureSubAgents goroutines
-// observe a stable cs pointer.
+// rebuildSubAgent deletes pod with exponential backoff, dead-lettering past
+// maxRebuildAttempts so failures stay visible. History persists before the
+// delete so a failed delete cannot bypass the gate; the patch DeepCopies so
+// concurrent ensureSubAgents goroutines observe a stable cs pointer.
 func (r *Reconciler) rebuildSubAgent(ctx context.Context, logger *log.Fields, pod *corev1.Pod, cs *cocoonv1.CocoonSet, slot int32) (bool, time.Duration, error) {
 	history := readRebuildHistory(cs)
 	entry := history[slot]
