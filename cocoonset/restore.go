@@ -42,12 +42,10 @@ func (r *Reconciler) hibernationPodNames(ctx context.Context, namespace string, 
 	return out, nil
 }
 
-// podsRestorableByCR returns pod names whose CocoonHibernation is in a phase where
-// a (re)created pod must restore its VM from the :hibernate snapshot rather than
-// boot fresh: Hibernated (fully hibernated) or Waking (mid-wake; the tag is still
-// present). Phase, not Desire, gates this: Phase reaches Hibernated only after the
-// snapshot is confirmed pushed and clears on wake, so a leaked snapshot left on an
-// Active agent is correctly excluded.
+// podsRestorableByCR returns pod names whose CocoonHibernation phase (Hibernated,
+// or Waking with the tag still present) requires a (re)created pod to restore
+// rather than boot fresh. Phase gates this, not Desire: Phase only reaches
+// Hibernated once the push is confirmed, so a leaked tag on an Active agent is excluded.
 func (r *Reconciler) podsRestorableByCR(ctx context.Context, namespace string) (map[string]struct{}, error) {
 	return r.hibernationPodNames(ctx, namespace, func(h *cocoonv1.CocoonHibernation) bool {
 		return h.Status.Phase == cocoonv1.CocoonHibernationPhaseHibernated ||
@@ -55,12 +53,10 @@ func (r *Reconciler) podsRestorableByCR(ctx context.Context, namespace string) (
 	})
 }
 
-// markRestoreIfHibernated flags a freshly-built pod to restore its VM from the
-// :hibernate snapshot when the agent is hibernated (intent) and the snapshot
-// actually exists in the registry. The probe is the same lookup vk runs at wake,
-// so intent and a present snapshot together guarantee the restore can proceed; it
-// also fails closed so a create never silently falls back to a fresh boot (which a
-// subsequent re-hibernate would then persist over the real snapshot).
+// markRestoreIfHibernated flags a freshly-built pod to restore from :hibernate
+// when intent holds and the snapshot exists in the registry. Fails closed: a
+// probe error must not fall back to a fresh boot that a later re-hibernate
+// would persist over the real snapshot.
 func (r *Reconciler) markRestoreIfHibernated(ctx context.Context, pod *corev1.Pod, intent bool) error {
 	logger := log.WithFunc("cocoonset.Reconciler.markRestoreIfHibernated")
 	if !intent || r.Registry == nil {

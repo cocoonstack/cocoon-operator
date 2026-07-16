@@ -92,9 +92,8 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 		return ctrl.Result{}, err
 	}
 
-	// Stop reconciling if main agent is in a terminal state. lifecycle-state=Failed
-	// is the vk-cocoon-driven path (terminal before Pod Phase flips); IsPodTerminal
-	// is the kubelet-driven path. Both transition CocoonSet to Failed.
+	// lifecycle-state=Failed is the vk-cocoon-driven terminal path (fires before
+	// Pod Phase flips); IsPodTerminal is the kubelet-driven one.
 	if classified.main != nil {
 		if reason := mainPodFailedReason(classified.main); reason != "" {
 			r.observeMainPodFailed(&cs, classified.main, reason)
@@ -117,7 +116,6 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 		return res, err
 	}
 
-	// Clear stale hibernate annotations from a prior suspend pass.
 	if err := r.applyUnsuspend(ctx, cs.Namespace, classified); err != nil {
 		return ctrl.Result{}, err
 	}

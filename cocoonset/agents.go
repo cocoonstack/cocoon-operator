@@ -195,11 +195,9 @@ func (r *Reconciler) patchPodAnnotation(ctx context.Context, pod *corev1.Pod, ke
 	return nil
 }
 
-// patchRebuildHistory writes the new history into the CocoonSet annotation
-// via Patch on a DeepCopy (Spec is what concurrent create goroutines read,
-// not Annotations, so a local write to Annotations after the patch is safe
-// and lets subsequent slot iterations see fresh history within the same
-// reconcile).
+// patchRebuildHistory patches the annotation via a DeepCopy, then mirrors it
+// locally so later slot iterations in this reconcile see fresh history;
+// concurrent create goroutines read only Spec, never Annotations.
 func (r *Reconciler) patchRebuildHistory(ctx context.Context, cs *cocoonv1.CocoonSet, history map[int32]rebuildEntry) error {
 	enc, err := encodeRebuildHistory(cs.Spec.Agent.Replicas, history)
 	if err != nil {

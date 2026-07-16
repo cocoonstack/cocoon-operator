@@ -38,7 +38,6 @@ func (r *Reconciler) reconcileHibernate(ctx context.Context, hib *cocoonv1.Cocoo
 		return ctrl.Result{}, r.markFailed(ctx, hib,
 			fmt.Sprintf("hibernate timed out after %s; vk-cocoon never pushed the snapshot", hibernateTimeout))
 	}
-	// Snapshot not yet pushed — keep polling.
 	if updateErr := r.setPhase(ctx, hib, cocoonv1.CocoonHibernationPhaseHibernating, vmName); updateErr != nil {
 		return ctrl.Result{}, updateErr
 	}
