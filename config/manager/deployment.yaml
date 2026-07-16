@@ -33,6 +33,11 @@ spec:
             # makes the operator fail fast at startup with a clear error.
             - name: OCI_REGISTRY
               value: ""
+            # Seconds managed pods tolerate node not-ready/unreachable before
+            # taint eviction; 0 (default) tolerates forever so a control-plane
+            # outage can never evict pods and cascade into VM deletion.
+            - name: EVICTION_TOLERATION_SECONDS
+              value: "0"
           ports:
             - name: metrics
               containerPort: 8080

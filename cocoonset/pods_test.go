@@ -608,3 +608,46 @@ func newCocoonSet(name string, modifiers ...func(*cocoonv1.CocoonSet)) *cocoonv1
 	}
 	return cs
 }
+
+func findToleration(pod *corev1.Pod, key string) *corev1.Toleration {
+	for i := range pod.Spec.Tolerations {
+		if pod.Spec.Tolerations[i].Key == key {
+			return &pod.Spec.Tolerations[i]
+		}
+	}
+	return nil
+}
+
+func TestManagedPodToleratesNodeOutageForeverByDefault(t *testing.T) {
+	cs := newCocoonSet("demo")
+	pod := mustBuildAgentPod(t, cs, 0, "", "", testScheme(t))
+	for _, key := range []string{corev1.TaintNodeNotReady, corev1.TaintNodeUnreachable} {
+		tol := findToleration(pod, key)
+		if tol == nil {
+			t.Fatalf("missing toleration for %s", key)
+		}
+		if tol.Effect != corev1.TaintEffectNoExecute || tol.Operator != corev1.TolerationOpExists {
+			t.Errorf("%s toleration = %+v, want Exists/NoExecute", key, tol)
+		}
+		if tol.TolerationSeconds != nil {
+			t.Errorf("%s must tolerate forever by default, got %d seconds", key, *tol.TolerationSeconds)
+		}
+	}
+}
+
+func TestManagedPodEvictionTolerationSecondsFromConfig(t *testing.T) {
+	EvictionTolerationSeconds = 3600
+	t.Cleanup(func() { EvictionTolerationSeconds = 0 })
+
+	cs := newCocoonSet("demo")
+	pod := mustBuildAgentPod(t, cs, 0, "", "", testScheme(t))
+	for _, key := range []string{corev1.TaintNodeNotReady, corev1.TaintNodeUnreachable} {
+		tol := findToleration(pod, key)
+		if tol == nil || tol.TolerationSeconds == nil {
+			t.Fatalf("%s toleration missing or unbounded: %+v", key, tol)
+		}
+		if *tol.TolerationSeconds != 3600 {
+			t.Errorf("%s toleration seconds = %d, want 3600", key, *tol.TolerationSeconds)
+		}
+	}
+}

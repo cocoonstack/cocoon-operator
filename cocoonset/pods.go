@@ -26,6 +26,10 @@ const (
 	placeholderImage = "ghcr.io/cocoonstack/placeholder:latest"
 )
 
+// EvictionTolerationSeconds bounds the not-ready/unreachable NoExecute tolerations on managed pods;
+// <=0 tolerates forever so a control-plane outage can never evict pods and cascade into VM deletion.
+var EvictionTolerationSeconds int64
+
 type classifiedPods struct {
 	main      *corev1.Pod
 	sub       map[int32]*corev1.Pod
@@ -179,9 +183,7 @@ func newManagedPod(cs *cocoonv1.CocoonSet, podName, role, slotLabel string, sche
 		},
 		Spec: corev1.PodSpec{
 			TerminationGracePeriodSeconds: &one,
-			Tolerations: []corev1.Toleration{
-				{Key: meta.TolerationKey, Operator: corev1.TolerationOpExists},
-			},
+			Tolerations:                   managedPodTolerations(),
 			NodeSelector: map[string]string{
 				meta.LabelNodePool: pool,
 			},
@@ -197,6 +199,24 @@ func newManagedPod(cs *cocoonv1.CocoonSet, podName, role, slotLabel string, sche
 		return nil, fmt.Errorf("set controller reference: %w", err)
 	}
 	return pod, nil
+}
+
+// managedPodTolerations returns the cocoon taint toleration plus explicit not-ready/unreachable
+// tolerations. Without the explicit pair, DefaultTolerationSeconds admission injects 300s versions
+// and taint eviction deletes the pods — vk then faithfully removes the backing VMs.
+func managedPodTolerations() []corev1.Toleration {
+	tolerations := []corev1.Toleration{
+		{Key: meta.TolerationKey, Operator: corev1.TolerationOpExists},
+	}
+	for _, key := range []string{corev1.TaintNodeNotReady, corev1.TaintNodeUnreachable} {
+		t := corev1.Toleration{Key: key, Operator: corev1.TolerationOpExists, Effect: corev1.TaintEffectNoExecute}
+		if EvictionTolerationSeconds > 0 {
+			secs := EvictionTolerationSeconds
+			t.TolerationSeconds = &secs
+		}
+		tolerations = append(tolerations, t)
+	}
+	return tolerations
 }
 
 // podSpecMatchesAgent reports whether a running agent pod still matches what

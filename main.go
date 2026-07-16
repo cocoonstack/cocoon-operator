@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"os"
 	"os/signal"
+	"strconv"
 	"syscall"
 
 	"github.com/google/go-containerregistry/pkg/authn"
@@ -95,6 +96,18 @@ func main() {
 	registry, err := buildRegistry()
 	if err != nil {
 		logger.Fatalf(ctx, err, "create registry client")
+	}
+
+	evictionSecsRaw := commonk8s.EnvOrDefault("EVICTION_TOLERATION_SECONDS", "0")
+	evictionSecs, err := strconv.ParseInt(evictionSecsRaw, 10, 64)
+	if err != nil || evictionSecs < 0 {
+		logger.Fatalf(ctx, err, "EVICTION_TOLERATION_SECONDS must be a non-negative integer, got %q", evictionSecsRaw)
+	}
+	cocoonset.EvictionTolerationSeconds = evictionSecs
+	if evictionSecs > 0 {
+		logger.Infof(ctx, "managed pods tolerate node not-ready/unreachable for %ds before eviction", evictionSecs)
+	} else {
+		logger.Info(ctx, "managed pods tolerate node not-ready/unreachable forever (no taint eviction)")
 	}
 
 	metrics.Register(ctrlmetrics.Registry)
