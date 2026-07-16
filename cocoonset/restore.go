@@ -11,6 +11,7 @@ import (
 
 	cocoonv1 "github.com/cocoonstack/cocoon-common/apis/v1"
 	"github.com/cocoonstack/cocoon-common/meta"
+	"github.com/cocoonstack/cocoon-operator/snapshot"
 )
 
 // restoreIntent returns the namespace's restore-intent set, loaded at most once.
@@ -54,16 +55,6 @@ func (r *Reconciler) podsRestorableByCR(ctx context.Context, namespace string) (
 	})
 }
 
-// hasHibernateSnapshot reports whether vmName has a :hibernate snapshot in the
-// registry — the same lookup vk-cocoon performs at wake.
-func (r *Reconciler) hasHibernateSnapshot(ctx context.Context, vmName string) (bool, error) {
-	present, err := r.Registry.HasManifest(ctx, vmName, meta.HibernateSnapshotTag)
-	if err != nil {
-		return false, fmt.Errorf("probe hibernate snapshot %s: %w", vmName, err)
-	}
-	return present, nil
-}
-
 // markRestoreIfHibernated flags a freshly-built pod to restore its VM from the
 // :hibernate snapshot when the agent is hibernated (intent) and the snapshot
 // actually exists in the registry. The probe is the same lookup vk runs at wake,
@@ -79,7 +70,7 @@ func (r *Reconciler) markRestoreIfHibernated(ctx context.Context, pod *corev1.Po
 	if vmName == "" {
 		return nil
 	}
-	present, err := r.hasHibernateSnapshot(ctx, vmName)
+	present, err := snapshot.HasHibernateSnapshot(ctx, r.Registry, vmName)
 	if err != nil {
 		return err
 	}

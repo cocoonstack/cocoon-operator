@@ -127,8 +127,7 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 	if !hib.DeletionTimestamp.IsZero() {
 		return ctrl.Result{}, r.reconcileDelete(ctx, &hib)
 	}
-	if !controllerutil.ContainsFinalizer(&hib, finalizerName) {
-		controllerutil.AddFinalizer(&hib, finalizerName)
+	if controllerutil.AddFinalizer(&hib, finalizerName) {
 		if err := r.Update(ctx, &hib); err != nil {
 			return ctrl.Result{}, fmt.Errorf("add finalizer: %w", err)
 		}
@@ -193,8 +192,7 @@ func (r *Reconciler) reconcileDelete(ctx context.Context, hib *cocoonv1.CocoonHi
 		}
 	}
 	r.observed.Delete(string(hib.UID))
-	if controllerutil.ContainsFinalizer(hib, finalizerName) {
-		controllerutil.RemoveFinalizer(hib, finalizerName)
+	if controllerutil.RemoveFinalizer(hib, finalizerName) {
 		if err := r.Update(ctx, hib); err != nil {
 			return fmt.Errorf("remove finalizer: %w", err)
 		}
@@ -266,15 +264,9 @@ func (r *Reconciler) firstTransitionAt(hib *cocoonv1.CocoonHibernation) bool {
 	return false
 }
 
-func (r *Reconciler) emitWarningf(hib *cocoonv1.CocoonHibernation, reason, format string, args ...any) {
+func (r *Reconciler) emitEventf(hib *cocoonv1.CocoonHibernation, eventType, reason, format string, args ...any) {
 	if r.Recorder != nil {
-		r.Recorder.Eventf(hib, corev1.EventTypeWarning, reason, format, args...)
-	}
-}
-
-func (r *Reconciler) emitNormalf(hib *cocoonv1.CocoonHibernation, reason, format string, args ...any) {
-	if r.Recorder != nil {
-		r.Recorder.Eventf(hib, corev1.EventTypeNormal, reason, format, args...)
+		r.Recorder.Eventf(hib, eventType, reason, format, args...)
 	}
 }
 
@@ -284,7 +276,7 @@ func (r *Reconciler) announceRetryFromFailed(hib *cocoonv1.CocoonHibernation, de
 	if hib.Status.Phase != cocoonv1.CocoonHibernationPhaseFailed {
 		return
 	}
-	r.emitNormalf(hib, "RetryRequested", "retrying %s after prior failure", desire)
+	r.emitEventf(hib, corev1.EventTypeNormal, "RetryRequested", "retrying %s after prior failure", desire)
 }
 
 // markFailed sets the Failed phase. A subsequent reconcile can recover by overwriting it.

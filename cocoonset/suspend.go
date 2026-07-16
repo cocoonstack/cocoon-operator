@@ -1,7 +1,6 @@
 package cocoonset
 
 import (
-	"cmp"
 	"context"
 	"fmt"
 	"maps"
@@ -14,6 +13,7 @@ import (
 	cocoonv1 "github.com/cocoonstack/cocoon-common/apis/v1"
 	commonk8s "github.com/cocoonstack/cocoon-common/k8s"
 	"github.com/cocoonstack/cocoon-common/meta"
+	"github.com/cocoonstack/cocoon-operator/snapshot"
 )
 
 // reconcileSuspend ensures the main agent exists, applies the hibernate
@@ -76,7 +76,7 @@ func (r *Reconciler) allOwnedPodsHibernated(ctx context.Context, classified clas
 		if spec.VMName == "" {
 			return false, nil
 		}
-		present, err := r.hasHibernateSnapshot(ctx, spec.VMName)
+		present, err := snapshot.HasHibernateSnapshot(ctx, r.Registry, spec.VMName)
 		if err != nil {
 			return false, err
 		}
@@ -98,37 +98,28 @@ func (r *Reconciler) applySuspend(ctx context.Context, classified classifiedPods
 }
 
 // applyUnsuspend clears HibernateState from owned pods, skipping pods that are
-// targets of an active CocoonHibernation CR to avoid racing the hibernation reconciler.
+// targets of an active CocoonHibernation CR to avoid racing the hibernation
+// reconciler. The CR list loads lazily so the steady path never pays it.
 func (r *Reconciler) applyUnsuspend(ctx context.Context, namespace string, classified classifiedPods) error {
-	var hibernated []*corev1.Pod
-	for _, pod := range classified.allByName {
-		if meta.ReadHibernateState(pod) {
-			hibernated = append(hibernated, pod)
+	var hibernatedByCR map[string]struct{}
+	return classified.forEachSorted(ctx, func(pod *corev1.Pod) error {
+		if !meta.ReadHibernateState(pod) {
+			return nil
 		}
-	}
-	if len(hibernated) == 0 {
-		return nil
-	}
-	slices.SortFunc(hibernated, func(a, b *corev1.Pod) int {
-		return cmp.Compare(a.Name, b.Name)
-	})
-
-	hibernatedByCR, err := r.podsHibernatedByCR(ctx, namespace)
-	if err != nil {
-		return err
-	}
-	for _, pod := range hibernated {
-		if ctxErr := ctx.Err(); ctxErr != nil {
-			return ctxErr
+		if hibernatedByCR == nil {
+			var err error
+			if hibernatedByCR, err = r.podsHibernatedByCR(ctx, namespace); err != nil {
+				return err
+			}
 		}
 		if _, ownedByCR := hibernatedByCR[pod.Name]; ownedByCR {
-			continue
+			return nil
 		}
 		if err := commonk8s.PatchHibernateState(ctx, r.Client, pod, false); err != nil {
 			return fmt.Errorf("clear hibernate annotation on %s/%s: %w", pod.Namespace, pod.Name, err)
 		}
-	}
-	return nil
+		return nil
+	})
 }
 
 // podsHibernatedByCR returns pod names targeted by a desire=Hibernate CR.

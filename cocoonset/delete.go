@@ -77,8 +77,7 @@ func (r *Reconciler) reconcileDelete(ctx context.Context, cs *cocoonv1.CocoonSet
 		logger.Warnf(ctx, "skipping registry tag GC for cocoonset %s/%s: registry not configured", cs.Namespace, cs.Name)
 	}
 
-	if controllerutil.ContainsFinalizer(cs, finalizerName) {
-		controllerutil.RemoveFinalizer(cs, finalizerName)
+	if controllerutil.RemoveFinalizer(cs, finalizerName) {
 		if err := r.Update(ctx, cs); err != nil {
 			return ctrl.Result{}, fmt.Errorf("remove finalizer: %w", err)
 		}

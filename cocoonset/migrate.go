@@ -13,6 +13,7 @@ import (
 	cocoonv1 "github.com/cocoonstack/cocoon-common/apis/v1"
 	commonk8s "github.com/cocoonstack/cocoon-common/k8s"
 	"github.com/cocoonstack/cocoon-common/meta"
+	"github.com/cocoonstack/cocoon-operator/snapshot"
 )
 
 // reconcileMigration drives cross-node migration of the main agent (slot 0):
@@ -44,7 +45,7 @@ func (r *Reconciler) reconcileMigration(ctx context.Context, cs *cocoonv1.Cocoon
 		}
 	}
 	vmName := meta.VMNameForDeployment(cs.Namespace, cs.Name, 0)
-	snap, err := r.hasHibernateSnapshot(ctx, vmName)
+	snap, err := snapshot.HasHibernateSnapshot(ctx, r.Registry, vmName)
 	if err != nil {
 		// handled=true: falling through to the normal flow would clear the
 		// hibernate annotation mid-migration or fresh-boot over the snapshot.

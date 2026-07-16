@@ -73,8 +73,7 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 		return r.reconcileDelete(ctx, &cs)
 	}
 
-	if !controllerutil.ContainsFinalizer(&cs, finalizerName) {
-		controllerutil.AddFinalizer(&cs, finalizerName)
+	if controllerutil.AddFinalizer(&cs, finalizerName) {
 		if err := r.Update(ctx, &cs); err != nil {
 			return ctrl.Result{}, fmt.Errorf("add finalizer: %w", err)
 		}
