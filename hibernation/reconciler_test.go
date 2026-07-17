@@ -837,6 +837,117 @@ func TestReconcileHibernateIgnoresStaleTagUntilLifecycleHibernated(t *testing.T)
 	}
 }
 
+// Lifecycle annotations from a prior CocoonSet round (lower observed
+// generation) must not complete a CR hibernate: vk writes state and
+// observed-generation atomically, so a stale pair predating the pod's
+// current generation stamp is a leftover, not this round's completion.
+func TestReconcileHibernateRejectsStaleLifecycleRound(t *testing.T) {
+	hib := &cocoonv1.CocoonHibernation{
+		ObjectMeta: metav1.ObjectMeta{Name: "hib", Namespace: "ns", Finalizers: []string{finalizerName}},
+		Spec: cocoonv1.CocoonHibernationSpec{
+			Desire: cocoonv1.HibernationDesireHibernate,
+			PodRef: cocoonv1.HibernationPodRef{Name: "demo-0"},
+		},
+	}
+	pod := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "demo-0", Namespace: "ns"}}
+	(&meta.VMSpec{VMName: "vk-ns-demo-0", Managed: true}).Apply(pod)
+	meta.HibernateState(true).Apply(pod)
+	meta.StampCocoonSetGeneration(pod, 3)
+	meta.LifecycleStatus{State: meta.LifecycleStateHibernated, ObservedGeneration: 2}.Apply(pod)
+
+	scheme := testScheme(t)
+	cli := ctrlfake.NewClientBuilder().
+		WithScheme(scheme).
+		WithObjects(hib, pod).
+		WithStatusSubresource(&cocoonv1.CocoonHibernation{}).
+		Build()
+	r := &Reconciler{Client: cli, Scheme: scheme, Registry: &fakeRegistry{manifestPresent: true}}
+	req := ctrl.Request{NamespacedName: types.NamespacedName{Namespace: "ns", Name: "hib"}}
+
+	if _, err := r.Reconcile(t.Context(), req); err != nil {
+		t.Fatalf("Reconcile: %v", err)
+	}
+	var out cocoonv1.CocoonHibernation
+	if err := cli.Get(t.Context(), types.NamespacedName{Namespace: "ns", Name: "hib"}, &out); err != nil {
+		t.Fatalf("get hib: %v", err)
+	}
+	if out.Status.Phase != cocoonv1.CocoonHibernationPhaseHibernating {
+		t.Fatalf("phase = %q, want Hibernating while the lifecycle round is stale", out.Status.Phase)
+	}
+
+	var livePod corev1.Pod
+	if err := cli.Get(t.Context(), types.NamespacedName{Namespace: "ns", Name: "demo-0"}, &livePod); err != nil {
+		t.Fatalf("get pod: %v", err)
+	}
+	meta.LifecycleStatus{State: meta.LifecycleStateHibernated, ObservedGeneration: 3}.Apply(&livePod)
+	if err := cli.Update(t.Context(), &livePod); err != nil {
+		t.Fatalf("update pod: %v", err)
+	}
+	if _, err := r.Reconcile(t.Context(), req); err != nil {
+		t.Fatalf("second Reconcile: %v", err)
+	}
+	if err := cli.Get(t.Context(), types.NamespacedName{Namespace: "ns", Name: "hib"}, &out); err != nil {
+		t.Fatalf("get hib: %v", err)
+	}
+	if out.Status.Phase != cocoonv1.CocoonHibernationPhaseHibernated {
+		t.Errorf("phase = %q, want Hibernated once vk confirms the current round", out.Status.Phase)
+	}
+}
+
+// The shared :hibernate tag outlives any single CR while another live CR
+// still tracks the VM; only the last holder GCs it.
+func TestReconcileDeleteKeepsTagWhileAnotherCRHoldsVM(t *testing.T) {
+	deleting := &cocoonv1.CocoonHibernation{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: "a", Namespace: "ns", UID: "uid-a",
+			Finalizers:        []string{finalizerName},
+			DeletionTimestamp: &metav1.Time{Time: time.Now()},
+		},
+		Spec:   cocoonv1.CocoonHibernationSpec{PodRef: cocoonv1.HibernationPodRef{Name: "demo-0"}},
+		Status: cocoonv1.CocoonHibernationStatus{VMName: "vk-ns-demo-0", Phase: cocoonv1.CocoonHibernationPhaseHibernated},
+	}
+	holder := &cocoonv1.CocoonHibernation{
+		ObjectMeta: metav1.ObjectMeta{Name: "b", Namespace: "ns", UID: "uid-b", Finalizers: []string{finalizerName}},
+		Spec:       cocoonv1.CocoonHibernationSpec{PodRef: cocoonv1.HibernationPodRef{Name: "demo-0"}},
+		Status:     cocoonv1.CocoonHibernationStatus{VMName: "vk-ns-demo-0", Phase: cocoonv1.CocoonHibernationPhaseHibernated},
+	}
+	scheme := testScheme(t)
+	cli := ctrlfake.NewClientBuilder().
+		WithScheme(scheme).
+		WithObjects(deleting, holder).
+		WithStatusSubresource(&cocoonv1.CocoonHibernation{}).
+		Build()
+	reg := &fakeRegistry{}
+	r := &Reconciler{Client: cli, Scheme: scheme, Registry: reg}
+
+	if err := r.reconcileDelete(t.Context(), deleting); err != nil {
+		t.Fatalf("reconcileDelete: %v", err)
+	}
+	if reg.deleteCalled {
+		t.Error("tag must survive while another live CR tracks the same VM")
+	}
+	var got cocoonv1.CocoonHibernation
+	if err := cli.Get(t.Context(), types.NamespacedName{Namespace: "ns", Name: "a"}, &got); err == nil && len(got.Finalizers) != 0 {
+		t.Errorf("finalizer must still be removed, got %v", got.Finalizers)
+	}
+
+	// Last holder: delete b for real (the finalizer parks it with a deletion
+	// timestamp); its own reconcileDelete must then GC the tag.
+	if err := cli.Delete(t.Context(), holder); err != nil {
+		t.Fatalf("delete holder: %v", err)
+	}
+	var last cocoonv1.CocoonHibernation
+	if err := cli.Get(t.Context(), types.NamespacedName{Namespace: "ns", Name: "b"}, &last); err != nil {
+		t.Fatalf("get holder: %v", err)
+	}
+	if err := r.reconcileDelete(t.Context(), &last); err != nil {
+		t.Fatalf("reconcileDelete last holder: %v", err)
+	}
+	if !reg.deleteCalled {
+		t.Error("last holder must GC the tag")
+	}
+}
+
 func TestReconcilePendingWhenPodMissing(t *testing.T) {
 	hib := &cocoonv1.CocoonHibernation{
 		ObjectMeta: metav1.ObjectMeta{Name: "hib", Namespace: "ns", Finalizers: []string{finalizerName}},

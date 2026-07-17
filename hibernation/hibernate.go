@@ -22,8 +22,11 @@ func (r *Reconciler) reconcileHibernate(ctx context.Context, hib *cocoonv1.Cocoo
 
 	// Gate on vk's per-round completion signal before paying the registry
 	// probe: a stale :hibernate tag left by a prior suspend cycle would
-	// otherwise satisfy the probe immediately.
-	if meta.ReadLifecycleState(pod) == meta.LifecycleStateHibernated {
+	// otherwise satisfy the probe immediately. The generation floor (state and
+	// observed-generation are written atomically by vk) rejects lifecycle
+	// annotations that predate the pod's current CocoonSet round.
+	if st := meta.ReadLifecycleStatus(pod); st.State == meta.LifecycleStateHibernated &&
+		st.ObservedGeneration >= meta.ReadCocoonSetGeneration(pod) {
 		present, err := snapshot.HasHibernateSnapshot(ctx, r.Registry, vmName)
 		if err != nil {
 			return ctrl.Result{}, err

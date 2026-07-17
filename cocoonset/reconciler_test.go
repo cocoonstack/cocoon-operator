@@ -197,7 +197,7 @@ func TestAllOwnedPodsHibernatedWaitsForEachManagedPod(t *testing.T) {
 	}}
 	r := &Reconciler{Scheme: scheme, Registry: reg}
 
-	done, err := r.allOwnedPodsHibernated(t.Context(), classified)
+	done, err := r.allOwnedPodsHibernated(t.Context(), cs, classified)
 	if err != nil {
 		t.Fatalf("allOwnedPodsHibernated: %v", err)
 	}
@@ -206,7 +206,7 @@ func TestAllOwnedPodsHibernatedWaitsForEachManagedPod(t *testing.T) {
 	}
 
 	reg.present["vk-ns-demo-1:"+meta.HibernateSnapshotTag] = true
-	done, err = r.allOwnedPodsHibernated(t.Context(), classified)
+	done, err = r.allOwnedPodsHibernated(t.Context(), cs, classified)
 	if err != nil {
 		t.Fatalf("allOwnedPodsHibernated after sub snapshot: %v", err)
 	}
@@ -236,7 +236,7 @@ func TestAllOwnedPodsHibernatedSkipsUnmanagedToolbox(t *testing.T) {
 	}}
 	r := &Reconciler{Scheme: scheme, Registry: reg}
 
-	done, err := r.allOwnedPodsHibernated(t.Context(), classified)
+	done, err := r.allOwnedPodsHibernated(t.Context(), cs, classified)
 	if err != nil {
 		t.Fatalf("allOwnedPodsHibernated: %v", err)
 	}
@@ -256,7 +256,7 @@ func TestAllOwnedPodsHibernatedPropagatesProbeError(t *testing.T) {
 		allByName: map[string]*corev1.Pod{main.Name: main},
 	}
 	r := &Reconciler{Scheme: scheme, Registry: &fakeRegistry{probeErr: errors.New("transport boom")}}
-	if _, err := r.allOwnedPodsHibernated(t.Context(), classified); err == nil {
+	if _, err := r.allOwnedPodsHibernated(t.Context(), cs, classified); err == nil {
 		t.Fatal("expected probe error to surface")
 	}
 }
@@ -278,7 +278,7 @@ func TestAllOwnedPodsHibernatedIgnoresStaleTag(t *testing.T) {
 	}}
 	r := &Reconciler{Scheme: scheme, Registry: reg}
 
-	done, err := r.allOwnedPodsHibernated(t.Context(), classified)
+	done, err := r.allOwnedPodsHibernated(t.Context(), cs, classified)
 	if err != nil {
 		t.Fatalf("allOwnedPodsHibernated: %v", err)
 	}
@@ -287,12 +287,23 @@ func TestAllOwnedPodsHibernatedIgnoresStaleTag(t *testing.T) {
 	}
 
 	lifecycleHibernated(main)
-	done, err = r.allOwnedPodsHibernated(t.Context(), classified)
+	done, err = r.allOwnedPodsHibernated(t.Context(), cs, classified)
 	if err != nil {
 		t.Fatalf("allOwnedPodsHibernated after lifecycle flip: %v", err)
 	}
 	if !done {
 		t.Error("must complete once vk reports hibernated and the tag is present")
+	}
+
+	// A new spec round (e.g. re-suspend) outdates the lifecycle annotations:
+	// state=hibernated with a lower observed-generation is a prior round.
+	cs.Generation = 5
+	done, err = r.allOwnedPodsHibernated(t.Context(), cs, classified)
+	if err != nil {
+		t.Fatalf("allOwnedPodsHibernated after generation bump: %v", err)
+	}
+	if done {
+		t.Error("lifecycle annotations from a prior round must not complete the current one")
 	}
 }
 
@@ -317,7 +328,7 @@ func TestAllOwnedPodsHibernatedSkipsTerminalPod(t *testing.T) {
 	}}
 	r := &Reconciler{Scheme: scheme, Registry: reg}
 
-	done, err := r.allOwnedPodsHibernated(t.Context(), classified)
+	done, err := r.allOwnedPodsHibernated(t.Context(), cs, classified)
 	if err != nil {
 		t.Fatalf("allOwnedPodsHibernated: %v", err)
 	}
@@ -326,8 +337,13 @@ func TestAllOwnedPodsHibernatedSkipsTerminalPod(t *testing.T) {
 	}
 }
 
+// lifecycleHibernated mirrors vk's atomic state+observed-generation write,
+// echoing the generation stamped on the pod at build time.
 func lifecycleHibernated(p *corev1.Pod) *corev1.Pod {
-	p.Annotations[meta.AnnotationLifecycleState] = string(meta.LifecycleStateHibernated)
+	meta.LifecycleStatus{
+		State:              meta.LifecycleStateHibernated,
+		ObservedGeneration: meta.ReadCocoonSetGeneration(p),
+	}.Apply(p)
 	return p
 }
 

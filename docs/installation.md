@@ -1,5 +1,11 @@
 # Installation
 
+The operator requires [cocoon-webhook](https://github.com/cocoonstack/cocoon-webhook)
+in the cluster: its admission validator enforces one CocoonHibernation per pod
+(`metadata.name == spec.podRef.name`), the invariant the hibernation
+reconciler's tag lifecycle is designed around. Install it before (or alongside)
+the operator.
+
 The operator authenticates to the OCI registry (e.g. Artifact Registry) via
 GCP ADC (Workload Identity / instance metadata) by default — no Secret to
 pre-create:

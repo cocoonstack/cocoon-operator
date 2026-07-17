@@ -41,7 +41,7 @@ func (r *Reconciler) reconcileSuspend(ctx context.Context, cs *cocoonv1.CocoonSe
 	if err := r.applySuspend(ctx, classified); err != nil {
 		return ctrl.Result{}, err
 	}
-	allHibernated, err := r.allOwnedPodsHibernated(ctx, classified)
+	allHibernated, err := r.allOwnedPodsHibernated(ctx, cs, classified)
 	if err != nil {
 		return ctrl.Result{}, err
 	}
@@ -59,7 +59,7 @@ func (r *Reconciler) reconcileSuspend(ctx context.Context, cs *cocoonv1.CocoonSe
 // toolboxes) are skipped since they have no VM lifecycle to observe.
 // Returns (false, nil) whenever the expected state is not yet observed so
 // the caller requeues rather than treats it as an error.
-func (r *Reconciler) allOwnedPodsHibernated(ctx context.Context, classified classifiedPods) (bool, error) {
+func (r *Reconciler) allOwnedPodsHibernated(ctx context.Context, cs *cocoonv1.CocoonSet, classified classifiedPods) (bool, error) {
 	if r.Registry == nil {
 		// No registry configured; such deployments have no snapshot to
 		// observe, so treat the annotation write as authoritative.
@@ -82,10 +82,12 @@ func (r *Reconciler) allOwnedPodsHibernated(ctx context.Context, classified clas
 		if spec.VMName == "" {
 			return false, nil
 		}
-		// vk flips lifecycle-state to hibernated only after this round's push,
-		// so a stale :hibernate tag from a prior suspend cycle (unsuspend never
-		// deletes tags) cannot satisfy the poll early.
-		if meta.ReadLifecycleState(pod) != meta.LifecycleStateHibernated {
+		// vk writes lifecycle-state and observed-generation atomically and
+		// flips to hibernated only after this round's push, so neither a stale
+		// :hibernate tag (unsuspend never deletes tags) nor a lagging informer
+		// snapshot of a prior round can satisfy the poll early.
+		if st := meta.ReadLifecycleStatus(pod); st.State != meta.LifecycleStateHibernated ||
+			st.ObservedGeneration < cs.Generation {
 			return false, nil
 		}
 		present, err := snapshot.HasHibernateSnapshot(ctx, r.Registry, spec.VMName)

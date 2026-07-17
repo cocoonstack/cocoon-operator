@@ -5,6 +5,7 @@ import (
 	"context"
 	"fmt"
 	"hash/maphash"
+	"slices"
 	"sync"
 	"time"
 
@@ -187,7 +188,13 @@ func (r *Reconciler) reconcileDelete(ctx context.Context, hib *cocoonv1.CocoonHi
 		defer r.lockVM(hib.Status.VMName)()
 	}
 	if r.Registry != nil && hib.Status.VMName != "" {
-		if err := r.Registry.DeleteManifest(ctx, hib.Status.VMName, meta.HibernateSnapshotTag); err != nil {
+		held, err := r.vmHeldByAnotherCR(ctx, hib)
+		if err != nil {
+			return err
+		}
+		if held {
+			logger.Infof(ctx, "keeping hibernate snapshot %s: another live CocoonHibernation still tracks it", hib.Status.VMName)
+		} else if err := r.Registry.DeleteManifest(ctx, hib.Status.VMName, meta.HibernateSnapshotTag); err != nil {
 			logger.Errorf(ctx, err, "delete hibernate snapshot %s", hib.Status.VMName)
 		}
 	}
@@ -198,6 +205,20 @@ func (r *Reconciler) reconcileDelete(ctx context.Context, hib *cocoonv1.CocoonHi
 		}
 	}
 	return nil
+}
+
+// vmHeldByAnotherCR reports whether another live CocoonHibernation still
+// tracks this CR's VM. The last holder GCs the shared :hibernate tag —
+// deleting it earlier would strand the survivors on a tag-less Hibernated
+// with no event to ever re-probe it.
+func (r *Reconciler) vmHeldByAnotherCR(ctx context.Context, hib *cocoonv1.CocoonHibernation) (bool, error) {
+	var list cocoonv1.CocoonHibernationList
+	if err := r.List(ctx, &list, client.InNamespace(hib.Namespace)); err != nil {
+		return false, fmt.Errorf("list cocoonhibernations in %s: %w", hib.Namespace, err)
+	}
+	return slices.ContainsFunc(list.Items, func(o cocoonv1.CocoonHibernation) bool {
+		return o.UID != hib.UID && o.DeletionTimestamp.IsZero() && o.Status.VMName == hib.Status.VMName
+	}), nil
 }
 
 // hibernationsTargetingPod returns reconcile requests for every CocoonHibernation
