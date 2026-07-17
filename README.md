@@ -9,6 +9,8 @@ Both reconcilers are built on
 the typed CRD shapes shipped from
 [cocoon-common/apis/v1](https://github.com/cocoonstack/cocoon-common).
 
+**Documentation: [cocoonstack.github.io/cocoon-operator](https://cocoonstack.github.io/cocoon-operator/)** (source in [`docs/`](docs/)).
+
 ```
 cocoon-operator/
 ├── main.go              # manager wiring + flag parsing
@@ -31,7 +33,7 @@ Full steps, including the ADC-less `sa-key` overlay, in
 ## Documentation
 
 - [Architecture](docs/architecture.md) — component diagram, package layout
-- [CocoonSet reconcile loop](docs/cocoonset.md) — finalizer/GC, lifecycle-bridge stamp, failed-state and suspend short-circuits, agent + toolbox reconciliation
+- [CocoonSet reconcile loop](docs/cocoonset.md) — finalizer/GC, lifecycle-bridge stamp, failed-state and suspend short-circuits, cross-node migration, agent + toolbox reconciliation
 - [CocoonHibernation reconcile loop](docs/hibernation.md) — Hibernate/Wake desire handling, finalizer, recoverable failure phases
 - [Observability](docs/observability.md) — K8s Events and Prometheus metrics
 - [Configuration](docs/configuration.md) — every environment variable

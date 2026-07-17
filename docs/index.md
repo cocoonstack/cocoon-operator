@@ -15,8 +15,8 @@ CocoonHibernation  ──► hibernation.Reconciler  ──► HibernateState pa
 
 - [Architecture](architecture.md) — component diagram and package layout
 - [CocoonSet reconcile loop](cocoonset.md) — finalizer/GC, lifecycle-bridge
-  stamp, failed-state and suspend short-circuits, main/sub-agent/toolbox
-  reconciliation
+  stamp, failed-state and suspend short-circuits, cross-node migration,
+  main/sub-agent/toolbox reconciliation
 - [CocoonHibernation reconcile loop](hibernation.md) — Hibernate/Wake
   desire handling, finalizer, recoverable failure phases
 - [Observability](observability.md) — K8s Event reasons and Prometheus
@@ -24,3 +24,9 @@ CocoonHibernation  ──► hibernation.Reconciler  ──► HibernateState pa
 - [Configuration](configuration.md) — every environment variable
 - [Installation](installation.md) — kustomize install, ADC vs SA-key auth,
   keeping CRDs in sync with cocoon-common
+
+## Repository
+
+Source and issue tracker:
+[github.com/cocoonstack/cocoon-operator](https://github.com/cocoonstack/cocoon-operator).
+Part of the [cocoonstack](https://cocoonstack.github.io/) MicroVM platform.

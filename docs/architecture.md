@@ -26,8 +26,9 @@ cocoon-operator/
 │  ┌────────────────────────┐    ┌─────────────────────────────┐  │
 │  │  cocoonset.Reconciler  │    │ hibernation.Reconciler      │  │
 │  │  - finalizer + GC       │    │  - HibernateState patches   │  │
-│  │  - main → subs → tbs    │    │  - registry manifest probe  │  │
-│  │  - patch /status        │    │  - Conditions               │  │
+│  │  - migration (nodeName) │    │  - registry manifest probe  │  │
+│  │  - main → subs → tbs    │    │  - Conditions               │  │
+│  │  - patch /status        │    │                             │  │
 │  └────────┬───────────────┘    └────────────┬────────────────┘  │
 │           │                                  │                   │
 │           ▼                                  ▼                   │
