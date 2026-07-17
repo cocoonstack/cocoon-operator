@@ -74,7 +74,18 @@ func (r *Reconciler) allOwnedPodsHibernated(ctx context.Context, classified clas
 		if !spec.Managed {
 			continue
 		}
+		// A terminal pod has no live VM to snapshot; waiting on it would park
+		// the set in Suspending forever. The normal flow triages it after unsuspend.
+		if podIsTerminal(pod) {
+			continue
+		}
 		if spec.VMName == "" {
+			return false, nil
+		}
+		// vk flips lifecycle-state to hibernated only after this round's push,
+		// so a stale :hibernate tag from a prior suspend cycle (unsuspend never
+		// deletes tags) cannot satisfy the poll early.
+		if meta.ReadLifecycleState(pod) != meta.LifecycleStateHibernated {
 			return false, nil
 		}
 		present, err := snapshot.HasHibernateSnapshot(ctx, r.Registry, spec.VMName)

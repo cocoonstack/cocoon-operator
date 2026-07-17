@@ -184,8 +184,8 @@ func TestAllOwnedPodsHibernatedWaitsForEachManagedPod(t *testing.T) {
 	cs := newCocoonSet("demo", func(cs *cocoonv1.CocoonSet) {
 		cs.Spec.Agent.Replicas = 1
 	})
-	main := mustBuildAgentPod(t, cs, 0, "", "", scheme)
-	sub := mustBuildAgentPod(t, cs, 1, "vk-ns-demo-0", "", scheme)
+	main := lifecycleHibernated(mustBuildAgentPod(t, cs, 0, "", "", scheme))
+	sub := lifecycleHibernated(mustBuildAgentPod(t, cs, 1, "vk-ns-demo-0", "", scheme))
 	classified := classifiedPods{
 		main:      main,
 		sub:       map[int32]*corev1.Pod{1: sub},
@@ -222,7 +222,7 @@ func TestAllOwnedPodsHibernatedSkipsUnmanagedToolbox(t *testing.T) {
 			{Name: "tb", Mode: cocoonv1.ToolboxModeStatic, StaticVMID: "qemu-1", StaticIP: "10.0.0.1"},
 		}
 	})
-	main := mustBuildAgentPod(t, cs, 0, "", "", scheme)
+	main := lifecycleHibernated(mustBuildAgentPod(t, cs, 0, "", "", scheme))
 	tb := mustBuildToolboxPod(t, cs, cs.Spec.Toolboxes[0], scheme)
 	classified := classifiedPods{
 		main:      main,
@@ -248,7 +248,7 @@ func TestAllOwnedPodsHibernatedSkipsUnmanagedToolbox(t *testing.T) {
 func TestAllOwnedPodsHibernatedPropagatesProbeError(t *testing.T) {
 	scheme := testScheme(t)
 	cs := newCocoonSet("demo")
-	main := mustBuildAgentPod(t, cs, 0, "", "", scheme)
+	main := lifecycleHibernated(mustBuildAgentPod(t, cs, 0, "", "", scheme))
 	classified := classifiedPods{
 		main:      main,
 		sub:       map[int32]*corev1.Pod{},
@@ -259,6 +259,76 @@ func TestAllOwnedPodsHibernatedPropagatesProbeError(t *testing.T) {
 	if _, err := r.allOwnedPodsHibernated(t.Context(), classified); err == nil {
 		t.Fatal("expected probe error to surface")
 	}
+}
+
+// A :hibernate tag left by a prior suspend cycle must not satisfy the poll
+// before vk reports lifecycle-state=hibernated for this round.
+func TestAllOwnedPodsHibernatedIgnoresStaleTag(t *testing.T) {
+	scheme := testScheme(t)
+	cs := newCocoonSet("demo")
+	main := mustBuildAgentPod(t, cs, 0, "", "", scheme) // no lifecycle-state yet
+	classified := classifiedPods{
+		main:      main,
+		sub:       map[int32]*corev1.Pod{},
+		toolbox:   map[string]*corev1.Pod{},
+		allByName: map[string]*corev1.Pod{main.Name: main},
+	}
+	reg := &fakeRegistry{present: map[string]bool{
+		"vk-ns-demo-0:" + meta.HibernateSnapshotTag: true, // stale tag
+	}}
+	r := &Reconciler{Scheme: scheme, Registry: reg}
+
+	done, err := r.allOwnedPodsHibernated(t.Context(), classified)
+	if err != nil {
+		t.Fatalf("allOwnedPodsHibernated: %v", err)
+	}
+	if done {
+		t.Error("stale tag without lifecycle-state=hibernated must not complete the suspend")
+	}
+
+	lifecycleHibernated(main)
+	done, err = r.allOwnedPodsHibernated(t.Context(), classified)
+	if err != nil {
+		t.Fatalf("allOwnedPodsHibernated after lifecycle flip: %v", err)
+	}
+	if !done {
+		t.Error("must complete once vk reports hibernated and the tag is present")
+	}
+}
+
+// A terminal sub-agent has no live VM to snapshot; it must not park the set
+// in Suspending forever.
+func TestAllOwnedPodsHibernatedSkipsTerminalPod(t *testing.T) {
+	scheme := testScheme(t)
+	cs := newCocoonSet("demo", func(cs *cocoonv1.CocoonSet) {
+		cs.Spec.Agent.Replicas = 1
+	})
+	main := lifecycleHibernated(mustBuildAgentPod(t, cs, 0, "", "", scheme))
+	sub := mustBuildAgentPod(t, cs, 1, "vk-ns-demo-0", "", scheme)
+	sub.Status.Phase = corev1.PodFailed
+	classified := classifiedPods{
+		main:      main,
+		sub:       map[int32]*corev1.Pod{1: sub},
+		toolbox:   map[string]*corev1.Pod{},
+		allByName: map[string]*corev1.Pod{main.Name: main, sub.Name: sub},
+	}
+	reg := &fakeRegistry{present: map[string]bool{
+		"vk-ns-demo-0:" + meta.HibernateSnapshotTag: true,
+	}}
+	r := &Reconciler{Scheme: scheme, Registry: reg}
+
+	done, err := r.allOwnedPodsHibernated(t.Context(), classified)
+	if err != nil {
+		t.Fatalf("allOwnedPodsHibernated: %v", err)
+	}
+	if !done {
+		t.Error("terminal sub-agent must be skipped, not awaited forever")
+	}
+}
+
+func lifecycleHibernated(p *corev1.Pod) *corev1.Pod {
+	p.Annotations[meta.AnnotationLifecycleState] = string(meta.LifecycleStateHibernated)
+	return p
 }
 
 func TestEnsureSubAgentsReplacesTerminalPod(t *testing.T) {
@@ -290,6 +360,59 @@ func TestEnsureSubAgentsReplacesTerminalPod(t *testing.T) {
 	}
 	if err := cli.Get(t.Context(), types.NamespacedName{Namespace: subPod.Namespace, Name: subPod.Name}, &corev1.Pod{}); err == nil {
 		t.Error("terminal sub-agent should have been deleted")
+	}
+}
+
+// Dead-letter must yield to a spec edit: fixing the spec is the operator's
+// remedy, and the corrected spec gets a fresh rebuild budget.
+func TestEnsureSubAgentsDeadLetterYieldsToSpecDrift(t *testing.T) {
+	scheme := testScheme(t)
+	cs := newCocoonSet("demo", func(cs *cocoonv1.CocoonSet) {
+		cs.Spec.Agent.Replicas = 1
+	})
+	subPod := mustBuildAgentPod(t, cs, 1, "vk-ns-demo-0", "", scheme)
+	subPod.Annotations[annotationDeadLetter] = "true"
+
+	enc, err := encodeRebuildHistory(1, map[int32]rebuildEntry{1: {Count: maxRebuildAttempts}})
+	if err != nil {
+		t.Fatalf("encodeRebuildHistory: %v", err)
+	}
+	cs.Annotations = map[string]string{annotationRebuildHistory: enc}
+
+	cli := ctrlfake.NewClientBuilder().WithScheme(scheme).WithObjects(cs, subPod).Build()
+	r := &Reconciler{Client: cli, Scheme: scheme}
+	classified := classifiedPods{
+		sub:       map[int32]*corev1.Pod{1: subPod},
+		toolbox:   map[string]*corev1.Pod{},
+		allByName: map[string]*corev1.Pod{subPod.Name: subPod},
+	}
+
+	// Spec unchanged: dead-letter holds, pod untouched.
+	changed, _, err := r.ensureSubAgents(t.Context(), cs, classified, "vk-ns-demo-0", "", r.newRestoreIntent(t.Context(), cs.Namespace))
+	if err != nil {
+		t.Fatalf("ensureSubAgents: %v", err)
+	}
+	if changed {
+		t.Fatal("dead-lettered pod with matching spec must be left alone")
+	}
+
+	cs.Spec.Agent.Image = "ghcr.io/cocoonstack/cocoon/ubuntu:26.04"
+	changed, _, err = r.ensureSubAgents(t.Context(), cs, classified, "vk-ns-demo-0", "", r.newRestoreIntent(t.Context(), cs.Namespace))
+	if err != nil {
+		t.Fatalf("ensureSubAgents after spec fix: %v", err)
+	}
+	if !changed {
+		t.Fatal("spec drift must rebuild a dead-lettered pod")
+	}
+	if err := cli.Get(t.Context(), types.NamespacedName{Namespace: subPod.Namespace, Name: subPod.Name}, &corev1.Pod{}); err == nil {
+		t.Error("dead-lettered drifted pod should have been deleted")
+	}
+	var out cocoonv1.CocoonSet
+	if err := cli.Get(t.Context(), types.NamespacedName{Namespace: cs.Namespace, Name: cs.Name}, &out); err != nil {
+		t.Fatalf("get CocoonSet: %v", err)
+	}
+	if _, ok := readRebuildHistory(&out)[1]; ok {
+		t.Error("rebuild history for the slot must be reset so the new spec gets a fresh budget")
 	}
 }
 

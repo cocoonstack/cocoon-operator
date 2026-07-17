@@ -295,8 +295,13 @@ func (r *Reconciler) markFailed(ctx context.Context, hib *cocoonv1.CocoonHiberna
 
 // markPending parks the CR on Pending without pinning Failed; self-heals on
 // re-enqueue. Short-circuits when phase, generation, and Ready message all
-// match so the pod watcher doesn't PATCH on every event.
+// match so the pod watcher doesn't PATCH on every event. Hibernated/Waking
+// never demote: they carry cocoonset's restore intent, and losing it would
+// fresh-boot a recreate and re-hibernate over the real snapshot.
 func (r *Reconciler) markPending(ctx context.Context, hib *cocoonv1.CocoonHibernation, msg string) error {
+	if hib.Status.Phase == cocoonv1.CocoonHibernationPhaseHibernated || hib.Status.Phase == cocoonv1.CocoonHibernationPhaseWaking {
+		return nil
+	}
 	if hib.Status.Phase == cocoonv1.CocoonHibernationPhasePending && hib.Status.ObservedGeneration == hib.Generation {
 		if ready := apimeta.FindStatusCondition(hib.Status.Conditions, commonk8s.ConditionTypeReady); ready != nil && ready.Message == msg {
 			return nil

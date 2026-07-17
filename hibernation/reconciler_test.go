@@ -243,6 +243,8 @@ func TestReconcileHibernateSurfacesProbeError(t *testing.T) {
 	(&meta.VMSpec{VMName: "vk-ns-demo-0", Managed: true}).Apply(pod)
 	// Pre-set so PatchHibernateState short-circuits before the interesting HasManifest call.
 	meta.HibernateState(true).Apply(pod)
+	// The probe only runs once vk reports this round's hibernate as done.
+	pod.Annotations[meta.AnnotationLifecycleState] = string(meta.LifecycleStateHibernated)
 
 	scheme := testScheme(t)
 	cli := ctrlfake.NewClientBuilder().
@@ -720,6 +722,118 @@ func TestMarkPendingPatchesObservedGenerationOnSameMessage(t *testing.T) {
 	}
 	if out.Status.ObservedGeneration != 4 {
 		t.Errorf("ObservedGeneration = %d, want 4 (markPending must patch when generation moved even if message is unchanged)", out.Status.ObservedGeneration)
+	}
+}
+
+// A missing pod — or a recreated pod not yet annotated with a VMName — is
+// consistent with Hibernated/Waking. Demoting to Pending would drop the phase
+// cocoonset's restore intent keys on, letting a recreate fresh-boot and a
+// later re-hibernate persist over the real snapshot.
+func TestReconcileKeepsHibernatedPhaseThroughPodGaps(t *testing.T) {
+	cases := []struct {
+		name string
+		pod  *corev1.Pod
+	}{
+		{"pod missing", nil},
+		{"pod without vmname", &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "demo-0", Namespace: "ns"}}},
+	}
+	phases := []cocoonv1.CocoonHibernationPhase{
+		cocoonv1.CocoonHibernationPhaseHibernated,
+		cocoonv1.CocoonHibernationPhaseWaking,
+	}
+	for _, c := range cases {
+		for _, phase := range phases {
+			t.Run(c.name+"/"+string(phase), func(t *testing.T) {
+				hib := &cocoonv1.CocoonHibernation{
+					ObjectMeta: metav1.ObjectMeta{Name: "hib", Namespace: "ns", Finalizers: []string{finalizerName}},
+					Spec: cocoonv1.CocoonHibernationSpec{
+						Desire: cocoonv1.HibernationDesireHibernate,
+						PodRef: cocoonv1.HibernationPodRef{Name: "demo-0"},
+					},
+					Status: cocoonv1.CocoonHibernationStatus{Phase: phase, VMName: "vk-ns-demo-0"},
+				}
+				scheme := testScheme(t)
+				builder := ctrlfake.NewClientBuilder().
+					WithScheme(scheme).
+					WithObjects(hib).
+					WithStatusSubresource(&cocoonv1.CocoonHibernation{})
+				if c.pod != nil {
+					builder = builder.WithObjects(c.pod.DeepCopy())
+				}
+				cli := builder.Build()
+				r := &Reconciler{Client: cli, Scheme: scheme, Registry: &fakeRegistry{}}
+
+				res, err := r.Reconcile(t.Context(), ctrl.Request{
+					NamespacedName: types.NamespacedName{Namespace: "ns", Name: "hib"},
+				})
+				if err != nil {
+					t.Fatalf("Reconcile: %v", err)
+				}
+				if res.RequeueAfter != requeueInterval {
+					t.Errorf("RequeueAfter = %v, want %v", res.RequeueAfter, requeueInterval)
+				}
+				var out cocoonv1.CocoonHibernation
+				if err := cli.Get(t.Context(), types.NamespacedName{Namespace: "ns", Name: "hib"}, &out); err != nil {
+					t.Fatalf("get hib: %v", err)
+				}
+				if out.Status.Phase != phase {
+					t.Errorf("phase = %q, want %q preserved", out.Status.Phase, phase)
+				}
+			})
+		}
+	}
+}
+
+// A stale :hibernate tag from a prior suspend cycle must not flip the CR to
+// Hibernated before vk reports lifecycle-state=hibernated for this round.
+func TestReconcileHibernateIgnoresStaleTagUntilLifecycleHibernated(t *testing.T) {
+	hib := &cocoonv1.CocoonHibernation{
+		ObjectMeta: metav1.ObjectMeta{Name: "hib", Namespace: "ns", Finalizers: []string{finalizerName}},
+		Spec: cocoonv1.CocoonHibernationSpec{
+			Desire: cocoonv1.HibernationDesireHibernate,
+			PodRef: cocoonv1.HibernationPodRef{Name: "demo-0"},
+		},
+	}
+	pod := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "demo-0", Namespace: "ns"}}
+	(&meta.VMSpec{VMName: "vk-ns-demo-0", Managed: true}).Apply(pod)
+	meta.HibernateState(true).Apply(pod)
+
+	scheme := testScheme(t)
+	cli := ctrlfake.NewClientBuilder().
+		WithScheme(scheme).
+		WithObjects(hib, pod).
+		WithStatusSubresource(&cocoonv1.CocoonHibernation{}).
+		Build()
+	r := &Reconciler{Client: cli, Scheme: scheme, Registry: &fakeRegistry{manifestPresent: true}}
+	req := ctrl.Request{NamespacedName: types.NamespacedName{Namespace: "ns", Name: "hib"}}
+
+	if _, err := r.Reconcile(t.Context(), req); err != nil {
+		t.Fatalf("Reconcile: %v", err)
+	}
+	var out cocoonv1.CocoonHibernation
+	if err := cli.Get(t.Context(), types.NamespacedName{Namespace: "ns", Name: "hib"}, &out); err != nil {
+		t.Fatalf("get hib: %v", err)
+	}
+	if out.Status.Phase != cocoonv1.CocoonHibernationPhaseHibernating {
+		t.Fatalf("phase = %q, want Hibernating while vk has not confirmed this round", out.Status.Phase)
+	}
+
+	var livePod corev1.Pod
+	if err := cli.Get(t.Context(), types.NamespacedName{Namespace: "ns", Name: "demo-0"}, &livePod); err != nil {
+		t.Fatalf("get pod: %v", err)
+	}
+	livePod.Annotations[meta.AnnotationLifecycleState] = string(meta.LifecycleStateHibernated)
+	if err := cli.Update(t.Context(), &livePod); err != nil {
+		t.Fatalf("update pod: %v", err)
+	}
+	if _, err := r.Reconcile(t.Context(), req); err != nil {
+		t.Fatalf("second Reconcile: %v", err)
+	}
+	if err := cli.Get(t.Context(), types.NamespacedName{Namespace: "ns", Name: "hib"}, &out); err != nil {
+		t.Fatalf("get hib: %v", err)
+	}
+	if out.Status.Phase != cocoonv1.CocoonHibernationPhaseHibernated {
+		t.Errorf("phase = %q, want Hibernated once vk confirms", out.Status.Phase)
 	}
 }
 

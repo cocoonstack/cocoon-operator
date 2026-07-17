@@ -2,7 +2,7 @@
 
 | Spec.Desire | What the reconciler does | Terminal phase |
 |---|---|---|
-| `Hibernate` | `meta.HibernateState(true).Apply` on the target pod, then poll `Registry.HasManifest(vmName, meta.HibernateSnapshotTag)` until the snapshot lands or `hibernateTimeout` (3 minutes) trips. A probe error (transport / 5xx / auth) surfaces as a returned error so controller-runtime logs + retries with backoff. | `Hibernated` |
+| `Hibernate` | `meta.HibernateState(true).Apply` on the target pod, then poll until vk-cocoon reports `lifecycle-state=hibernated` AND `Registry.HasManifest(vmName, meta.HibernateSnapshotTag)` sees the snapshot, or `hibernateTimeout` (3 minutes) trips. The lifecycle gate keeps a stale tag from a prior suspend cycle from completing the poll before this round's push. A probe error (transport / 5xx / auth) surfaces as a returned error so controller-runtime logs + retries with backoff. | `Hibernated` |
 | `Wake` | Clear `meta.HibernateState` if the annotation is still set (idempotent — the patch is skipped once already cleared, so requeue cycles don't spam informer events), then wait for the container to be `Running` **with a freshly written VMID** before dropping the hibernation snapshot tag from the registry. A wake that does not complete within `wakeTimeout` (5 minutes) is escalated to `Phase=Failed` with a dated message in the `Ready` condition. | `Active` |
 
 On CR deletion the reconciler runs a finalizer (`cocoonhibernation.cocoonset.cocoonstack.io/finalizer`) that clears the `:hibernate` tag from the registry (if `Status.VMName` is set) before removing itself. The cleanup is best-effort: a registry failure is logged at error level but never wedges CR deletion, so a snapshot can be orphaned if the registry is unreachable at that moment.

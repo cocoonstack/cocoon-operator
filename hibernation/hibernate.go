@@ -9,6 +9,7 @@ import (
 
 	cocoonv1 "github.com/cocoonstack/cocoon-common/apis/v1"
 	commonk8s "github.com/cocoonstack/cocoon-common/k8s"
+	"github.com/cocoonstack/cocoon-common/meta"
 	"github.com/cocoonstack/cocoon-operator/snapshot"
 )
 
@@ -19,16 +20,21 @@ func (r *Reconciler) reconcileHibernate(ctx context.Context, hib *cocoonv1.Cocoo
 		return ctrl.Result{}, fmt.Errorf("patch hibernate annotation: %w", err)
 	}
 
-	present, err := snapshot.HasHibernateSnapshot(ctx, r.Registry, vmName)
-	if err != nil {
-		return ctrl.Result{}, err
-	}
-	if present {
-		if r.firstTransitionAt(hib) {
-			observePhaseExit(hib, "ok")
-			r.emitEventf(hib, corev1.EventTypeNormal, "Hibernated", "snapshot %s pushed to the registry", vmName)
+	// Gate on vk's per-round completion signal before paying the registry
+	// probe: a stale :hibernate tag left by a prior suspend cycle would
+	// otherwise satisfy the probe immediately.
+	if meta.ReadLifecycleState(pod) == meta.LifecycleStateHibernated {
+		present, err := snapshot.HasHibernateSnapshot(ctx, r.Registry, vmName)
+		if err != nil {
+			return ctrl.Result{}, err
 		}
-		return ctrl.Result{}, r.setPhase(ctx, hib, cocoonv1.CocoonHibernationPhaseHibernated, vmName)
+		if present {
+			if r.firstTransitionAt(hib) {
+				observePhaseExit(hib, "ok")
+				r.emitEventf(hib, corev1.EventTypeNormal, "Hibernated", "snapshot %s pushed to the registry", vmName)
+			}
+			return ctrl.Result{}, r.setPhase(ctx, hib, cocoonv1.CocoonHibernationPhaseHibernated, vmName)
+		}
 	}
 	if phaseDeadlineExceeded(hib, cocoonv1.CocoonHibernationPhaseHibernating, hibernateTimeout) {
 		if r.firstTransitionAt(hib) {

@@ -126,7 +126,7 @@ func (r *Reconciler) createSubAgents(ctx context.Context, logger *log.Fields, cs
 // means the pod still matches or is in dead-letter.
 func (r *Reconciler) triageSubAgent(ctx context.Context, logger *log.Fields, pod *corev1.Pod, cs *cocoonv1.CocoonSet, slot int32) (bool, time.Duration, error) {
 	if pod.Annotations[annotationDeadLetter] == "true" {
-		return false, 0, nil
+		return r.rebuildDeadLetteredOnDrift(ctx, logger, pod, cs, slot)
 	}
 	switch {
 	case podIsTerminal(pod):
@@ -140,6 +140,28 @@ func (r *Reconciler) triageSubAgent(ctx context.Context, logger *log.Fields, pod
 	default:
 		return false, 0, nil
 	}
+}
+
+// rebuildDeadLetteredOnDrift leaves a dead-lettered pod alone until a spec
+// edit: the fix is the operator's remedy, so the new spec earns the slot a
+// fresh rebuild budget.
+func (r *Reconciler) rebuildDeadLetteredOnDrift(ctx context.Context, logger *log.Fields, pod *corev1.Pod, cs *cocoonv1.CocoonSet, slot int32) (bool, time.Duration, error) {
+	if podSpecMatchesAgent(pod, cs, slot) {
+		return false, 0, nil
+	}
+	history := readRebuildHistory(cs)
+	if _, ok := history[slot]; ok {
+		next := maps.Clone(history)
+		delete(next, slot)
+		if err := r.patchRebuildHistory(ctx, cs, next); err != nil {
+			return false, 0, fmt.Errorf("reset rebuild history for slot %d: %w", slot, err)
+		}
+	}
+	logger.Infof(ctx, "dead-lettered sub-agent %s/%s slot %d spec drifted, rebuilding with a fresh budget", pod.Namespace, pod.Name, slot)
+	if err := r.Delete(ctx, pod); err != nil && !apierrors.IsNotFound(err) {
+		return false, 0, fmt.Errorf("delete dead-lettered sub-agent slot %d: %w", slot, err)
+	}
+	return true, 0, nil
 }
 
 // rebuildSubAgent deletes pod with exponential backoff, dead-lettering past
