@@ -837,6 +837,39 @@ func TestReconcileHibernateIgnoresStaleTagUntilLifecycleHibernated(t *testing.T)
 	}
 }
 
+// A fresh duplicate that never reconciled has no Status.VMName yet but still
+// holds the VM via its immutable podRef.
+func TestReconcileDeleteKeepsTagForFreshDuplicate(t *testing.T) {
+	deleting := &cocoonv1.CocoonHibernation{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: "a", Namespace: "ns", UID: "uid-a",
+			Finalizers:        []string{finalizerName},
+			DeletionTimestamp: &metav1.Time{Time: time.Now()},
+		},
+		Spec:   cocoonv1.CocoonHibernationSpec{PodRef: cocoonv1.HibernationPodRef{Name: "demo-0"}},
+		Status: cocoonv1.CocoonHibernationStatus{VMName: "vk-ns-demo-0"},
+	}
+	fresh := &cocoonv1.CocoonHibernation{
+		ObjectMeta: metav1.ObjectMeta{Name: "c", Namespace: "ns", UID: "uid-c"},
+		Spec:       cocoonv1.CocoonHibernationSpec{PodRef: cocoonv1.HibernationPodRef{Name: "demo-0"}},
+	}
+	scheme := testScheme(t)
+	cli := ctrlfake.NewClientBuilder().
+		WithScheme(scheme).
+		WithObjects(deleting, fresh).
+		WithStatusSubresource(&cocoonv1.CocoonHibernation{}).
+		Build()
+	reg := &fakeRegistry{}
+	r := &Reconciler{Client: cli, Scheme: scheme, Registry: reg}
+
+	if err := r.reconcileDelete(t.Context(), deleting); err != nil {
+		t.Fatalf("reconcileDelete: %v", err)
+	}
+	if reg.deleteCalled {
+		t.Error("a fresh duplicate without Status.VMName must still hold the tag via podRef")
+	}
+}
+
 // Lifecycle annotations from a prior CocoonSet round (lower observed
 // generation) must not complete a CR hibernate: vk writes state and
 // observed-generation atomically, so a stale pair predating the pod's
@@ -891,6 +924,99 @@ func TestReconcileHibernateRejectsStaleLifecycleRound(t *testing.T) {
 	}
 	if out.Status.Phase != cocoonv1.CocoonHibernationPhaseHibernated {
 		t.Errorf("phase = %q, want Hibernated once vk confirms the current round", out.Status.Phase)
+	}
+}
+
+// A desire flipped back to Hibernate mid-wake must finish the wake first:
+// the stale tag and lifecycle pair from the previous round still read as
+// "complete" until vk finishes the wake and the tag is dropped.
+func TestHibernateDesireFinishesInFlightWakeFirst(t *testing.T) {
+	hib := &cocoonv1.CocoonHibernation{
+		ObjectMeta: metav1.ObjectMeta{Name: "hib", Namespace: "ns", Finalizers: []string{finalizerName}},
+		Spec: cocoonv1.CocoonHibernationSpec{
+			Desire: cocoonv1.HibernationDesireHibernate, // flipped back mid-wake
+			PodRef: cocoonv1.HibernationPodRef{Name: "demo-0"},
+		},
+		Status: cocoonv1.CocoonHibernationStatus{Phase: cocoonv1.CocoonHibernationPhaseWaking, VMName: "vk-ns-demo-0"},
+	}
+	// Pod as the informer would show it mid-wake: previous round's lifecycle
+	// pair still present, VM not yet running.
+	pod := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "demo-0", Namespace: "ns"}}
+	(&meta.VMSpec{VMName: "vk-ns-demo-0", Managed: true}).Apply(pod)
+	meta.LifecycleStatus{State: meta.LifecycleStateHibernated}.Apply(pod)
+
+	scheme := testScheme(t)
+	cli := ctrlfake.NewClientBuilder().
+		WithScheme(scheme).
+		WithObjects(hib, pod).
+		WithStatusSubresource(&cocoonv1.CocoonHibernation{}).
+		Build()
+	reg := &fakeRegistry{manifestPresent: true}
+	r := &Reconciler{Client: cli, Scheme: scheme, Registry: reg}
+
+	if _, err := r.Reconcile(t.Context(), ctrl.Request{
+		NamespacedName: types.NamespacedName{Namespace: "ns", Name: "hib"},
+	}); err != nil {
+		t.Fatalf("Reconcile: %v", err)
+	}
+	var out cocoonv1.CocoonHibernation
+	if err := cli.Get(t.Context(), types.NamespacedName{Namespace: "ns", Name: "hib"}, &out); err != nil {
+		t.Fatalf("get hib: %v", err)
+	}
+	if out.Status.Phase != cocoonv1.CocoonHibernationPhaseWaking {
+		t.Errorf("phase = %q, want Waking: the in-flight wake must complete before the new hibernate", out.Status.Phase)
+	}
+	if reg.deleteCalled {
+		t.Error("tag must not be dropped while the VM has not come up")
+	}
+}
+
+// A desire flipped to Wake mid-hibernate must finish the hibernate first: a
+// lagging informer can still show the pre-quiesce Running+VMID status, which
+// would otherwise complete the wake instantly and GC the only snapshot.
+func TestWakeDesireFinishesInFlightHibernateFirst(t *testing.T) {
+	hib := &cocoonv1.CocoonHibernation{
+		ObjectMeta: metav1.ObjectMeta{Name: "hib", Namespace: "ns", Finalizers: []string{finalizerName}},
+		Spec: cocoonv1.CocoonHibernationSpec{
+			Desire: cocoonv1.HibernationDesireWake, // flipped mid-hibernate
+			PodRef: cocoonv1.HibernationPodRef{Name: "demo-0"},
+		},
+		Status: cocoonv1.CocoonHibernationStatus{Phase: cocoonv1.CocoonHibernationPhaseHibernating, VMName: "vk-ns-demo-0"},
+	}
+	// Stale pre-quiesce snapshot of the pod: still Running with a VMID.
+	pod := &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{Name: "demo-0", Namespace: "ns"},
+		Status: corev1.PodStatus{ContainerStatuses: []corev1.ContainerStatus{
+			{State: corev1.ContainerState{Running: &corev1.ContainerStateRunning{}}},
+		}},
+	}
+	(&meta.VMSpec{VMName: "vk-ns-demo-0", Managed: true}).Apply(pod)
+	(&meta.VMRuntime{VMID: "vmid-old"}).Apply(pod)
+	meta.HibernateState(true).Apply(pod)
+
+	scheme := testScheme(t)
+	cli := ctrlfake.NewClientBuilder().
+		WithScheme(scheme).
+		WithObjects(hib, pod).
+		WithStatusSubresource(&cocoonv1.CocoonHibernation{}).
+		Build()
+	reg := &fakeRegistry{}
+	r := &Reconciler{Client: cli, Scheme: scheme, Registry: reg}
+
+	if _, err := r.Reconcile(t.Context(), ctrl.Request{
+		NamespacedName: types.NamespacedName{Namespace: "ns", Name: "hib"},
+	}); err != nil {
+		t.Fatalf("Reconcile: %v", err)
+	}
+	var out cocoonv1.CocoonHibernation
+	if err := cli.Get(t.Context(), types.NamespacedName{Namespace: "ns", Name: "hib"}, &out); err != nil {
+		t.Fatalf("get hib: %v", err)
+	}
+	if out.Status.Phase != cocoonv1.CocoonHibernationPhaseHibernating {
+		t.Errorf("phase = %q, want Hibernating: the in-flight hibernate must complete before the wake", out.Status.Phase)
+	}
+	if reg.deleteCalled {
+		t.Error("tag must not be GC'd off a stale Running snapshot mid-hibernate")
 	}
 }
 

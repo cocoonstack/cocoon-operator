@@ -159,10 +159,20 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 
 	logger.Debugf(ctx, "reconcile hibernation %s/%s desire=%s vm=%s", hib.Namespace, hib.Name, hib.Spec.Desire, vmName)
 
+	// Reverse desires serialize through the in-flight transition's terminal
+	// phase: a mid-wake flip back to Hibernate (or mid-hibernate flip to Wake)
+	// would otherwise read the previous round's tag and lifecycle annotations
+	// as this round's completion — vk flips neither until the transition ends.
 	switch hib.Spec.Desire {
 	case cocoonv1.HibernationDesireHibernate:
+		if hib.Status.Phase == cocoonv1.CocoonHibernationPhaseWaking {
+			return r.reconcileWake(ctx, &hib, &pod, vmName)
+		}
 		return r.reconcileHibernate(ctx, &hib, &pod, vmName)
 	case cocoonv1.HibernationDesireWake:
+		if hib.Status.Phase == cocoonv1.CocoonHibernationPhaseHibernating {
+			return r.reconcileHibernate(ctx, &hib, &pod, vmName)
+		}
 		return r.reconcileWake(ctx, &hib, &pod, vmName)
 	default:
 		return ctrl.Result{}, r.markFailed(ctx, &hib, fmt.Sprintf("unknown desire %q", hib.Spec.Desire))
@@ -217,7 +227,12 @@ func (r *Reconciler) vmHeldByAnotherCR(ctx context.Context, hib *cocoonv1.Cocoon
 		return false, fmt.Errorf("list cocoonhibernations in %s: %w", hib.Namespace, err)
 	}
 	return slices.ContainsFunc(list.Items, func(o cocoonv1.CocoonHibernation) bool {
-		return o.UID != hib.UID && o.DeletionTimestamp.IsZero() && o.Status.VMName == hib.Status.VMName
+		if o.UID == hib.UID || !o.DeletionTimestamp.IsZero() {
+			return false
+		}
+		// PodRef also matches: a fresh duplicate holds the VM before its
+		// first reconcile ever writes Status.VMName.
+		return o.Status.VMName == hib.Status.VMName || o.Spec.PodRef.Name == hib.Spec.PodRef.Name
 	}), nil
 }
 
