@@ -175,6 +175,8 @@ func newManagedPod(cs *cocoonv1.CocoonSet, podName, role, slotLabel string, sche
 			TerminationGracePeriodSeconds: &one,
 			Tolerations: []corev1.Toleration{
 				{Key: meta.TolerationKey, Operator: corev1.TolerationOpExists},
+				{Key: corev1.TaintNodeNotReady, Operator: corev1.TolerationOpExists, Effect: corev1.TaintEffectNoExecute},
+				{Key: corev1.TaintNodeUnreachable, Operator: corev1.TolerationOpExists, Effect: corev1.TaintEffectNoExecute},
 			},
 			NodeSelector: map[string]string{
 				meta.LabelNodePool: pool,
