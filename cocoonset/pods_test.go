@@ -186,6 +186,27 @@ func TestNewManagedPodCarriesCocoonToleration(t *testing.T) {
 	}
 }
 
+func TestNewManagedPodToleratesNodeFlapForever(t *testing.T) {
+	cs := newCocoonSet("demo")
+	pod := mustNewManagedPod(t, cs, "demo-0", meta.RoleMain, "0", testScheme(t))
+	for _, key := range []string{corev1.TaintNodeNotReady, corev1.TaintNodeUnreachable} {
+		i := slices.IndexFunc(pod.Spec.Tolerations, func(tol corev1.Toleration) bool {
+			return tol.Key == key
+		})
+		if i < 0 {
+			t.Errorf("toleration %s missing", key)
+			continue
+		}
+		tol := pod.Spec.Tolerations[i]
+		if tol.Effect != corev1.TaintEffectNoExecute || tol.Operator != corev1.TolerationOpExists {
+			t.Errorf("toleration %s = %+v, want Exists/NoExecute", key, tol)
+		}
+		if tol.TolerationSeconds != nil {
+			t.Errorf("toleration %s has tolerationSeconds=%d; must be nil so eviction never fires", key, *tol.TolerationSeconds)
+		}
+	}
+}
+
 func TestNewManagedPodStampsCocoonSetGeneration(t *testing.T) {
 	cs := newCocoonSet("demo", func(cs *cocoonv1.CocoonSet) {
 		cs.Generation = 42
