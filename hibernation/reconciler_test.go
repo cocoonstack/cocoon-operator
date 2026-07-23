@@ -1299,6 +1299,15 @@ func TestReconcileSerializesRetargetedCRAgainstItsStaleVM(t *testing.T) {
 	}
 }
 
+// A nil manager suffices: the guard rejects before mgr is touched.
+func TestSetupWithManagerRejectsInvalidConcurrency(t *testing.T) {
+	for _, n := range []int{0, -1} {
+		if err := (&Reconciler{Concurrency: n}).SetupWithManager(t.Context(), nil); err == nil {
+			t.Errorf("concurrency %d must be rejected", n)
+		}
+	}
+}
+
 // concurrencyProbe records the peak number of registry calls in flight.
 type concurrencyProbe struct {
 	inFlight    atomic.Int32
@@ -1327,15 +1336,6 @@ func (c *concurrencyProbe) enter() {
 		peak := c.maxInFlight.Load()
 		if n <= peak || c.maxInFlight.CompareAndSwap(peak, n) {
 			return
-		}
-	}
-}
-
-// A nil manager suffices: the guard rejects before mgr is touched.
-func TestSetupWithManagerRejectsInvalidConcurrency(t *testing.T) {
-	for _, n := range []int{0, -1} {
-		if err := (&Reconciler{Concurrency: n}).SetupWithManager(t.Context(), nil); err == nil {
-			t.Errorf("concurrency %d must be rejected", n)
 		}
 	}
 }

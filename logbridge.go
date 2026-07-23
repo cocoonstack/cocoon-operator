@@ -4,6 +4,7 @@ import (
 	"cmp"
 	"context"
 	"fmt"
+	"slices"
 	"strings"
 
 	"github.com/go-logr/logr"
@@ -45,7 +46,7 @@ func (s *crSink) Error(err error, msg string, kvs ...any) {
 
 func (s *crSink) WithValues(kvs ...any) logr.LogSink {
 	next := *s
-	next.kv = append(append([]any{}, s.kv...), kvs...)
+	next.kv = slices.Concat(s.kv, kvs)
 	return &next
 }
 
@@ -65,8 +66,7 @@ func (s *crSink) funcName() string {
 }
 
 func (s *crSink) line(msg string, kvs []any) string {
-	pairs := make([]any, 0, len(s.kv)+len(kvs))
-	pairs = append(append(pairs, s.kv...), kvs...)
+	pairs := slices.Concat(s.kv, kvs)
 	if len(pairs) == 0 {
 		return msg
 	}
