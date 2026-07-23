@@ -127,6 +127,28 @@ func TestEnsureToolboxesCollisionReturnsError(t *testing.T) {
 	}
 }
 
+func TestEnsureToolboxesRejectsIntegerName(t *testing.T) {
+	scheme := testScheme(t)
+	cs := newCocoonSet("demo", func(cs *cocoonv1.CocoonSet) {
+		cs.Spec.Toolboxes = []cocoonv1.ToolboxSpec{
+			{Name: "1", Image: "ghcr.io/cocoonstack/cocoon/toolbox:latest"},
+		}
+	})
+
+	cli := ctrlfake.NewClientBuilder().WithScheme(scheme).Build()
+	r := &Reconciler{Client: cli, Scheme: scheme}
+	classified := classifiedPods{
+		sub:       map[int32]*corev1.Pod{},
+		toolbox:   map[string]*corev1.Pod{},
+		allByName: map[string]*corev1.Pod{},
+	}
+
+	_, err := r.ensureToolboxes(t.Context(), cs, classified, r.newRestoreIntent(t.Context(), cs.Namespace))
+	if err == nil {
+		t.Fatal("ensureToolboxes must reject a toolbox name that collides with agent slot pod naming")
+	}
+}
+
 func TestEnsureToolboxesRejectsDuplicateNames(t *testing.T) {
 	scheme := testScheme(t)
 	cs := newCocoonSet("demo", func(cs *cocoonv1.CocoonSet) {
