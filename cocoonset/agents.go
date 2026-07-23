@@ -21,17 +21,14 @@ import (
 	"github.com/cocoonstack/cocoon-operator/metrics"
 )
 
-// subAgentCreateConcurrency caps parallel pod creates during fan-out so a
-// large scale-up (e.g. 1→N) does not burst the apiserver. Empirically the
-// rate limiter in controller-runtime plus apiserver QPS accommodate 8 in
-// flight without priority-fairness throttling.
+// subAgentCreateConcurrency caps parallel pod creates during a batch scale-up
+// so it does not burst the apiserver.
 const subAgentCreateConcurrency = 8
 
 // ensureSubAgents creates/deletes sub-agent pods to match [1..Replicas].
 // Returns changed (true when cluster state was mutated) and requeueAfter
 // (non-zero when a sub-agent is in rebuild backoff and the caller should
-// re-reconcile when backoff elapses). Missing slots are created concurrently
-// so batch scale-ups do not serialize N apiserver round trips.
+// re-reconcile when backoff elapses).
 func (r *Reconciler) ensureSubAgents(ctx context.Context, cs *cocoonv1.CocoonSet, classified classifiedPods, mainVMName, mainNodeName string, intent restoreIntent) (bool, time.Duration, error) {
 	logger := log.WithFunc("cocoonset.Reconciler.ensureSubAgents")
 	changed := false

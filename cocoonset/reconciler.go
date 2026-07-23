@@ -43,9 +43,8 @@ type Reconciler struct {
 	Concurrency int
 }
 
-// SetupWithManager registers the reconciler. `For` uses GenerationChangedPredicate
-// to avoid status-update loops; Owns filters pod events to creation, deletion,
-// and readiness transitions to prevent reconcile storms from VK status churn.
+// SetupWithManager registers the reconciler with predicates that filter out
+// status-only churn to avoid reconcile storms.
 func (r *Reconciler) SetupWithManager(_ context.Context, mgr ctrl.Manager) error {
 	if r.Concurrency < 1 {
 		return fmt.Errorf("cocoonset concurrency must be at least 1, got %d", r.Concurrency)

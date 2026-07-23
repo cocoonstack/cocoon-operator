@@ -16,11 +16,10 @@ import (
 	"github.com/cocoonstack/cocoon-operator/snapshot"
 )
 
-// reconcileMigration drives cross-node migration of the main agent (slot 0):
-// quiesce -> snapshot -> recreate on the target with restore-from-hibernate ->
-// drop the snapshot; idempotent over durable state, handled=false hands back.
-// Never lose live state: the old pod dies only after the snapshot exists AND
-// this controller quiesced it; the snapshot drops only once the new VM runs.
+// reconcileMigration drives cross-node migration of the main agent (slot 0);
+// handled=false hands back to the normal flow. Never lose live state: the old
+// pod dies only after the snapshot exists AND this controller quiesced it;
+// the snapshot drops only once the new VM runs.
 func (r *Reconciler) reconcileMigration(ctx context.Context, cs *cocoonv1.CocoonSet, classified classifiedPods) (bool, ctrl.Result, error) {
 	desired := cs.Spec.NodeName
 	migrating := cs.Status.Phase == cocoonv1.CocoonSetPhaseMigrating

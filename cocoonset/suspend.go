@@ -17,10 +17,8 @@ import (
 	"github.com/cocoonstack/cocoon-operator/snapshot"
 )
 
-// reconcileSuspend ensures the main agent exists, applies the hibernate
-// annotation to every owned pod, then polls the registry to observe when all
-// managed VMs have been pushed to snapshot. Stays in Suspending with a
-// periodic requeue until every required snapshot lands.
+// reconcileSuspend polls the registry and stays in Suspending, requeueing
+// periodically, until every managed VM's snapshot lands.
 func (r *Reconciler) reconcileSuspend(ctx context.Context, cs *cocoonv1.CocoonSet, classified classifiedPods) (ctrl.Result, error) {
 	logger := log.WithFunc("cocoonset.Reconciler.reconcileSuspend")
 	if classified.main == nil {
@@ -113,8 +111,7 @@ func (r *Reconciler) applySuspend(ctx context.Context, classified classifiedPods
 
 // applyUnsuspend clears HibernateState from owned pods, skipping pods that are
 // targets of an active CocoonHibernation CR to avoid racing the hibernation
-// reconciler. The unsorted pre-scan keeps the steady path (nothing hibernated)
-// zero-alloc: no key sort, no CR list.
+// reconciler.
 func (r *Reconciler) applyUnsuspend(ctx context.Context, namespace string, classified classifiedPods) error {
 	var hibernated []*corev1.Pod
 	for _, pod := range classified.allByName {

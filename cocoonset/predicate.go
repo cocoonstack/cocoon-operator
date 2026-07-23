@@ -9,9 +9,8 @@ import (
 	"github.com/cocoonstack/cocoon-common/meta"
 )
 
-// podRelevantChange filters pod events to those that affect CocoonSet
-// reconciliation: creation, deletion, and readiness transitions.
-// Ignores pure status churn (VK notify loops, condition timestamp updates).
+// podRelevantChange ignores pure status churn (VK notify loops, condition
+// timestamp updates) that would otherwise storm reconciles.
 type podRelevantChange struct{}
 
 func (podRelevantChange) Create(_ event.CreateEvent) bool   { return true }
