@@ -96,9 +96,7 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 	// Pod Phase flips); IsPodTerminal is the kubelet-driven one.
 	if classified.main != nil {
 		if reason := mainPodFailedReason(classified.main); reason != "" {
-			r.observeMainPodFailed(&cs, classified.main, reason)
-			return ctrl.Result{}, r.patchStatus(ctx, &cs,
-				buildStatus(&cs, classified, cocoonv1.CocoonSetPhaseFailed))
+			return r.handleFailedMainAgent(ctx, &cs, classified, reason)
 		}
 		if cs.Status.Phase == cocoonv1.CocoonSetPhaseFailed && meta.IsPodReady(classified.main) && r.Recorder != nil {
 			r.Recorder.Eventf(&cs, corev1.EventTypeNormal, "RecoveredFromFailure",
@@ -157,6 +155,20 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 		return ctrl.Result{}, err
 	}
 	return ctrl.Result{RequeueAfter: subRequeue}, nil
+}
+
+// handleFailedMainAgent recreates a terminal main agent whose spec has since
+// drifted, rather than parking the CocoonSet in Failed with no escape route
+// until the pod happens to turn Ready again.
+func (r *Reconciler) handleFailedMainAgent(ctx context.Context, cs *cocoonv1.CocoonSet, classified classifiedPods, reason string) (ctrl.Result, error) {
+	if !podSpecMatchesAgent(classified.main, cs, 0) {
+		if err := r.Delete(ctx, classified.main); err != nil && !apierrors.IsNotFound(err) {
+			return ctrl.Result{}, fmt.Errorf("delete terminal drifted main agent: %w", err)
+		}
+		return ctrl.Result{Requeue: true}, nil
+	}
+	r.observeMainPodFailed(cs, classified.main, reason)
+	return ctrl.Result{}, r.patchStatus(ctx, cs, buildStatus(cs, classified, cocoonv1.CocoonSetPhaseFailed))
 }
 
 // createMainAgent builds and creates the missing main agent pod, stamping

@@ -9,6 +9,7 @@ import (
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	ctrl "sigs.k8s.io/controller-runtime"
@@ -512,6 +513,39 @@ func TestReconcileMainLifecycleFailedTransitionsToFailed(t *testing.T) {
 	}
 	if out.Status.Phase != cocoonv1.CocoonSetPhaseFailed {
 		t.Errorf("CocoonSet phase = %q, want Failed", out.Status.Phase)
+	}
+}
+
+// A Failed main pod whose spec has drifted from the current CocoonSet spec
+// must be deleted for recreate, not parked in Failed forever.
+func TestReconcileMainLifecycleFailedWithDriftRecreatesPod(t *testing.T) {
+	scheme := testScheme(t)
+	cs := newCocoonSet("demo", func(cs *cocoonv1.CocoonSet) {
+		cs.Finalizers = []string{finalizerName}
+	})
+	mainPod := mustBuildAgentPod(t, cs, 0, "", "", scheme)
+	mainPod.Status.Phase = corev1.PodRunning
+	if mainPod.Annotations == nil {
+		mainPod.Annotations = map[string]string{}
+	}
+	mainPod.Annotations[meta.AnnotationLifecycleState] = string(meta.LifecycleStateFailed)
+
+	cs.Spec.Agent.Image = "ghcr.io/cocoonstack/cocoon/ubuntu:26.04"
+
+	cli := ctrlfake.NewClientBuilder().
+		WithScheme(scheme).
+		WithObjects(cs, mainPod).
+		WithStatusSubresource(&cocoonv1.CocoonSet{}).
+		Build()
+	r := &Reconciler{Client: cli, Scheme: scheme, Registry: &fakeRegistry{}}
+
+	if _, err := r.Reconcile(t.Context(), ctrl.Request{NamespacedName: types.NamespacedName{Namespace: cs.Namespace, Name: cs.Name}}); err != nil {
+		t.Fatalf("Reconcile: %v", err)
+	}
+	if err := cli.Get(t.Context(), types.NamespacedName{Namespace: mainPod.Namespace, Name: mainPod.Name}, &corev1.Pod{}); err == nil {
+		t.Error("Failed main pod with drifted spec should have been deleted for recreate")
+	} else if !apierrors.IsNotFound(err) {
+		t.Fatalf("get main pod: %v", err)
 	}
 }
 
