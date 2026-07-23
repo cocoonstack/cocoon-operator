@@ -28,10 +28,11 @@ func (r *Reconciler) reconcileHibernate(ctx context.Context, hib *cocoonv1.Cocoo
 	if st := meta.ReadLifecycleStatus(pod); st.State == meta.LifecycleStateHibernated &&
 		st.ObservedGeneration >= meta.ReadCocoonSetGeneration(pod) {
 		present, err := snapshot.HasHibernateSnapshot(ctx, r.Registry, vmName)
-		if err != nil {
+		// A persistently failing probe must still hit the deadline below, or the phase starves in Hibernating.
+		if err != nil && !phaseDeadlineExceeded(hib, cocoonv1.CocoonHibernationPhaseHibernating, hibernateTimeout) {
 			return ctrl.Result{}, err
 		}
-		if present {
+		if err == nil && present {
 			if r.firstTransitionAt(hib) {
 				observePhaseExit(hib, "ok")
 				r.emitEventf(hib, corev1.EventTypeNormal, "Hibernated", "snapshot %s pushed to the registry", vmName)
@@ -42,10 +43,10 @@ func (r *Reconciler) reconcileHibernate(ctx context.Context, hib *cocoonv1.Cocoo
 	if phaseDeadlineExceeded(hib, cocoonv1.CocoonHibernationPhaseHibernating, hibernateTimeout) {
 		if r.firstTransitionAt(hib) {
 			observePhaseExit(hib, "timeout")
-			r.emitEventf(hib, corev1.EventTypeWarning, "HibernateTimedOut", "vk-cocoon did not push snapshot %s within %s", vmName, hibernateTimeout)
+			r.emitEventf(hib, corev1.EventTypeWarning, "HibernateTimedOut", "snapshot %s not confirmed in the registry within %s", vmName, hibernateTimeout)
 		}
 		return ctrl.Result{}, r.markFailed(ctx, hib,
-			fmt.Sprintf("hibernate timed out after %s; vk-cocoon never pushed the snapshot", hibernateTimeout))
+			fmt.Sprintf("hibernate not confirmed within %s", hibernateTimeout))
 	}
 	if updateErr := r.setPhase(ctx, hib, cocoonv1.CocoonHibernationPhaseHibernating, vmName); updateErr != nil {
 		return ctrl.Result{}, updateErr

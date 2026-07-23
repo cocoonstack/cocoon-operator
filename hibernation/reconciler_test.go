@@ -221,6 +221,57 @@ func TestReconcileDeleteSkipsTagWhenVMNameMissing(t *testing.T) {
 	}
 }
 
+// TestReconcileHibernateProbeErrorAtDeadlineFails pins the starvation fix: a
+// registry outage must not bypass hibernateTimeout, or podsHibernatedByCR
+// keeps the annotation owned and a reverse-desire wake never proceeds.
+func TestReconcileHibernateProbeErrorAtDeadlineFails(t *testing.T) {
+	hib := &cocoonv1.CocoonHibernation{
+		ObjectMeta: metav1.ObjectMeta{Name: "hib", Namespace: "ns", Finalizers: []string{finalizerName}},
+		Spec: cocoonv1.CocoonHibernationSpec{
+			Desire: cocoonv1.HibernationDesireWake,
+			PodRef: cocoonv1.HibernationPodRef{Name: "demo-0"},
+		},
+		Status: cocoonv1.CocoonHibernationStatus{
+			Phase: cocoonv1.CocoonHibernationPhaseHibernating,
+			Conditions: []metav1.Condition{{
+				Type:               commonk8s.ConditionTypeReady,
+				Status:             metav1.ConditionFalse,
+				Reason:             "Hibernating",
+				LastTransitionTime: metav1.NewTime(time.Now().Add(-2 * hibernateTimeout)),
+			}},
+		},
+	}
+	pod := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "demo-0", Namespace: "ns"}}
+	(&meta.VMSpec{VMName: "vk-ns-demo-0", Managed: true}).Apply(pod)
+	meta.HibernateState(true).Apply(pod)
+	pod.Annotations[meta.AnnotationLifecycleState] = string(meta.LifecycleStateHibernated)
+
+	scheme := testScheme(t)
+	cli := ctrlfake.NewClientBuilder().
+		WithScheme(scheme).
+		WithObjects(hib, pod).
+		WithStatusSubresource(&cocoonv1.CocoonHibernation{}).
+		Build()
+	r := &Reconciler{
+		Client:   cli,
+		Scheme:   scheme,
+		Registry: &fakeRegistry{manifestErr: errors.New("registry down")},
+	}
+
+	if _, err := r.Reconcile(t.Context(), ctrl.Request{
+		NamespacedName: types.NamespacedName{Namespace: "ns", Name: "hib"},
+	}); err != nil {
+		t.Fatalf("expired probe error must convert to Failed, not surface: %v", err)
+	}
+	var got cocoonv1.CocoonHibernation
+	if err := cli.Get(t.Context(), types.NamespacedName{Namespace: "ns", Name: "hib"}, &got); err != nil {
+		t.Fatalf("get hib: %v", err)
+	}
+	if got.Status.Phase != cocoonv1.CocoonHibernationPhaseFailed {
+		t.Errorf("phase = %q, want failed", got.Status.Phase)
+	}
+}
+
 func TestPodVMNameRoundtrip(t *testing.T) {
 	pod := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "demo-0", Namespace: "ns"}}
 	(&meta.VMSpec{VMName: "vk-ns-demo-0", Managed: true}).Apply(pod)
@@ -1299,6 +1350,15 @@ func TestReconcileSerializesRetargetedCRAgainstItsStaleVM(t *testing.T) {
 	}
 }
 
+// A nil manager suffices: the guard rejects before mgr is touched.
+func TestSetupWithManagerRejectsInvalidConcurrency(t *testing.T) {
+	for _, n := range []int{0, -1} {
+		if err := (&Reconciler{Concurrency: n}).SetupWithManager(t.Context(), nil); err == nil {
+			t.Errorf("concurrency %d must be rejected", n)
+		}
+	}
+}
+
 // concurrencyProbe records the peak number of registry calls in flight.
 type concurrencyProbe struct {
 	inFlight    atomic.Int32
@@ -1327,15 +1387,6 @@ func (c *concurrencyProbe) enter() {
 		peak := c.maxInFlight.Load()
 		if n <= peak || c.maxInFlight.CompareAndSwap(peak, n) {
 			return
-		}
-	}
-}
-
-// A nil manager suffices: the guard rejects before mgr is touched.
-func TestSetupWithManagerRejectsInvalidConcurrency(t *testing.T) {
-	for _, n := range []int{0, -1} {
-		if err := (&Reconciler{Concurrency: n}).SetupWithManager(t.Context(), nil); err == nil {
-			t.Errorf("concurrency %d must be rejected", n)
 		}
 	}
 }

@@ -9,6 +9,7 @@ import (
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	ctrl "sigs.k8s.io/controller-runtime"
@@ -124,6 +125,28 @@ func TestEnsureToolboxesCollisionReturnsError(t *testing.T) {
 	_, err := r.ensureToolboxes(t.Context(), cs, classified, r.newRestoreIntent(t.Context(), cs.Namespace))
 	if err == nil {
 		t.Fatal("ensureToolboxes should return error on name collision with agent pod")
+	}
+}
+
+func TestEnsureToolboxesRejectsIntegerName(t *testing.T) {
+	scheme := testScheme(t)
+	cs := newCocoonSet("demo", func(cs *cocoonv1.CocoonSet) {
+		cs.Spec.Toolboxes = []cocoonv1.ToolboxSpec{
+			{Name: "1", Image: "ghcr.io/cocoonstack/cocoon/toolbox:latest"},
+		}
+	})
+
+	cli := ctrlfake.NewClientBuilder().WithScheme(scheme).Build()
+	r := &Reconciler{Client: cli, Scheme: scheme}
+	classified := classifiedPods{
+		sub:       map[int32]*corev1.Pod{},
+		toolbox:   map[string]*corev1.Pod{},
+		allByName: map[string]*corev1.Pod{},
+	}
+
+	_, err := r.ensureToolboxes(t.Context(), cs, classified, r.newRestoreIntent(t.Context(), cs.Namespace))
+	if err == nil {
+		t.Fatal("ensureToolboxes must reject a toolbox name that collides with agent slot pod naming")
 	}
 }
 
@@ -493,6 +516,39 @@ func TestReconcileMainLifecycleFailedTransitionsToFailed(t *testing.T) {
 	}
 }
 
+// A Failed main pod whose spec has drifted from the current CocoonSet spec
+// must be deleted for recreate, not parked in Failed forever.
+func TestReconcileMainLifecycleFailedWithDriftRecreatesPod(t *testing.T) {
+	scheme := testScheme(t)
+	cs := newCocoonSet("demo", func(cs *cocoonv1.CocoonSet) {
+		cs.Finalizers = []string{finalizerName}
+	})
+	mainPod := mustBuildAgentPod(t, cs, 0, "", "", scheme)
+	mainPod.Status.Phase = corev1.PodRunning
+	if mainPod.Annotations == nil {
+		mainPod.Annotations = map[string]string{}
+	}
+	mainPod.Annotations[meta.AnnotationLifecycleState] = string(meta.LifecycleStateFailed)
+
+	cs.Spec.Agent.Image = "ghcr.io/cocoonstack/cocoon/ubuntu:26.04"
+
+	cli := ctrlfake.NewClientBuilder().
+		WithScheme(scheme).
+		WithObjects(cs, mainPod).
+		WithStatusSubresource(&cocoonv1.CocoonSet{}).
+		Build()
+	r := &Reconciler{Client: cli, Scheme: scheme, Registry: &fakeRegistry{}}
+
+	if _, err := r.Reconcile(t.Context(), ctrl.Request{NamespacedName: types.NamespacedName{Namespace: cs.Namespace, Name: cs.Name}}); err != nil {
+		t.Fatalf("Reconcile: %v", err)
+	}
+	if err := cli.Get(t.Context(), types.NamespacedName{Namespace: mainPod.Namespace, Name: mainPod.Name}, &corev1.Pod{}); err == nil {
+		t.Error("Failed main pod with drifted spec should have been deleted for recreate")
+	} else if !apierrors.IsNotFound(err) {
+		t.Fatalf("get main pod: %v", err)
+	}
+}
+
 // A sub-agent carrying lifecycle-state=Failed but still PodPhase=Running must
 // be rebuilt so the backoff / dead-letter logic runs.
 func TestEnsureSubAgentsTreatsLifecycleFailedAsTerminal(t *testing.T) {
@@ -790,6 +846,53 @@ func TestApplyUnsuspendSkipsPodHibernatedByCR(t *testing.T) {
 	}
 	if bool(meta.ReadHibernateState(&got)) {
 		t.Errorf("demo-1 had no CR; applyUnsuspend must clear it")
+	}
+}
+
+// A Wake desire mid-Hibernating transition (the hibernation reconciler's own
+// reverse-desire window) must still exclude the pod: the annotation is owned
+// by the in-flight hibernate, not by applyUnsuspend.
+func TestApplyUnsuspendSkipsPodMidHibernateOnReverseDesire(t *testing.T) {
+	scheme := testScheme(t)
+
+	hibernated := &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{Name: "demo-0", Namespace: "ns"},
+	}
+	meta.HibernateState(true).Apply(hibernated)
+
+	hibCR := &cocoonv1.CocoonHibernation{
+		ObjectMeta: metav1.ObjectMeta{Name: "demo-hib", Namespace: "ns"},
+		Spec: cocoonv1.CocoonHibernationSpec{
+			Desire: cocoonv1.HibernationDesireWake,
+			PodRef: cocoonv1.HibernationPodRef{Name: "demo-0"},
+		},
+		Status: cocoonv1.CocoonHibernationStatus{
+			Phase: cocoonv1.CocoonHibernationPhaseHibernating,
+		},
+	}
+
+	cli := ctrlfake.NewClientBuilder().
+		WithScheme(scheme).
+		WithObjects(hibernated, hibCR).
+		Build()
+	r := &Reconciler{Client: cli, Scheme: scheme}
+	classified := classifiedPods{
+		main:      hibernated,
+		sub:       map[int32]*corev1.Pod{},
+		toolbox:   map[string]*corev1.Pod{},
+		allByName: map[string]*corev1.Pod{"demo-0": hibernated},
+	}
+
+	if err := r.applyUnsuspend(t.Context(), "ns", classified); err != nil {
+		t.Fatalf("applyUnsuspend: %v", err)
+	}
+
+	var got corev1.Pod
+	if err := cli.Get(t.Context(), types.NamespacedName{Namespace: "ns", Name: "demo-0"}, &got); err != nil {
+		t.Fatalf("get demo-0: %v", err)
+	}
+	if !bool(meta.ReadHibernateState(&got)) {
+		t.Errorf("demo-0 is mid-Hibernating under a reverse Wake desire; applyUnsuspend must leave it set")
 	}
 }
 

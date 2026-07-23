@@ -116,15 +116,9 @@ func (r *Reconciler) stashDeleteVMNames(ctx context.Context, cs *cocoonv1.Cocoon
 	return r.Patch(ctx, cs, patch)
 }
 
-// vmNamesForGC returns the canonical GC list — read from the stashed annotation,
-// falling back to Status when the annotation is somehow missing.
+// vmNamesForGC returns the canonical GC list, read from the stashed annotation.
 func vmNamesForGC(cs *cocoonv1.CocoonSet) []string {
-	if names := parseVMNamesAnnotation(cs.Annotations[annotationDeleteVMNames]); len(names) > 0 {
-		return names
-	}
-	names := statusVMNames(cs)
-	slices.Sort(names)
-	return names
+	return parseVMNamesAnnotation(cs.Annotations[annotationDeleteVMNames])
 }
 
 // statusVMNames collects the non-empty VM names recorded in the CocoonSet

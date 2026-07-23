@@ -17,10 +17,8 @@ import (
 	"github.com/cocoonstack/cocoon-operator/snapshot"
 )
 
-// reconcileSuspend ensures the main agent exists, applies the hibernate
-// annotation to every owned pod, then polls the registry to observe when all
-// managed VMs have been pushed to snapshot. Stays in Suspending with a
-// periodic requeue until every required snapshot lands.
+// reconcileSuspend polls the registry and stays in Suspending, requeueing
+// periodically, until every managed VM's snapshot lands.
 func (r *Reconciler) reconcileSuspend(ctx context.Context, cs *cocoonv1.CocoonSet, classified classifiedPods) (ctrl.Result, error) {
 	logger := log.WithFunc("cocoonset.Reconciler.reconcileSuspend")
 	if classified.main == nil {
@@ -60,11 +58,6 @@ func (r *Reconciler) reconcileSuspend(ctx context.Context, cs *cocoonv1.CocoonSe
 // Returns (false, nil) whenever the expected state is not yet observed so
 // the caller requeues rather than treats it as an error.
 func (r *Reconciler) allOwnedPodsHibernated(ctx context.Context, cs *cocoonv1.CocoonSet, classified classifiedPods) (bool, error) {
-	if r.Registry == nil {
-		// No registry configured; such deployments have no snapshot to
-		// observe, so treat the annotation write as authoritative.
-		return true, nil
-	}
 	for _, name := range slices.Sorted(maps.Keys(classified.allByName)) {
 		if ctxErr := ctx.Err(); ctxErr != nil {
 			return false, ctxErr
@@ -113,8 +106,7 @@ func (r *Reconciler) applySuspend(ctx context.Context, classified classifiedPods
 
 // applyUnsuspend clears HibernateState from owned pods, skipping pods that are
 // targets of an active CocoonHibernation CR to avoid racing the hibernation
-// reconciler. The unsorted pre-scan keeps the steady path (nothing hibernated)
-// zero-alloc: no key sort, no CR list.
+// reconciler.
 func (r *Reconciler) applyUnsuspend(ctx context.Context, namespace string, classified classifiedPods) error {
 	var hibernated []*corev1.Pod
 	for _, pod := range classified.allByName {
@@ -150,6 +142,6 @@ func (r *Reconciler) applyUnsuspend(ctx context.Context, namespace string, class
 // podsHibernatedByCR returns pod names targeted by a desire=Hibernate CR.
 func (r *Reconciler) podsHibernatedByCR(ctx context.Context, namespace string) (map[string]struct{}, error) {
 	return r.hibernationPodNames(ctx, namespace, func(h *cocoonv1.CocoonHibernation) bool {
-		return h.Spec.Desire == cocoonv1.HibernationDesireHibernate
+		return h.Spec.Desire == cocoonv1.HibernationDesireHibernate || h.Status.Phase == cocoonv1.CocoonHibernationPhaseHibernating
 	})
 }

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"maps"
 	"slices"
+	"strconv"
 
 	"github.com/projecteru2/core/log"
 	corev1 "k8s.io/api/core/v1"
@@ -24,6 +25,9 @@ func (r *Reconciler) ensureToolboxes(ctx context.Context, cs *cocoonv1.CocoonSet
 	for _, tb := range cs.Spec.Toolboxes {
 		if desired[tb.Name] {
 			return false, fmt.Errorf("duplicate toolbox name %q in spec", tb.Name)
+		}
+		if _, convErr := strconv.Atoi(tb.Name); convErr == nil {
+			return false, fmt.Errorf("toolbox name %q must not be an integer: collides with agent slot pod naming", tb.Name)
 		}
 		desired[tb.Name] = true
 	}

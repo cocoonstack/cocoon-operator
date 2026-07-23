@@ -62,8 +62,7 @@ var (
 	)
 )
 
-// Register installs all operator collectors into reg (controller-runtime's
-// registry in production) so they surface on the /metrics endpoint.
+// Register installs all operator collectors into reg so they surface on the /metrics endpoint.
 func Register(reg prometheus.Registerer) {
 	reg.MustRegister(
 		SubAgentRebuildTotal,
