@@ -157,9 +157,7 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 	return ctrl.Result{RequeueAfter: subRequeue}, nil
 }
 
-// handleFailedMainAgent recreates a terminal main agent whose spec has since
-// drifted, rather than parking the CocoonSet in Failed with no escape route
-// until the pod happens to turn Ready again.
+// handleFailedMainAgent recreates a terminal main agent whose spec has drifted; parking in Failed would wait for a Ready the drifted pod can never reach.
 func (r *Reconciler) handleFailedMainAgent(ctx context.Context, cs *cocoonv1.CocoonSet, classified classifiedPods, reason string) (ctrl.Result, error) {
 	if !podSpecMatchesAgent(classified.main, cs, 0) {
 		if err := r.Delete(ctx, classified.main); err != nil && !apierrors.IsNotFound(err) {
