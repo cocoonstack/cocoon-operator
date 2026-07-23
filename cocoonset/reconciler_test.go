@@ -815,6 +815,53 @@ func TestApplyUnsuspendSkipsPodHibernatedByCR(t *testing.T) {
 	}
 }
 
+// A Wake desire mid-Hibernating transition (the hibernation reconciler's own
+// reverse-desire window) must still exclude the pod: the annotation is owned
+// by the in-flight hibernate, not by applyUnsuspend.
+func TestApplyUnsuspendSkipsPodMidHibernateOnReverseDesire(t *testing.T) {
+	scheme := testScheme(t)
+
+	hibernated := &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{Name: "demo-0", Namespace: "ns"},
+	}
+	meta.HibernateState(true).Apply(hibernated)
+
+	hibCR := &cocoonv1.CocoonHibernation{
+		ObjectMeta: metav1.ObjectMeta{Name: "demo-hib", Namespace: "ns"},
+		Spec: cocoonv1.CocoonHibernationSpec{
+			Desire: cocoonv1.HibernationDesireWake,
+			PodRef: cocoonv1.HibernationPodRef{Name: "demo-0"},
+		},
+		Status: cocoonv1.CocoonHibernationStatus{
+			Phase: cocoonv1.CocoonHibernationPhaseHibernating,
+		},
+	}
+
+	cli := ctrlfake.NewClientBuilder().
+		WithScheme(scheme).
+		WithObjects(hibernated, hibCR).
+		Build()
+	r := &Reconciler{Client: cli, Scheme: scheme}
+	classified := classifiedPods{
+		main:      hibernated,
+		sub:       map[int32]*corev1.Pod{},
+		toolbox:   map[string]*corev1.Pod{},
+		allByName: map[string]*corev1.Pod{"demo-0": hibernated},
+	}
+
+	if err := r.applyUnsuspend(t.Context(), "ns", classified); err != nil {
+		t.Fatalf("applyUnsuspend: %v", err)
+	}
+
+	var got corev1.Pod
+	if err := cli.Get(t.Context(), types.NamespacedName{Namespace: "ns", Name: "demo-0"}, &got); err != nil {
+		t.Fatalf("get demo-0: %v", err)
+	}
+	if !bool(meta.ReadHibernateState(&got)) {
+		t.Errorf("demo-0 is mid-Hibernating under a reverse Wake desire; applyUnsuspend must leave it set")
+	}
+}
+
 // A nil manager suffices: the guard rejects before mgr is touched.
 func TestSetupWithManagerRejectsInvalidConcurrency(t *testing.T) {
 	for _, n := range []int{0, -1} {
