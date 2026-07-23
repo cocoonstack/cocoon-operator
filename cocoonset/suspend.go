@@ -58,11 +58,6 @@ func (r *Reconciler) reconcileSuspend(ctx context.Context, cs *cocoonv1.CocoonSe
 // Returns (false, nil) whenever the expected state is not yet observed so
 // the caller requeues rather than treats it as an error.
 func (r *Reconciler) allOwnedPodsHibernated(ctx context.Context, cs *cocoonv1.CocoonSet, classified classifiedPods) (bool, error) {
-	if r.Registry == nil {
-		// No registry configured; such deployments have no snapshot to
-		// observe, so treat the annotation write as authoritative.
-		return true, nil
-	}
 	for _, name := range slices.Sorted(maps.Keys(classified.allByName)) {
 		if ctxErr := ctx.Err(); ctxErr != nil {
 			return false, ctxErr
