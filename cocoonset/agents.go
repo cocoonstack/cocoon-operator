@@ -169,7 +169,7 @@ func (r *Reconciler) rebuildSubAgent(ctx context.Context, logger *log.Fields, po
 	history := readRebuildHistory(cs)
 	entry := history[slot]
 	if entry.Count >= maxRebuildAttempts {
-		if err := r.patchPodAnnotation(ctx, pod, annotationDeadLetter, "true"); err != nil {
+		if err := r.patchAnnotation(ctx, pod, annotationDeadLetter, "true"); err != nil {
 			return false, 0, err
 		}
 		metrics.SubAgentDeadLetterTotal.WithLabelValues(cs.Namespace, cs.Name).Inc()
@@ -203,13 +203,18 @@ func (r *Reconciler) rebuildSubAgent(ctx context.Context, logger *log.Fields, po
 	return true, 0, nil
 }
 
-func (r *Reconciler) patchPodAnnotation(ctx context.Context, pod *corev1.Pod, key, value string) error {
-	patch, err := commonk8s.AnnotationsMergePatch(map[string]any{key: value})
-	if err != nil {
-		return fmt.Errorf("build patch for pod %s/%s annotation %s: %w", pod.Namespace, pod.Name, key, err)
+// patchAnnotation merge-patches one annotation on obj; an empty value deletes the key.
+func (r *Reconciler) patchAnnotation(ctx context.Context, obj client.Object, key, value string) error {
+	var v any = value
+	if value == "" {
+		v = nil
 	}
-	if err := r.Patch(ctx, pod, client.RawPatch(types.MergePatchType, patch)); err != nil {
-		return fmt.Errorf("patch pod %s/%s annotation %s: %w", pod.Namespace, pod.Name, key, err)
+	patch, err := commonk8s.AnnotationsMergePatch(map[string]any{key: v})
+	if err != nil {
+		return fmt.Errorf("build patch for %T %s/%s annotation %s: %w", obj, obj.GetNamespace(), obj.GetName(), key, err)
+	}
+	if err := r.Patch(ctx, obj, client.RawPatch(types.MergePatchType, patch)); err != nil {
+		return fmt.Errorf("patch %T %s/%s annotation %s: %w", obj, obj.GetNamespace(), obj.GetName(), key, err)
 	}
 	return nil
 }

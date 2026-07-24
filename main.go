@@ -116,6 +116,7 @@ func main() {
 
 	if err = (&cocoonset.Reconciler{
 		Client:      mgr.GetClient(),
+		APIReader:   mgr.GetAPIReader(),
 		Scheme:      mgr.GetScheme(),
 		Registry:    registry,
 		Recorder:    recorder,

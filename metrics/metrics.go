@@ -6,6 +6,9 @@ import "github.com/prometheus/client_golang/prometheus"
 const (
 	metricNamespace = "cocoon"
 	metricSubsystem = "operator"
+
+	labelNamespace = "namespace"
+	labelCocoonSet = "cocoonset"
 )
 
 var (
@@ -16,7 +19,7 @@ var (
 			Name:      "subagent_rebuild_total",
 			Help:      "Number of sub-agent rebuilds triggered by triageSubAgent.",
 		},
-		[]string{"namespace", "cocoonset"},
+		[]string{labelNamespace, labelCocoonSet},
 	)
 
 	SubAgentDeadLetterTotal = prometheus.NewCounterVec(
@@ -26,7 +29,7 @@ var (
 			Name:      "subagent_dead_letter_total",
 			Help:      "Number of sub-agents marked dead-letter after exhausting rebuild attempts.",
 		},
-		[]string{"namespace", "cocoonset"},
+		[]string{labelNamespace, labelCocoonSet},
 	)
 
 	HibernatePhaseDurationSeconds = prometheus.NewHistogramVec(
@@ -60,6 +63,36 @@ var (
 		},
 		[]string{"phase"},
 	)
+
+	SlotReleasePodsDeletedTotal = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Namespace: metricNamespace,
+			Subsystem: metricSubsystem,
+			Name:      "slot_release_pods_deleted_total",
+			Help:      "Number of hibernated pods deleted by release-policy suspend to free their scheduling seat.",
+		},
+		[]string{labelNamespace, labelCocoonSet},
+	)
+
+	SlotReleaseWakeTotal = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Namespace: metricNamespace,
+			Subsystem: metricSubsystem,
+			Name:      "slot_release_wake_total",
+			Help:      "Number of released-seat wakes that reached a live VM, by placement (hint-node=landed back on the hibernated-on node, pool=rescheduled elsewhere). Every release wake restores via registry pull.",
+		},
+		[]string{labelNamespace, labelCocoonSet, "placement"},
+	)
+
+	SlotReleaseWakeUnschedulableTotal = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Namespace: metricNamespace,
+			Subsystem: metricSubsystem,
+			Name:      "slot_release_wake_unschedulable_total",
+			Help:      "Number of reconcile passes that observed a released-seat wake pod Unschedulable (out of capacity).",
+		},
+		[]string{labelNamespace, labelCocoonSet},
+	)
 )
 
 // Register installs all operator collectors into reg so they surface on the /metrics endpoint.
@@ -70,5 +103,8 @@ func Register(reg prometheus.Registerer) {
 		HibernatePhaseDurationSeconds,
 		WakePhaseDurationSeconds,
 		LifecycleStateFailedObservedTotal,
+		SlotReleasePodsDeletedTotal,
+		SlotReleaseWakeTotal,
+		SlotReleaseWakeUnschedulableTotal,
 	)
 }
