@@ -84,16 +84,16 @@ func (r *Reconciler) reconcileSuspendRelease(ctx context.Context, cs *cocoonv1.C
 func (r *Reconciler) reconcileWake(ctx context.Context, cs *cocoonv1.CocoonSet, classified classifiedPods) (bool, ctrl.Result, error) {
 	logger := log.WithFunc("cocoonset.Reconciler.reconcileWake")
 	main := classified.main
+	hint := cs.Annotations[meta.AnnotationHibernatedOnNode]
 	waking := cs.Status.Phase == cocoonv1.CocoonSetPhaseWaking
 	suspended := cs.Status.Phase == cocoonv1.CocoonSetPhaseSuspended
 	// A fast unsuspend can land before the deletes settle Suspended; the node
 	// hint keeps the wake engaged (phase-scoped so a stale hint never fires).
-	suspending := cs.Status.Phase == cocoonv1.CocoonSetPhaseSuspending &&
-		cs.Annotations[meta.AnnotationHibernatedOnNode] != ""
+	suspending := cs.Status.Phase == cocoonv1.CocoonSetPhaseSuspending && hint != ""
 	// A stale-phase read can overwrite Waking; a restore-marked, non-hibernating
 	// main with the hint set is an unfinished wake (completion clears the hint).
 	cleanupPending := main != nil && meta.ReadRestoreFromHibernate(main) &&
-		!bool(meta.ReadHibernateState(main)) && cs.Annotations[meta.AnnotationHibernatedOnNode] != ""
+		!bool(meta.ReadHibernateState(main)) && hint != ""
 	waking = waking || cleanupPending
 	if (!waking && !suspended && !suspending) || r.Registry == nil {
 		return false, ctrl.Result{}, nil
@@ -122,7 +122,7 @@ func (r *Reconciler) reconcileWake(ctx context.Context, cs *cocoonv1.CocoonSet, 
 			return true, ctrl.Result{}, fmt.Errorf("wake: drop hibernate snapshot %s: %w", vmName, err)
 		}
 		placement := "pool"
-		if hint := cs.Annotations[meta.AnnotationHibernatedOnNode]; hint != "" && hint == main.Spec.NodeName {
+		if hint != "" && hint == main.Spec.NodeName {
 			placement = "hint-node"
 		}
 		metrics.SlotReleaseWakeTotal.WithLabelValues(cs.Namespace, cs.Name, placement).Inc()
@@ -132,7 +132,7 @@ func (r *Reconciler) reconcileWake(ctx context.Context, cs *cocoonv1.CocoonSet, 
 		// Auto-derived phase; the requeued pass settles Running/Scaling.
 		return true, ctrl.Result{Requeue: true}, r.patchStatus(ctx, cs, buildStatus(cs, classified, ""))
 
-	case (suspended || suspending) && cs.Annotations[meta.AnnotationHibernatedOnNode] != "" && !podIsTerminal(main):
+	case (suspended || suspending) && hint != "" && !podIsTerminal(main):
 		// Either a stale view of the deleted main or a delete that never ran;
 		// only an uncached read can tell them apart.
 		return r.confirmReleasedDelete(ctx, main)
@@ -174,7 +174,6 @@ func (r *Reconciler) startReleasedWake(ctx context.Context, cs *cocoonv1.CocoonS
 	}
 	if err := r.Create(ctx, pod); err != nil {
 		if apierrors.IsAlreadyExists(err) {
-			// Old pod still Terminating; requeue and wait.
 			return true, ctrl.Result{RequeueAfter: requeueWaitForMain}, nil
 		}
 		return true, ctrl.Result{}, fmt.Errorf("wake: create main: %w", err)
