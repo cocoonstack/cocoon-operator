@@ -360,16 +360,6 @@ func TestAllOwnedPodsHibernatedSkipsTerminalPod(t *testing.T) {
 	}
 }
 
-// lifecycleHibernated mirrors vk's atomic state+observed-generation write,
-// echoing the generation stamped on the pod at build time.
-func lifecycleHibernated(p *corev1.Pod) *corev1.Pod {
-	meta.LifecycleStatus{
-		State:              meta.LifecycleStateHibernated,
-		ObservedGeneration: meta.ReadCocoonSetGeneration(p),
-	}.Apply(p)
-	return p
-}
-
 func TestEnsureSubAgentsReplacesTerminalPod(t *testing.T) {
 	scheme := testScheme(t)
 	cs := newCocoonSet("demo", func(cs *cocoonv1.CocoonSet) {
@@ -903,6 +893,16 @@ func TestSetupWithManagerRejectsInvalidConcurrency(t *testing.T) {
 			t.Errorf("concurrency %d must be rejected", n)
 		}
 	}
+}
+
+// lifecycleHibernated mirrors vk's atomic state+observed-generation write,
+// echoing the generation stamped on the pod at build time.
+func lifecycleHibernated(p *corev1.Pod) *corev1.Pod {
+	meta.LifecycleStatus{
+		State:              meta.LifecycleStateHibernated,
+		ObservedGeneration: meta.ReadCocoonSetGeneration(p),
+	}.Apply(p)
+	return p
 }
 
 type fakeRegistry struct {

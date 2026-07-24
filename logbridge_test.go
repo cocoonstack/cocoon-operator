@@ -49,8 +49,7 @@ func TestCRSinkEnabledOnlyV0(t *testing.T) {
 }
 
 func TestCRSinkErrorNilDoesNotPanic(t *testing.T) {
-	// logr permits Error(nil, ...); core/log drops nil-err Error lines, so the
-	// sink reroutes to Warn. Output capture is impractical — pin no-panic.
+	// Output capture is impractical — pin no-panic on both the nil and real paths.
 	s := &crSink{ctx: t.Context(), name: "controller-runtime"}
 	s.Error(nil, "update event has no old object", "type", "pod")
 	s.Error(assertErr{}, "real error path")

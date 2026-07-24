@@ -70,8 +70,6 @@ func main() {
 		fmt.Fprintf(os.Stderr, "setup log: %v\n", err)
 		os.Exit(1)
 	}
-	// Route controller-runtime's logger through core/log: reconcile errors
-	// surface only there, so discarding it hides every one of them.
 	crlog.SetLogger(newCRLogger(ctx))
 	logger := log.WithFunc("main")
 
@@ -145,8 +143,6 @@ func main() {
 	}
 }
 
-// buildRegistry builds the OCI registry backend from OCI_REGISTRY. The keychain
-// resolves GCP ADC (google.Keychain) then docker config.
 func buildRegistry() (snapshot.Registry, error) {
 	base := os.Getenv("OCI_REGISTRY")
 	if base == "" {
@@ -163,7 +159,6 @@ func buildScheme() *runtime.Scheme {
 	return scheme
 }
 
-// envInt parses an int env var, falling back when unset or invalid.
 func envInt(key string, fallback int) int {
 	n, err := strconv.Atoi(os.Getenv(key))
 	if err != nil {

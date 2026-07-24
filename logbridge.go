@@ -11,23 +11,21 @@ import (
 	"github.com/projecteru2/core/log"
 )
 
-// crSink forwards controller-runtime's logr output to core/log: reconcile
-// errors surface only there, so discarding them (the old setup) hid them all.
+// crSink forwards controller-runtime's logr output to core/log; reconcile errors surface nowhere else.
 type crSink struct {
 	ctx  context.Context
 	name string
 	kv   []any
 }
 
-// newCRLogger wraps a crSink for crlog.SetLogger. The root name stays empty;
-// controller-runtime adds its own via WithName — a fixed root would double up.
+// The root name stays empty; controller-runtime adds its own via WithName.
 func newCRLogger(ctx context.Context) logr.Logger {
 	return logr.New(&crSink{ctx: ctx})
 }
 
 func (s *crSink) Init(logr.RuntimeInfo) {}
 
-// Enabled passes V(0) only; errors bypass this gate entirely (logr contract).
+// Errors bypass this gate entirely (logr contract).
 func (s *crSink) Enabled(level int) bool { return level == 0 }
 
 func (s *crSink) Info(_ int, msg string, kvs ...any) {

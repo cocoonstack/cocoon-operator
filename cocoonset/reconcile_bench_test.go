@@ -1,7 +1,6 @@
 package cocoonset
 
 import (
-	"context"
 	"fmt"
 	"slices"
 	"sync"
@@ -62,7 +61,7 @@ func runReconciles(b *testing.B, r *Reconciler, sets []*cocoonv1.CocoonSet, conc
 		wg.Go(func() {
 			for cs := range queue {
 				start := time.Now()
-				if _, err := r.Reconcile(context.Background(), reqFor(cs)); err != nil {
+				if _, err := r.Reconcile(b.Context(), reqFor(cs)); err != nil {
 					b.Errorf("Reconcile %s: %v", cs.Name, err)
 				}
 				latencies[idx.Add(1)-1] = time.Since(start)

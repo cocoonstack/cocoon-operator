@@ -1236,7 +1236,7 @@ func TestReconcileSerializesCRsTargetingOnePod(t *testing.T) {
 	var wg sync.WaitGroup
 	for _, name := range []string{"a", "b"} {
 		wg.Go(func() {
-			_, _ = r.Reconcile(context.Background(), ctrl.Request{
+			_, _ = r.Reconcile(t.Context(), ctrl.Request{
 				NamespacedName: types.NamespacedName{Namespace: "ns", Name: name},
 			})
 		})
@@ -1286,7 +1286,7 @@ func TestReconcileSerializesDeletingCRAgainstLiveCR(t *testing.T) {
 	var wg sync.WaitGroup
 	for _, name := range []string{"a", "b"} {
 		wg.Go(func() {
-			_, _ = r.Reconcile(context.Background(), ctrl.Request{
+			_, _ = r.Reconcile(t.Context(), ctrl.Request{
 				NamespacedName: types.NamespacedName{Namespace: "ns", Name: name},
 			})
 		})
@@ -1339,7 +1339,7 @@ func TestReconcileSerializesRetargetedCRAgainstItsStaleVM(t *testing.T) {
 	var wg sync.WaitGroup
 	for _, name := range []string{"a", "b"} {
 		wg.Go(func() {
-			_, _ = r.Reconcile(context.Background(), ctrl.Request{
+			_, _ = r.Reconcile(t.Context(), ctrl.Request{
 				NamespacedName: types.NamespacedName{Namespace: "ns", Name: name},
 			})
 		})

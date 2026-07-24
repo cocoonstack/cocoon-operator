@@ -19,8 +19,7 @@ import (
 
 func (r *Reconciler) ensureToolboxes(ctx context.Context, cs *cocoonv1.CocoonSet, classified classifiedPods, intent restoreIntent) (bool, error) {
 	logger := log.WithFunc("cocoonset.Reconciler.ensureToolboxes")
-	// Defense in depth: webhook should already reject duplicates. Validate
-	// upfront before any Create/Delete so a bypass can't leave partial state.
+	// Webhook already rejects duplicates; validating before any Create/Delete keeps a bypass from leaving partial state.
 	desired := make(map[string]bool, len(cs.Spec.Toolboxes))
 	for _, tb := range cs.Spec.Toolboxes {
 		if desired[tb.Name] {
