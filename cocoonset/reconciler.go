@@ -35,9 +35,10 @@ const (
 // and toolbox pods to match the declared spec.
 type Reconciler struct {
 	client.Client
-	Scheme   *runtime.Scheme
-	Registry snapshot.Registry
-	Recorder record.EventRecorder
+	APIReader client.Reader
+	Scheme    *runtime.Scheme
+	Registry  snapshot.Registry
+	Recorder  record.EventRecorder
 	// Concurrency caps in-flight reconciles; at 1 one slow registry probe
 	// stalls every other CocoonSet.
 	Concurrency int
@@ -105,12 +106,21 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 	}
 
 	if cs.Spec.Suspend {
+		if cs.Spec.HibernatePolicy.Default() == cocoonv1.HibernatePolicyRelease {
+			return r.reconcileSuspendRelease(ctx, &cs, classified)
+		}
 		return r.reconcileSuspend(ctx, &cs, classified)
 	}
 
 	// Cross-node migration owns the reconcile while in flight; runs before
 	// applyUnsuspend so its internal hibernate annotation is not cleared.
 	if handled, res, err := r.reconcileMigration(ctx, &cs, classified); handled {
+		return res, err
+	}
+
+	// Released-seat wake runs before createMainAgent, whose restore intent
+	// only covers CocoonHibernation CRs and would fresh-boot over the snapshot.
+	if handled, res, err := r.reconcileWake(ctx, &cs, classified); handled {
 		return res, err
 	}
 

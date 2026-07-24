@@ -116,15 +116,30 @@ func hostnameAffinity(nodeName string) *corev1.Affinity {
 	return &corev1.Affinity{
 		NodeAffinity: &corev1.NodeAffinity{
 			RequiredDuringSchedulingIgnoredDuringExecution: &corev1.NodeSelector{
-				NodeSelectorTerms: []corev1.NodeSelectorTerm{{
-					MatchExpressions: []corev1.NodeSelectorRequirement{{
-						Key:      corev1.LabelHostname,
-						Operator: corev1.NodeSelectorOpIn,
-						Values:   []string{nodeName},
-					}},
-				}},
+				NodeSelectorTerms: []corev1.NodeSelectorTerm{hostnameSelectorTerm(nodeName)},
 			},
 		},
+	}
+}
+
+func preferredHostnameAffinity(nodeName string) *corev1.Affinity {
+	return &corev1.Affinity{
+		NodeAffinity: &corev1.NodeAffinity{
+			PreferredDuringSchedulingIgnoredDuringExecution: []corev1.PreferredSchedulingTerm{{
+				Weight:     100,
+				Preference: hostnameSelectorTerm(nodeName),
+			}},
+		},
+	}
+}
+
+func hostnameSelectorTerm(nodeName string) corev1.NodeSelectorTerm {
+	return corev1.NodeSelectorTerm{
+		MatchExpressions: []corev1.NodeSelectorRequirement{{
+			Key:      corev1.LabelHostname,
+			Operator: corev1.NodeSelectorOpIn,
+			Values:   []string{nodeName},
+		}},
 	}
 }
 
