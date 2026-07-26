@@ -14,6 +14,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 
 	cocoonv1 "github.com/cocoonstack/cocoon-common/apis/v1"
+	commonk8s "github.com/cocoonstack/cocoon-common/k8s"
 	"github.com/cocoonstack/cocoon-common/meta"
 )
 
@@ -108,12 +109,12 @@ func (r *Reconciler) stashDeleteVMNames(ctx context.Context, cs *cocoonv1.Cocoon
 	if cs.Annotations[annotationDeleteVMNames] == joined {
 		return nil
 	}
-	patch := client.MergeFrom(cs.DeepCopy())
-	if cs.Annotations == nil {
-		cs.Annotations = map[string]string{}
-	}
-	cs.Annotations[annotationDeleteVMNames] = joined
-	return r.Patch(ctx, cs, patch)
+	return commonk8s.Patch(ctx, r.Client, cs, func(c *cocoonv1.CocoonSet) {
+		if c.Annotations == nil {
+			c.Annotations = map[string]string{}
+		}
+		c.Annotations[annotationDeleteVMNames] = joined
+	})
 }
 
 // vmNamesForGC returns the canonical GC list, read from the stashed annotation.
