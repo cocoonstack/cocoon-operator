@@ -111,7 +111,7 @@ func TestReconcileUnrelatedKeyProgressesWhileProbeBlocks(t *testing.T) {
 		entered: entered,
 	}}
 
-	go func() { _, _ = r.Reconcile(context.Background(), reqFor(blocked)) }()
+	go func() { _, _ = r.Reconcile(t.Context(), reqFor(blocked)) }()
 	// Wait until the probe is genuinely wedged; otherwise the second reconcile
 	// could finish first and pass even under full serialization.
 	select {
@@ -121,7 +121,7 @@ func TestReconcileUnrelatedKeyProgressesWhileProbeBlocks(t *testing.T) {
 	}
 
 	done := make(chan error, 1)
-	go func() { _, err := r.Reconcile(context.Background(), reqFor(wedged)); done <- err }()
+	go func() { _, err := r.Reconcile(t.Context(), reqFor(wedged)); done <- err }()
 	select {
 	case err := <-done:
 		if err != nil {
