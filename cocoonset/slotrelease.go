@@ -13,6 +13,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	cocoonv1 "github.com/cocoonstack/cocoon-common/apis/v1"
+	commonk8s "github.com/cocoonstack/cocoon-common/k8s"
 	"github.com/cocoonstack/cocoon-common/meta"
 	"github.com/cocoonstack/cocoon-operator/metrics"
 	"github.com/cocoonstack/cocoon-operator/snapshot"
@@ -63,6 +64,12 @@ func (r *Reconciler) reconcileSuspendRelease(ctx context.Context, cs *cocoonv1.C
 			return nil
 		}
 		logger.Infof(ctx, "slot release: deleting hibernated pod %s/%s (node=%s)", pod.Namespace, pod.Name, pod.Spec.NodeName)
+		// Best-effort: without the flag vk drops the local snapshot and the wake
+		// falls back to a registry pull — slower, still correct. Blocking the
+		// delete on it would trade the seat (the whole point) for a cache.
+		if err := commonk8s.PatchKeepSnapshotOnDelete(ctx, r.Client, pod); err != nil {
+			logger.Errorf(ctx, err, "slot release: flag keep-snapshot on %s/%s; wake will cold-pull", pod.Namespace, pod.Name)
+		}
 		if err := r.Delete(ctx, pod); err != nil && !apierrors.IsNotFound(err) {
 			return fmt.Errorf("slot release: delete pod %s/%s: %w", pod.Namespace, pod.Name, err)
 		}
