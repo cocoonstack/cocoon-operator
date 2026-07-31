@@ -1,6 +1,7 @@
 package cocoonset
 
 import (
+	"context"
 	"errors"
 	"slices"
 	"strings"
@@ -11,6 +12,7 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	ctrlfake "sigs.k8s.io/controller-runtime/pkg/client/fake"
+	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 
 	cocoonv1 "github.com/cocoonstack/cocoon-common/apis/v1"
 	"github.com/cocoonstack/cocoon-common/meta"
@@ -105,6 +107,55 @@ func TestSuspendReleaseKeepsTerminalPod(t *testing.T) {
 	gotCS := mustGetCS(t, cli)
 	if gotCS.Status.Phase != cocoonv1.CocoonSetPhaseSuspended {
 		t.Errorf("only-terminal set must settle Suspended like retain does, got %q", gotCS.Status.Phase)
+	}
+}
+
+func TestSuspendReleaseFlagsKeepSnapshotBeforeDelete(t *testing.T) {
+	cs := relCocoonSet()
+	pod := relHibernatedPod(t, cs, "node-a")
+	reg := &fakeRegistry{present: map[string]bool{relHibernateTagKey: true}}
+	flaggedAtDelete := false
+	cli := relInterceptedClient(t, interceptor.Funcs{
+		Delete: func(ctx context.Context, c client.WithWatch, obj client.Object, opts ...client.DeleteOption) error {
+			// Re-read from the API: the flag must be durable, not merely set in memory.
+			var live corev1.Pod
+			if err := c.Get(ctx, client.ObjectKeyFromObject(obj), &live); err == nil {
+				flaggedAtDelete = meta.ReadKeepSnapshotOnDelete(&live)
+			}
+			return c.Delete(ctx, obj, opts...)
+		},
+	}, cs, pod)
+	r := &Reconciler{Client: cli, Scheme: testScheme(t), Registry: reg}
+
+	if _, err := r.reconcileSuspendRelease(t.Context(), cs, singlePod(pod)); err != nil {
+		t.Fatalf("reconcileSuspendRelease: %v", err)
+	}
+	if !flaggedAtDelete {
+		t.Error("pod must carry keep-snapshot-on-delete in the API before it is deleted")
+	}
+}
+
+func TestSuspendReleaseFreesSeatWhenFlagPatchFails(t *testing.T) {
+	cs := relCocoonSet()
+	pod := relHibernatedPod(t, cs, "node-a")
+	reg := &fakeRegistry{present: map[string]bool{relHibernateTagKey: true}}
+	cli := relInterceptedClient(t, interceptor.Funcs{
+		Patch: func(ctx context.Context, c client.WithWatch, obj client.Object, patch client.Patch, opts ...client.PatchOption) error {
+			// Only the keep-snapshot patch fails; the suspend patch must still land.
+			if p, ok := obj.(*corev1.Pod); ok && meta.ReadKeepSnapshotOnDelete(p) {
+				return errors.New("webhook rejected the pod patch")
+			}
+			return c.Patch(ctx, obj, patch, opts...)
+		},
+	}, cs, pod)
+	r := &Reconciler{Client: cli, Scheme: testScheme(t), Registry: reg}
+
+	if _, err := r.reconcileSuspendRelease(t.Context(), cs, singlePod(pod)); err != nil {
+		t.Fatalf("a failed flag patch must not fail the reconcile: %v", err)
+	}
+	var got corev1.Pod
+	if err := cli.Get(t.Context(), types.NamespacedName{Namespace: "ns", Name: "demo-0"}, &got); !apierrors.IsNotFound(err) {
+		t.Errorf("seat must be released even when the flag patch fails, err=%v", err)
 	}
 }
 
@@ -489,8 +540,14 @@ func singlePod(pod *corev1.Pod) classifiedPods {
 
 func relClient(t *testing.T, objs ...client.Object) client.WithWatch {
 	t.Helper()
+	return relInterceptedClient(t, interceptor.Funcs{}, objs...)
+}
+
+func relInterceptedClient(t *testing.T, funcs interceptor.Funcs, objs ...client.Object) client.WithWatch {
+	t.Helper()
 	return ctrlfake.NewClientBuilder().WithScheme(testScheme(t)).
-		WithObjects(objs...).WithStatusSubresource(&cocoonv1.CocoonSet{}).Build()
+		WithObjects(objs...).WithStatusSubresource(&cocoonv1.CocoonSet{}).
+		WithInterceptorFuncs(funcs).Build()
 }
 
 func mustGetCS(t *testing.T, cli client.Client) cocoonv1.CocoonSet {
