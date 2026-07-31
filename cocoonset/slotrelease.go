@@ -122,17 +122,23 @@ func (r *Reconciler) reconcileWake(ctx context.Context, cs *cocoonv1.CocoonSet, 
 
 	case waking && vmLive(main):
 		vmName := meta.ParseVMSpec(main).VMName
-		logger.Infof(ctx, "wake %s/%s: restored on %s, dropping hibernate snapshot", cs.Namespace, cs.Name, main.Spec.NodeName)
 		if err := r.Registry.DeleteManifest(ctx, vmName, meta.HibernateSnapshotTag); err != nil {
 			return true, ctrl.Result{}, fmt.Errorf("wake: drop hibernate snapshot %s: %w", vmName, err)
 		}
-		placement := "pool"
-		if hint != "" && hint == main.Spec.NodeName {
-			placement = "hint-node"
-		}
-		metrics.SlotReleaseWakeTotal.WithLabelValues(cs.Namespace, cs.Name, placement).Inc()
-		if err := r.patchAnnotation(ctx, cs, meta.AnnotationHibernatedOnNode, ""); err != nil {
-			return true, ctrl.Result{}, err
+		// The hint is this wake's in-flight marker: set before any pod delete, cleared
+		// right here. The Requeue below can re-enter this arm off a status read that
+		// predates the patch, and that pass would score the landing as pool once the
+		// hint is gone — so only the pass that still sees the hint owns the completion.
+		if hint != "" {
+			logger.Infof(ctx, "wake %s/%s: restored on %s, dropping hibernate snapshot", cs.Namespace, cs.Name, main.Spec.NodeName)
+			placement := "pool"
+			if hint == main.Spec.NodeName {
+				placement = "hint-node"
+			}
+			metrics.SlotReleaseWakeTotal.WithLabelValues(cs.Namespace, cs.Name, placement).Inc()
+			if err := r.patchAnnotation(ctx, cs, meta.AnnotationHibernatedOnNode, ""); err != nil {
+				return true, ctrl.Result{}, err
+			}
 		}
 		// Auto-derived phase; the requeued pass settles Running/Scaling.
 		return true, ctrl.Result{Requeue: true}, r.patchStatus(ctx, cs, buildStatus(cs, classified, ""))

@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/prometheus/client_golang/prometheus/testutil"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/types"
@@ -16,6 +17,7 @@ import (
 
 	cocoonv1 "github.com/cocoonstack/cocoon-common/apis/v1"
 	"github.com/cocoonstack/cocoon-common/meta"
+	"github.com/cocoonstack/cocoon-operator/metrics"
 )
 
 var (
@@ -557,4 +559,49 @@ func mustGetCS(t *testing.T, cli client.Client) cocoonv1.CocoonSet {
 		t.Fatalf("get cocoonset: %v", err)
 	}
 	return cs
+}
+
+// TestWakeScoresPlacementOnceAcrossStaleStatusReentry pins the fix for a double-counted
+// wake: the completion arm returns Requeue, and a re-entry reading a status that predates
+// the patch would score the same landing a second time — as "pool", since this arm has
+// already cleared the hint. Measured 2/2 on internal-cocoon before the fix.
+func TestWakeScoresPlacementOnceAcrossStaleStatusReentry(t *testing.T) {
+	cs := relCocoonSet(func(cs *cocoonv1.CocoonSet) {
+		cs.Spec.Suspend = false
+		cs.Status.Phase = cocoonv1.CocoonSetPhaseWaking
+		cs.Annotations = map[string]string{meta.AnnotationHibernatedOnNode: "node-a"}
+	})
+	main := migMainPod(t, cs, "node-a", "vmid-new", true) // landed back on the hinted node
+	reg := &fakeRegistry{present: map[string]bool{relHibernateTagKey: true}}
+	cli := relClient(t, cs, main)
+	r := &Reconciler{Client: cli, Scheme: testScheme(t), Registry: reg}
+
+	hintNode := func() float64 {
+		return testutil.ToFloat64(metrics.SlotReleaseWakeTotal.WithLabelValues("ns", "demo", "hint-node"))
+	}
+	pool := func() float64 {
+		return testutil.ToFloat64(metrics.SlotReleaseWakeTotal.WithLabelValues("ns", "demo", "pool"))
+	}
+	hintNode0, pool0 := hintNode(), pool()
+
+	if _, _, err := r.reconcileWake(t.Context(), cs, singlePod(main)); err != nil {
+		t.Fatalf("first pass: %v", err)
+	}
+	if got := hintNode() - hintNode0; got != 1 {
+		t.Errorf("landing on the hinted node must score hint-node once, got %v", got)
+	}
+
+	// Re-entry: the hint patch landed, the status write has not — exactly what the
+	// Requeue hits in a live cluster.
+	stale := mustGetCS(t, cli)
+	stale.Status.Phase = cocoonv1.CocoonSetPhaseWaking
+	if _, _, err := r.reconcileWake(t.Context(), &stale, singlePod(main)); err != nil {
+		t.Fatalf("re-entry pass: %v", err)
+	}
+	if got := hintNode() - hintNode0; got != 1 {
+		t.Errorf("re-entry must not re-score the wake, hint-node delta=%v", got)
+	}
+	if got := pool() - pool0; got != 0 {
+		t.Errorf("re-entry must not score the hint-node landing as pool, pool delta=%v", got)
+	}
 }
