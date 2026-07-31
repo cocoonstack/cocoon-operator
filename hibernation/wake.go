@@ -30,18 +30,13 @@ func (r *Reconciler) reconcileWake(ctx context.Context, hib *cocoonv1.CocoonHibe
 		if err := r.Registry.DeleteManifest(ctx, vmName, meta.HibernateSnapshotTag); err != nil {
 			logger.Errorf(ctx, err, "delete hibernation snapshot %s", vmName)
 		}
-		if r.firstTransitionAt(hib) {
-			observePhaseExit(hib, "ok")
-			r.emitEventf(hib, corev1.EventTypeNormal, "WokenActive", "pod %s/%s is running", pod.Namespace, pod.Name)
-		}
+		r.announcePhaseExitf(hib, "ok", corev1.EventTypeNormal, "WokenActive", "pod %s/%s is running", pod.Namespace, pod.Name)
 		return ctrl.Result{}, r.setPhase(ctx, hib, cocoonv1.CocoonHibernationPhaseActive, vmName)
 	}
 
 	if phaseDeadlineExceeded(hib, cocoonv1.CocoonHibernationPhaseWaking, wakeTimeout) {
-		if r.firstTransitionAt(hib) {
-			observePhaseExit(hib, "timeout")
-			r.emitEventf(hib, corev1.EventTypeWarning, "WakeTimedOut", "vk-cocoon did not report the container running within %s", wakeTimeout)
-		}
+		r.announcePhaseExitf(hib, "timeout", corev1.EventTypeWarning, "WakeTimedOut",
+			"vk-cocoon did not report the container running within %s", wakeTimeout)
 		return ctrl.Result{}, r.markFailed(ctx, hib,
 			fmt.Sprintf("wake timed out after %s; vk-cocoon never reported the container running", wakeTimeout))
 	}

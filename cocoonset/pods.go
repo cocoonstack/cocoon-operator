@@ -266,9 +266,6 @@ func vmSpecMatches(got, want meta.VMSpec) bool {
 }
 
 func resourcesMatch(pod *corev1.Pod, want corev1.ResourceRequirements) bool {
-	if len(pod.Spec.Containers) == 0 {
-		return false
-	}
 	got := pod.Spec.Containers[0].Resources
 	// Only CPU and memory: K8s defaulting copies the injected
 	// ephemeral-storage into both Limits and Requests, which would always

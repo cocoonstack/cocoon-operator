@@ -173,10 +173,8 @@ func (r *Reconciler) rebuildSubAgent(ctx context.Context, logger *log.Fields, po
 			return false, 0, err
 		}
 		metrics.SubAgentDeadLetterTotal.WithLabelValues(cs.Namespace, cs.Name).Inc()
-		if r.Recorder != nil {
-			r.Recorder.Eventf(cs, corev1.EventTypeWarning, "SubAgentDeadLetter",
-				"slot %d exhausted %d rebuilds; pod %s left in dead-letter", slot, maxRebuildAttempts, pod.Name)
-		}
+		r.emitEventf(cs, corev1.EventTypeWarning, "SubAgentDeadLetter",
+			"slot %d exhausted %d rebuilds; pod %s left in dead-letter", slot, maxRebuildAttempts, pod.Name)
 		return false, 0, nil
 	}
 	if wait := backoffDelay(entry.Count); wait > 0 {
@@ -196,10 +194,8 @@ func (r *Reconciler) rebuildSubAgent(ctx context.Context, logger *log.Fields, po
 		return false, 0, fmt.Errorf("delete terminal sub-agent slot %d: %w", slot, err)
 	}
 	metrics.SubAgentRebuildTotal.WithLabelValues(cs.Namespace, cs.Name).Inc()
-	if r.Recorder != nil {
-		r.Recorder.Eventf(cs, corev1.EventTypeNormal, "SubAgentRebuilding",
-			"slot %d attempt %d/%d", slot, next[slot].Count, maxRebuildAttempts)
-	}
+	r.emitEventf(cs, corev1.EventTypeNormal, "SubAgentRebuilding",
+		"slot %d attempt %d/%d", slot, next[slot].Count, maxRebuildAttempts)
 	return true, 0, nil
 }
 

@@ -113,9 +113,7 @@ func (r *Reconciler) reconcileWake(ctx context.Context, cs *cocoonv1.CocoonSet, 
 		// surface it but keep waiting — a seat may free up.
 		if msg := podUnschedulable(main); msg != "" {
 			metrics.SlotReleaseWakeUnschedulableTotal.WithLabelValues(cs.Namespace, cs.Name).Inc()
-			if r.Recorder != nil {
-				r.Recorder.Eventf(cs, corev1.EventTypeWarning, "WakeNoCapacity", "main pod %s unschedulable: %s", main.Name, msg)
-			}
+			r.emitEventf(cs, corev1.EventTypeWarning, "WakeNoCapacity", "main pod %s unschedulable: %s", main.Name, msg)
 		}
 		return true, ctrl.Result{RequeueAfter: requeueSuspendPoll},
 			r.patchStatus(ctx, cs, buildStatus(cs, classified, cocoonv1.CocoonSetPhaseWaking))

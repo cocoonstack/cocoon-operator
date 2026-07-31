@@ -61,7 +61,7 @@ func (r *Reconciler) reconcileDelete(ctx context.Context, cs *cocoonv1.CocoonSet
 	// :hibernate is always orphaned at teardown — drop unconditionally. :latest
 	// is kept when shouldKeepLatestTag says vk-cocoon pushed it for retag.
 	if r.Registry != nil {
-		for _, name := range vmNamesForGC(cs) {
+		for _, name := range parseVMNamesAnnotation(cs.Annotations[annotationDeleteVMNames]) {
 			// Non-fatal, but log at error: a persistent delete failure (e.g. the
 			// registry SA lacking delete permission) silently leaks snapshots.
 			if err := r.Registry.DeleteManifest(ctx, name, meta.HibernateSnapshotTag); err != nil {
@@ -115,11 +115,6 @@ func (r *Reconciler) stashDeleteVMNames(ctx context.Context, cs *cocoonv1.Cocoon
 		}
 		c.Annotations[annotationDeleteVMNames] = joined
 	})
-}
-
-// vmNamesForGC returns the canonical GC list, read from the stashed annotation.
-func vmNamesForGC(cs *cocoonv1.CocoonSet) []string {
-	return parseVMNamesAnnotation(cs.Annotations[annotationDeleteVMNames])
 }
 
 // statusVMNames collects the non-empty VM names recorded in the CocoonSet

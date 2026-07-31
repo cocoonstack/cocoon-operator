@@ -33,18 +33,13 @@ func (r *Reconciler) reconcileHibernate(ctx context.Context, hib *cocoonv1.Cocoo
 			return ctrl.Result{}, err
 		}
 		if err == nil && present {
-			if r.firstTransitionAt(hib) {
-				observePhaseExit(hib, "ok")
-				r.emitEventf(hib, corev1.EventTypeNormal, "Hibernated", "snapshot %s pushed to the registry", vmName)
-			}
+			r.announcePhaseExitf(hib, "ok", corev1.EventTypeNormal, "Hibernated", "snapshot %s pushed to the registry", vmName)
 			return ctrl.Result{}, r.setPhase(ctx, hib, cocoonv1.CocoonHibernationPhaseHibernated, vmName)
 		}
 	}
 	if phaseDeadlineExceeded(hib, cocoonv1.CocoonHibernationPhaseHibernating, hibernateTimeout) {
-		if r.firstTransitionAt(hib) {
-			observePhaseExit(hib, "timeout")
-			r.emitEventf(hib, corev1.EventTypeWarning, "HibernateTimedOut", "snapshot %s not confirmed in the registry within %s", vmName, hibernateTimeout)
-		}
+		r.announcePhaseExitf(hib, "timeout", corev1.EventTypeWarning, "HibernateTimedOut",
+			"snapshot %s not confirmed in the registry within %s", vmName, hibernateTimeout)
 		return ctrl.Result{}, r.markFailed(ctx, hib,
 			fmt.Sprintf("hibernate not confirmed within %s", hibernateTimeout))
 	}
