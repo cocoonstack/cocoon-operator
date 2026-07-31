@@ -79,7 +79,7 @@ var (
 			Namespace: metricNamespace,
 			Subsystem: metricSubsystem,
 			Name:      "slot_release_wake_total",
-			Help:      "Number of released-seat wakes that reached a live VM, by placement (hint-node=landed back on the hibernated-on node, pool=rescheduled elsewhere). Every release wake restores via registry pull.",
+			Help:      "Number of released-seat wakes that reached a live VM, by placement (hint-node=landed back on the hibernated-on node, pool=rescheduled elsewhere). A hint-node landing restores from the node-local snapshot; pool pulls from the registry.",
 		},
 		[]string{labelNamespace, labelCocoonSet, "placement"},
 	)

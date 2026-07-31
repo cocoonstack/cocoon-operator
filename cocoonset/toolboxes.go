@@ -88,23 +88,20 @@ func (r *Reconciler) ensureToolboxes(ctx context.Context, cs *cocoonv1.CocoonSet
 }
 
 func (r *Reconciler) triageToolbox(ctx context.Context, logger *log.Fields, pod *corev1.Pod, cs *cocoonv1.CocoonSet, tb cocoonv1.ToolboxSpec) (bool, error) {
+	var reason string
 	switch {
 	case podIsTerminal(pod):
-		logger.Infof(ctx, "toolbox %s/%s %q terminal (phase=%s lifecycle=%s), deleting for recreate",
-			pod.Namespace, pod.Name, tb.Name, pod.Status.Phase, meta.ReadLifecycleState(pod))
-		if err := r.Delete(ctx, pod); err != nil && !apierrors.IsNotFound(err) {
-			return false, fmt.Errorf("delete terminal toolbox %s: %w", tb.Name, err)
-		}
-		return true, nil
+		reason = fmt.Sprintf("terminal (phase=%s lifecycle=%s)", pod.Status.Phase, meta.ReadLifecycleState(pod))
 	case !podSpecMatchesToolbox(pod, cs, tb):
-		logger.Infof(ctx, "toolbox %s/%s %q spec drifted, deleting for recreate", pod.Namespace, pod.Name, tb.Name)
-		if err := r.Delete(ctx, pod); err != nil && !apierrors.IsNotFound(err) {
-			return false, fmt.Errorf("delete drifted toolbox %s: %w", tb.Name, err)
-		}
-		return true, nil
+		reason = "spec drifted"
 	default:
 		return false, nil
 	}
+	logger.Infof(ctx, "toolbox %s/%s %q %s, deleting for recreate", pod.Namespace, pod.Name, tb.Name, reason)
+	if err := r.Delete(ctx, pod); err != nil && !apierrors.IsNotFound(err) {
+		return false, fmt.Errorf("delete toolbox %s for recreate: %w", tb.Name, err)
+	}
+	return true, nil
 }
 
 func (r *Reconciler) checkToolboxCollision(ctx context.Context, cs *cocoonv1.CocoonSet, tbPod *corev1.Pod, tbName string) error {

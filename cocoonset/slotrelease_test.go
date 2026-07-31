@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/prometheus/client_golang/prometheus/testutil"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/types"
@@ -16,6 +17,7 @@ import (
 
 	cocoonv1 "github.com/cocoonstack/cocoon-common/apis/v1"
 	"github.com/cocoonstack/cocoon-common/meta"
+	"github.com/cocoonstack/cocoon-operator/metrics"
 )
 
 var (
@@ -513,6 +515,45 @@ func TestWakeLeavesSuspendedPlaceholderToNormalFlow(t *testing.T) {
 	handled, _, err := r.reconcileWake(t.Context(), cs, singlePod(main))
 	if handled || err != nil {
 		t.Errorf("a suspended set with a placeholder pod wakes in place via applyUnsuspend, handled=%v err=%v", handled, err)
+	}
+}
+
+func TestWakeScoresPlacementOnceAcrossStaleStatusReentry(t *testing.T) {
+	// The completion arm Requeues; a re-entry off a stale Waking status is
+	// hint-less and must not score the same landing a second time as pool.
+	cs := relCocoonSet(func(cs *cocoonv1.CocoonSet) {
+		cs.Spec.Suspend = false
+		cs.Status.Phase = cocoonv1.CocoonSetPhaseWaking
+		cs.Annotations = map[string]string{meta.AnnotationHibernatedOnNode: "node-a"}
+	})
+	main := migMainPod(t, cs, "node-a", "vmid-new", true) // landed back on the hinted node
+	reg := &fakeRegistry{present: map[string]bool{relHibernateTagKey: true}}
+	cli := relClient(t, cs, main)
+	r := &Reconciler{Client: cli, Scheme: testScheme(t), Registry: reg}
+
+	score := func(placement string) float64 {
+		return testutil.ToFloat64(metrics.SlotReleaseWakeTotal.WithLabelValues("ns", "demo", placement))
+	}
+	hintNode0, pool0 := score("hint-node"), score("pool")
+
+	if _, _, err := r.reconcileWake(t.Context(), cs, singlePod(main)); err != nil {
+		t.Fatalf("first pass: %v", err)
+	}
+	if got := score("hint-node") - hintNode0; got != 1 {
+		t.Errorf("landing on the hinted node must score hint-node once, got %v", got)
+	}
+
+	// The hint patch has landed; the status write has not.
+	stale := mustGetCS(t, cli)
+	stale.Status.Phase = cocoonv1.CocoonSetPhaseWaking
+	if _, _, err := r.reconcileWake(t.Context(), &stale, singlePod(main)); err != nil {
+		t.Fatalf("re-entry pass: %v", err)
+	}
+	if got := score("hint-node") - hintNode0; got != 1 {
+		t.Errorf("re-entry must not re-score the wake, hint-node delta=%v", got)
+	}
+	if got := score("pool") - pool0; got != 0 {
+		t.Errorf("re-entry must not score the hint-node landing as pool, pool delta=%v", got)
 	}
 }
 

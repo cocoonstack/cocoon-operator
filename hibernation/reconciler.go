@@ -306,6 +306,15 @@ func (r *Reconciler) emitEventf(hib *cocoonv1.CocoonHibernation, eventType, reas
 	}
 }
 
+// announcePhaseExitf observes the phase-duration exit and emits its event, once per Ready transition.
+func (r *Reconciler) announcePhaseExitf(hib *cocoonv1.CocoonHibernation, result, eventType, reason, format string, args ...any) {
+	if !r.firstTransitionAt(hib) {
+		return
+	}
+	observePhaseExit(hib, result)
+	r.emitEventf(hib, eventType, reason, format, args...)
+}
+
 // announceRetryFromFailed emits a Normal event when a reconcile re-enters
 // hibernate/wake after a prior Failed phase.
 func (r *Reconciler) announceRetryFromFailed(hib *cocoonv1.CocoonHibernation, desire cocoonv1.HibernationDesire) {

@@ -99,8 +99,8 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 		if reason := mainPodFailedReason(classified.main); reason != "" {
 			return r.handleFailedMainAgent(ctx, &cs, classified, reason)
 		}
-		if cs.Status.Phase == cocoonv1.CocoonSetPhaseFailed && meta.IsPodReady(classified.main) && r.Recorder != nil {
-			r.Recorder.Eventf(&cs, corev1.EventTypeNormal, "RecoveredFromFailure",
+		if cs.Status.Phase == cocoonv1.CocoonSetPhaseFailed && meta.IsPodReady(classified.main) {
+			r.emitEventf(&cs, corev1.EventTypeNormal, "RecoveredFromFailure",
 				"main pod %s/%s is Ready again", classified.main.Namespace, classified.main.Name)
 		}
 	}
@@ -216,11 +216,14 @@ func (r *Reconciler) observeMainPodFailed(cs *cocoonv1.CocoonSet, pod *corev1.Po
 		phase := cmp.Or(string(cs.Status.Phase), string(cocoonv1.CocoonSetPhasePending))
 		metrics.LifecycleStateFailedObservedTotal.WithLabelValues(phase).Inc()
 	}
-	if r.Recorder == nil {
-		return
-	}
 	msg := cmp.Or(pod.Annotations[meta.AnnotationLifecycleStateMessage], string(pod.Status.Phase))
-	r.Recorder.Eventf(cs, corev1.EventTypeWarning, reason, "main pod %s/%s: %s", pod.Namespace, pod.Name, msg)
+	r.emitEventf(cs, corev1.EventTypeWarning, reason, "main pod %s/%s: %s", pod.Namespace, pod.Name, msg)
+}
+
+func (r *Reconciler) emitEventf(cs *cocoonv1.CocoonSet, eventType, reason, format string, args ...any) {
+	if r.Recorder != nil {
+		r.Recorder.Eventf(cs, eventType, reason, format, args...)
+	}
 }
 
 // mainPodFailedReason maps a pod's terminal signal to the Event reason that
