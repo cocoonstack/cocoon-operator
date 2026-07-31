@@ -64,9 +64,7 @@ func (r *Reconciler) reconcileSuspendRelease(ctx context.Context, cs *cocoonv1.C
 			return nil
 		}
 		logger.Infof(ctx, "slot release: deleting hibernated pod %s/%s (node=%s)", pod.Namespace, pod.Name, pod.Spec.NodeName)
-		// Best-effort: without the flag vk drops the local snapshot and the wake
-		// falls back to a registry pull — slower, still correct. Blocking the
-		// delete on it would trade the seat (the whole point) for a cache.
+		// Best-effort: a lost flag costs the wake a registry pull; failing here would forfeit the seat.
 		if err := commonk8s.PatchKeepSnapshotOnDelete(ctx, r.Client, pod); err != nil {
 			logger.Errorf(ctx, err, "slot release: flag keep-snapshot on %s/%s; wake will cold-pull", pod.Namespace, pod.Name)
 		}
