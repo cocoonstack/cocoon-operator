@@ -125,10 +125,8 @@ func (r *Reconciler) reconcileWake(ctx context.Context, cs *cocoonv1.CocoonSet, 
 		if err := r.Registry.DeleteManifest(ctx, vmName, meta.HibernateSnapshotTag); err != nil {
 			return true, ctrl.Result{}, fmt.Errorf("wake: drop hibernate snapshot %s: %w", vmName, err)
 		}
-		// The hint is this wake's in-flight marker: set before any pod delete, cleared
-		// right here. The Requeue below can re-enter this arm off a status read that
-		// predates the patch, and that pass would score the landing as pool once the
-		// hint is gone — so only the pass that still sees the hint owns the completion.
+		// The hint is the wake's in-flight marker; a stale-status Requeue
+		// re-entry arrives hint-less and must not re-score the landing as pool.
 		if hint != "" {
 			logger.Infof(ctx, "wake %s/%s: restored on %s, dropping hibernate snapshot", cs.Namespace, cs.Name, main.Spec.NodeName)
 			placement := "pool"
