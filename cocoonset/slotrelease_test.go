@@ -164,6 +164,7 @@ func TestSuspendReleaseFreesSeatWhenFlagPatchFails(t *testing.T) {
 func TestWakeRecreatesWithRestoreAndPreferredAffinity(t *testing.T) {
 	cs := relCocoonSet(func(cs *cocoonv1.CocoonSet) {
 		cs.Spec.Suspend = false
+		cs.Spec.SnapshotCompatibilityClass = "n2-cascade-lake-v1"
 		cs.Status.Phase = cocoonv1.CocoonSetPhaseSuspended
 		cs.Annotations = map[string]string{meta.AnnotationHibernatedOnNode: "node-a"}
 	})
@@ -184,6 +185,9 @@ func TestWakeRecreatesWithRestoreAndPreferredAffinity(t *testing.T) {
 	}
 	if got.Spec.NodeName != "" {
 		t.Errorf("wake must not hard-pin a node, got %q", got.Spec.NodeName)
+	}
+	if got.Spec.NodeSelector[meta.LabelSnapshotCompatibilityClass] != "n2-cascade-lake-v1" {
+		t.Errorf("wake must preserve snapshot compatibility selector, got %v", got.Spec.NodeSelector)
 	}
 	na := got.Spec.Affinity
 	if na == nil || na.NodeAffinity == nil || len(na.NodeAffinity.PreferredDuringSchedulingIgnoredDuringExecution) != 1 ||

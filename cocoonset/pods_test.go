@@ -176,6 +176,27 @@ func TestNewManagedPodHasOwnerReference(t *testing.T) {
 	}
 }
 
+func TestNewManagedPodSelectsPoolAndSnapshotCompatibilityClass(t *testing.T) {
+	cs := newCocoonSet("demo", func(cs *cocoonv1.CocoonSet) {
+		cs.Spec.NodePool = "purpose-a"
+		cs.Spec.SnapshotCompatibilityClass = "n2-cascade-lake-v1"
+	})
+	pod := mustNewManagedPod(t, cs, "demo-0", meta.RoleMain, "0", testScheme(t))
+	if got := pod.Spec.NodeSelector[meta.LabelNodePool]; got != "purpose-a" {
+		t.Errorf("node pool selector = %q, want purpose-a", got)
+	}
+	if got := pod.Spec.NodeSelector[meta.LabelSnapshotCompatibilityClass]; got != "n2-cascade-lake-v1" {
+		t.Errorf("snapshot compatibility selector = %q, want n2-cascade-lake-v1", got)
+	}
+}
+
+func TestNewManagedPodOmitsEmptySnapshotCompatibilityClass(t *testing.T) {
+	pod := mustNewManagedPod(t, newCocoonSet("demo"), "demo-0", meta.RoleMain, "0", testScheme(t))
+	if _, ok := pod.Spec.NodeSelector[meta.LabelSnapshotCompatibilityClass]; ok {
+		t.Error("legacy CocoonSet must not gain a snapshot compatibility selector")
+	}
+}
+
 func TestNewManagedPodCarriesCocoonToleration(t *testing.T) {
 	cs := newCocoonSet("demo")
 	pod := mustNewManagedPod(t, cs, "demo-0", meta.RoleMain, "0", testScheme(t))
@@ -421,6 +442,32 @@ func TestPodSpecMatchesAgentNodePoolDefaultFallback(t *testing.T) {
 	}
 }
 
+func TestPodSpecMatchesAgentDetectsSnapshotCompatibilityClassDrift(t *testing.T) {
+	cs := newCocoonSet("demo", func(cs *cocoonv1.CocoonSet) {
+		cs.Spec.SnapshotCompatibilityClass = "n2-cascade-lake-v1"
+	})
+	pod := mustBuildAgentPod(t, cs, 0, "", "", testScheme(t))
+	pod.Spec.NodeSelector[meta.LabelSnapshotCompatibilityClass] = "n4-emerald-rapids-v1"
+	if podSpecMatchesAgent(pod, cs, 0) {
+		t.Error("agent pod with the wrong snapshot compatibility selector must not match")
+	}
+}
+
+func TestPodSpecMatchesAgentAdoptsLiveLegacyMissingSnapshotCompatibilityClass(t *testing.T) {
+	cs := newCocoonSet("demo", func(cs *cocoonv1.CocoonSet) {
+		cs.Spec.SnapshotCompatibilityClass = "n2-cascade-lake-v1"
+	})
+	pod := mustBuildAgentPod(t, cs, 0, "", "", testScheme(t))
+	delete(pod.Spec.NodeSelector, meta.LabelSnapshotCompatibilityClass)
+	if !podSpecMatchesAgent(pod, cs, 0) {
+		t.Error("live pre-feature agent pod must be adopted until its next normal recreate")
+	}
+	pod.Status.Phase = corev1.PodFailed
+	if podSpecMatchesAgent(pod, cs, 0) {
+		t.Error("terminal pre-feature agent pod must be recreated with the compatibility selector")
+	}
+}
+
 func TestPodSpecMatchesToolboxDetectsStaticVMIDDrift(t *testing.T) {
 	cs := newCocoonSet("demo")
 	scheme := testScheme(t)
@@ -522,6 +569,18 @@ func TestPodSpecMatchesToolboxDetectsNodePoolDrift(t *testing.T) {
 	})
 	if podSpecMatchesToolbox(pod, updated, tb) {
 		t.Error("toolbox pod with old node pool should not match updated spec")
+	}
+}
+
+func TestPodSpecMatchesToolboxAdoptsLegacyMissingSnapshotCompatibilityClass(t *testing.T) {
+	cs := newCocoonSet("demo", func(cs *cocoonv1.CocoonSet) {
+		cs.Spec.SnapshotCompatibilityClass = "n2-cascade-lake-v1"
+	})
+	tb := cocoonv1.ToolboxSpec{Name: "tb", Image: "image", Mode: cocoonv1.ToolboxModeRun}
+	pod := mustBuildToolboxPod(t, cs, tb, testScheme(t))
+	delete(pod.Spec.NodeSelector, meta.LabelSnapshotCompatibilityClass)
+	if !podSpecMatchesToolbox(pod, cs, tb) {
+		t.Error("pre-feature toolbox pod must be adopted until its next normal recreate")
 	}
 }
 
