@@ -16,6 +16,8 @@
 
 Pods are constructed via `meta.FromAgentSpec` / `meta.FromToolboxSpec` factory helpers so the operator never touches the annotation map directly. These factories propagate the full `VMOptions` surface (OS, Backend, ConnType, Network, ForcePull, NoDirectIO, ProbePort, Storage, Resources) into the pod annotations that vk-cocoon consumes. The `For` watch uses `predicate.GenerationChangedPredicate` so reconciles only fire when the spec actually changes — status-only patches the operator makes itself never loop back. The `Owns` side filters pod events to creation, deletion, and meaningful transitions (phase change, readiness flip, label/annotation mutation) via a `podRelevantChange` predicate so pure VK status churn does not trigger reconcile storms.
 
+`spec.nodePool` and `spec.snapshotCompatibilityClass` are independent hard placement dimensions. Every managed pod selects `cocoonstack.io/pool=<nodePool>`; a non-empty snapshot class also selects `cocoonstack.io/snapshot-cpu-class=<class>`. The class identifies a certified guest-visible CPU ABI, not merely `amd64`, and remains in force across release-policy wake, rebuild, and migration. Hostname affinity stays a locality preference or explicit migration target and cannot relax either selector. Pre-feature pods whose immutable `nodeSelector` lacks the class are adopted rather than drift-deleted; their next normal recreate or released-seat wake converges them onto the hard selector.
+
 See [Observability](observability.md) for the Event reasons and metrics
 this loop emits, and [Configuration](configuration.md) for the operator's
 environment variables.

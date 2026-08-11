@@ -172,6 +172,12 @@ func toolboxPodName(csName, tbName string) string {
 func newManagedPod(cs *cocoonv1.CocoonSet, podName, role, slotLabel string, scheme *runtime.Scheme) (*corev1.Pod, error) {
 	one := int64(1)
 	pool := cmp.Or(cs.Spec.NodePool, meta.DefaultNodePool)
+	nodeSelector := map[string]string{
+		meta.LabelNodePool: pool,
+	}
+	if class := cs.Spec.SnapshotCompatibilityClass; class != "" {
+		nodeSelector[meta.LabelSnapshotCompatibilityClass] = class
+	}
 	pod := &corev1.Pod{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      podName,
@@ -193,9 +199,7 @@ func newManagedPod(cs *cocoonv1.CocoonSet, podName, role, slotLabel string, sche
 				{Key: corev1.TaintNodeNotReady, Operator: corev1.TolerationOpExists, Effect: corev1.TaintEffectNoExecute},
 				{Key: corev1.TaintNodeUnreachable, Operator: corev1.TolerationOpExists, Effect: corev1.TaintEffectNoExecute},
 			},
-			NodeSelector: map[string]string{
-				meta.LabelNodePool: pool,
-			},
+			NodeSelector: nodeSelector,
 			Containers: []corev1.Container{
 				{
 					Name:  agentContainerName,
@@ -233,7 +237,7 @@ func podSpecMatchesAgent(pod *corev1.Pod, cs *cocoonv1.CocoonSet, slot int32) bo
 	if !equality.Semantic.DeepEqual(pod.Spec.Containers[0].EnvFrom, cs.Spec.Agent.EnvFrom) {
 		return false
 	}
-	if !nodePoolMatches(pod, cs) {
+	if !schedulingMatches(pod, cs) {
 		return false
 	}
 	return true
@@ -247,7 +251,7 @@ func podSpecMatchesToolbox(pod *corev1.Pod, cs *cocoonv1.CocoonSet, tb cocoonv1.
 	if !vmSpecMatches(current, want) || !resourcesMatch(pod, tb.Resources) {
 		return false
 	}
-	if !nodePoolMatches(pod, cs) {
+	if !schedulingMatches(pod, cs) {
 		return false
 	}
 	if tb.Mode == cocoonv1.ToolboxModeStatic {
@@ -298,8 +302,14 @@ func quantityEqual(a, b corev1.ResourceList, name corev1.ResourceName) bool {
 	return qa.Cmp(qb) == 0
 }
 
-func nodePoolMatches(pod *corev1.Pod, cs *cocoonv1.CocoonSet) bool {
-	return meta.PodNodePool(pod) == cmp.Or(cs.Spec.NodePool, meta.DefaultNodePool)
+func schedulingMatches(pod *corev1.Pod, cs *cocoonv1.CocoonSet) bool {
+	if meta.PodNodePool(pod) != cmp.Or(cs.Spec.NodePool, meta.DefaultNodePool) {
+		return false
+	}
+	class := pod.Spec.NodeSelector[meta.LabelSnapshotCompatibilityClass]
+	// Pod scheduling fields are immutable. Adopt pre-feature pods without the
+	// selector; their next normal recreate will carry the CocoonSet's class.
+	return class == "" || class == cs.Spec.SnapshotCompatibilityClass
 }
 
 // applyStorageRequest propagates the VMOptions.Storage quantity into the

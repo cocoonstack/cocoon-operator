@@ -267,6 +267,14 @@ spec:
               nodePool:
                 default: default
                 type: string
+              snapshotCompatibilityClass:
+                description: |-
+                  SnapshotCompatibilityClass selects nodes that expose a guest-visible CPU
+                  ABI compatible with this set's memory snapshots. It is independent from
+                  NodePool so multiple workload pools can share one snapshot class.
+                maxLength: 63
+                pattern: ^(([A-Za-z0-9][-A-Za-z0-9_.]*)?[A-Za-z0-9])?$
+                type: string
               snapshotPolicy:
                 default: always
                 description: SnapshotPolicy defines when VM snapshots are taken.
@@ -436,6 +444,9 @@ spec:
               rule: '!has(self.hibernatePolicy) || self.hibernatePolicy != ''release''
                 || ((!has(self.agent.replicas) || self.agent.replicas == 0) && (!has(self.toolboxes)
                 || size(self.toolboxes) == 0))'
+            - message: snapshotCompatibilityClass is immutable once set
+              rule: '!has(oldSelf.snapshotCompatibilityClass) || (has(self.snapshotCompatibilityClass)
+                && self.snapshotCompatibilityClass == oldSelf.snapshotCompatibilityClass)'
           status:
             description: CocoonSetStatus represents the observed state of a CocoonSet.
             properties:
