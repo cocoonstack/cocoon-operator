@@ -453,14 +453,18 @@ func TestPodSpecMatchesAgentDetectsSnapshotCompatibilityClassDrift(t *testing.T)
 	}
 }
 
-func TestPodSpecMatchesAgentAdoptsLegacyMissingSnapshotCompatibilityClass(t *testing.T) {
+func TestPodSpecMatchesAgentAdoptsLiveLegacyMissingSnapshotCompatibilityClass(t *testing.T) {
 	cs := newCocoonSet("demo", func(cs *cocoonv1.CocoonSet) {
 		cs.Spec.SnapshotCompatibilityClass = "n2-cascade-lake-v1"
 	})
 	pod := mustBuildAgentPod(t, cs, 0, "", "", testScheme(t))
 	delete(pod.Spec.NodeSelector, meta.LabelSnapshotCompatibilityClass)
 	if !podSpecMatchesAgent(pod, cs, 0) {
-		t.Error("pre-feature agent pod must be adopted until its next normal recreate")
+		t.Error("live pre-feature agent pod must be adopted until its next normal recreate")
+	}
+	pod.Status.Phase = corev1.PodFailed
+	if podSpecMatchesAgent(pod, cs, 0) {
+		t.Error("terminal pre-feature agent pod must be recreated with the compatibility selector")
 	}
 }
 

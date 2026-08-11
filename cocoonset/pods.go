@@ -305,8 +305,8 @@ func schedulingMatches(pod *corev1.Pod, cs *cocoonv1.CocoonSet) bool {
 		return false
 	}
 	class := pod.Spec.NodeSelector[meta.LabelSnapshotCompatibilityClass]
-	// NodeSelector is immutable; adopt pre-feature pods until their next recreate.
-	return class == "" || class == cs.Spec.SnapshotCompatibilityClass
+	// NodeSelector is immutable; adopt live pre-feature pods until their next recreate.
+	return class == cs.Spec.SnapshotCompatibilityClass || (class == "" && !podIsTerminal(pod))
 }
 
 // applyStorageRequest propagates the VMOptions.Storage quantity into the
