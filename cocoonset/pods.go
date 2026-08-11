@@ -172,9 +172,7 @@ func toolboxPodName(csName, tbName string) string {
 func newManagedPod(cs *cocoonv1.CocoonSet, podName, role, slotLabel string, scheme *runtime.Scheme) (*corev1.Pod, error) {
 	one := int64(1)
 	pool := cmp.Or(cs.Spec.NodePool, meta.DefaultNodePool)
-	nodeSelector := map[string]string{
-		meta.LabelNodePool: pool,
-	}
+	nodeSelector := map[string]string{meta.LabelNodePool: pool}
 	if class := cs.Spec.SnapshotCompatibilityClass; class != "" {
 		nodeSelector[meta.LabelSnapshotCompatibilityClass] = class
 	}
@@ -307,8 +305,7 @@ func schedulingMatches(pod *corev1.Pod, cs *cocoonv1.CocoonSet) bool {
 		return false
 	}
 	class := pod.Spec.NodeSelector[meta.LabelSnapshotCompatibilityClass]
-	// Pod scheduling fields are immutable. Adopt pre-feature pods without the
-	// selector; their next normal recreate will carry the CocoonSet's class.
+	// NodeSelector is immutable; adopt pre-feature pods until their next recreate.
 	return class == "" || class == cs.Spec.SnapshotCompatibilityClass
 }
 
