@@ -12,8 +12,9 @@ The binary entry point is `main.go`; the reconcilers themselves live in subpacka
 ```
 cocoon-operator/
 ├── main.go              # manager wiring + flag parsing
-├── cocoonset/           # CocoonSet reconciler, pod builders, status diff
+├── cocoonset/           # CocoonSet reconciler, pod builders, slot release, status diff
 ├── hibernation/         # CocoonHibernation reconciler
+├── metrics/             # Prometheus collectors both reconcilers write to
 └── snapshot/            # snapshot.Registry interface consumed by both reconcilers
 ```
 

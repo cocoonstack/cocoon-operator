@@ -9,8 +9,13 @@ Reconciler failures surface as K8s Events on the CR plus Prometheus counters on 
 
 | Event reason (CocoonSet) | Type |
 |---|---|
-| `PodLifecycleFailed`, `MainAgentFailed`, `SubAgentDeadLetter` | Warning |
+| `PodLifecycleFailed`, `MainAgentFailed`, `SubAgentDeadLetter`, `WakeNoCapacity` | Warning |
 | `SubAgentRebuilding`, `RecoveredFromFailure` | Normal |
+
+`WakeNoCapacity` fires while a `hibernatePolicy: release` wake sits
+Unschedulable: the seat the policy freed is not available again yet. The
+reconciler keeps waiting instead of failing the wake, so the event is the
+out-of-capacity signal, not a terminal error.
 
 Metrics:
 
@@ -20,6 +25,17 @@ cocoon_operator_subagent_dead_letter_total{namespace, cocoonset}
 cocoon_operator_hibernate_phase_duration_seconds{result}    # result=ok|timeout
 cocoon_operator_wake_phase_duration_seconds{result}
 cocoon_operator_lifecycle_state_failed_observed_total{phase}
+cocoon_operator_slot_release_pods_deleted_total{namespace, cocoonset}
+cocoon_operator_slot_release_wake_total{namespace, cocoonset, placement}   # placement=hint-node|pool
+cocoon_operator_slot_release_wake_unschedulable_total{namespace, cocoonset}
 ```
+
+The three `slot_release_*` families cover `hibernatePolicy: release`
+(see [CocoonSet reconcile loop](cocoonset.md)): how many seats a suspend
+freed, and where each wake landed — `hint-node` restored from the
+node-local snapshot on the node it hibernated on, `pool` was rescheduled
+elsewhere and cold-pulled from the registry. A rising
+`slot_release_wake_unschedulable_total` means wakes are queuing behind
+cluster capacity, which is the cost side of the policy.
 
 `CocoonSet` consumes the `vm.cocoonstack.io/lifecycle-state=Failed` annotation that vk-cocoon writes on terminal failures (hibernate, wake, post-clone, SAC); the operator treats it as terminal on every owned pod role (main, sub-agent, toolbox) so reconciliation reacts immediately instead of waiting for `Pod.Status.Phase` to follow. `triageSubAgent` rebuilds a terminal sub pod up to four times with `0/1/5/30 s` exponential backoff between attempts, then marks the pod `cocoonset.cocoonstack.io/dead-letter=true` and leaves it in place so a permanently broken slot stops consuming the apiserver budget. A spec edit lifts the dead-letter: when the pod no longer matches the current spec it is rebuilt and the slot's rebuild budget resets. Rebuild count persists in the `cocoonset.cocoonstack.io/rebuild-history` annotation on the CocoonSet so the count survives the pod delete; entries for slots beyond the current `spec.agent.replicas` are garbage-collected on every write.

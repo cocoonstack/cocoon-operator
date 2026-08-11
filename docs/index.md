@@ -15,7 +15,8 @@ CocoonHibernation  ──► hibernation.Reconciler  ──► HibernateState pa
 
 - [Architecture](architecture.md) — component diagram and package layout
 - [CocoonSet reconcile loop](cocoonset.md) — finalizer/GC, lifecycle-bridge
-  stamp, failed-state and suspend short-circuits, cross-node migration,
+  stamp, failed-state and suspend short-circuits, seat-release hibernation,
+  placement (node pool + snapshot CPU class), cross-node migration,
   main/sub-agent/toolbox reconciliation
 - [CocoonHibernation reconcile loop](hibernation.md) — Hibernate/Wake
   desire handling, finalizer, recoverable failure phases

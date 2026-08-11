@@ -14,8 +14,9 @@ the typed CRD shapes shipped from
 ```
 cocoon-operator/
 ├── main.go              # manager wiring + flag parsing
-├── cocoonset/           # CocoonSet reconciler, pod builders, status diff
+├── cocoonset/           # CocoonSet reconciler, pod builders, slot release, status diff
 ├── hibernation/         # CocoonHibernation reconciler
+├── metrics/             # Prometheus collectors both reconcilers write to
 └── snapshot/            # snapshot.Registry interface consumed by both reconcilers
 ```
 
@@ -33,7 +34,7 @@ Full steps, including the ADC-less `sa-key` overlay, in
 ## Documentation
 
 - [Architecture](docs/architecture.md) — component diagram, package layout
-- [CocoonSet reconcile loop](docs/cocoonset.md) — finalizer/GC, lifecycle-bridge stamp, failed-state and suspend short-circuits, cross-node migration, agent + toolbox reconciliation
+- [CocoonSet reconcile loop](docs/cocoonset.md) — finalizer/GC, lifecycle-bridge stamp, failed-state and suspend short-circuits, seat-release hibernation, placement (node pool + snapshot CPU class), cross-node migration, agent + toolbox reconciliation
 - [CocoonHibernation reconcile loop](docs/hibernation.md) — Hibernate/Wake desire handling, finalizer, recoverable failure phases
 - [Observability](docs/observability.md) — K8s Events and Prometheus metrics
 - [Configuration](docs/configuration.md) — every environment variable
