@@ -18,11 +18,6 @@ type crSink struct {
 	kv   []any
 }
 
-// The root name stays empty; controller-runtime adds its own via WithName.
-func newCRLogger(ctx context.Context) logr.Logger {
-	return logr.New(&crSink{ctx: ctx})
-}
-
 func (s *crSink) Init(logr.RuntimeInfo) {}
 
 // Errors bypass this gate entirely (logr contract).
@@ -74,4 +69,9 @@ func (s *crSink) line(msg string, kvs []any) string {
 		fmt.Fprintf(&b, " %v=%v", pairs[i], pairs[i+1])
 	}
 	return b.String()
+}
+
+// The root name stays empty; controller-runtime adds its own via WithName.
+func newCRLogger(ctx context.Context) logr.Logger {
+	return logr.New(&crSink{ctx: ctx})
 }
