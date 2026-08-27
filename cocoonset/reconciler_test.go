@@ -715,7 +715,11 @@ func TestReconcileDeleteSnapshotPolicyGC(t *testing.T) {
 			cs.Status.Toolboxes = c.toolboxes
 
 			cli := ctrlfake.NewClientBuilder().WithScheme(scheme).WithObjects(cs).Build()
-			reg := &fakeRegistry{}
+			present := make(map[string]bool, len(c.want))
+			for _, ref := range c.want {
+				present[ref] = true
+			}
+			reg := &fakeRegistry{present: present}
 			r := &Reconciler{Client: cli, Scheme: scheme, Registry: reg}
 
 			if _, err := r.reconcileDelete(t.Context(), cs); err != nil {
@@ -725,6 +729,34 @@ func TestReconcileDeleteSnapshotPolicyGC(t *testing.T) {
 				t.Errorf("DeleteManifest calls = %v, want %v", reg.deleted, c.want)
 			}
 		})
+	}
+}
+
+func TestReconcileDeleteSkipsAbsentSnapshotTags(t *testing.T) {
+	scheme := testScheme(t)
+	cs := newCocoonSet("demo")
+	cs.Finalizers = []string{finalizerName}
+	cs.Spec.SnapshotPolicy = cocoonv1.SnapshotPolicyNever
+	cs.Status.Agents = []cocoonv1.AgentStatus{
+		{Slot: 0, Role: "main", PodName: "demo-0", VMName: "vk-ns-demo-0"},
+	}
+
+	cli := ctrlfake.NewClientBuilder().WithScheme(scheme).WithObjects(cs).Build()
+	reg := &fakeRegistry{}
+	r := &Reconciler{Client: cli, Scheme: scheme, Registry: reg}
+
+	if _, err := r.reconcileDelete(t.Context(), cs); err != nil {
+		t.Fatalf("reconcileDelete: %v", err)
+	}
+	if len(reg.deleted) != 0 {
+		t.Errorf("DeleteManifest calls = %v, want none", reg.deleted)
+	}
+	wantProbed := []string{
+		"vk-ns-demo-0:" + meta.HibernateSnapshotTag,
+		"vk-ns-demo-0:" + meta.DefaultSnapshotTag,
+	}
+	if !slices.Equal(reg.probed, wantProbed) {
+		t.Errorf("HasManifest calls = %v, want %v", reg.probed, wantProbed)
 	}
 }
 
@@ -739,7 +771,10 @@ func TestReconcileDeleteStashesPodVMNamesEvenWhenStatusIsEmpty(t *testing.T) {
 		WithScheme(scheme).
 		WithObjects(cs, mustBuildAgentPod(t, cs, 0, "", "", scheme)).
 		Build()
-	reg := &fakeRegistry{}
+	reg := &fakeRegistry{present: map[string]bool{
+		"vk-ns-demo-0:" + meta.HibernateSnapshotTag: true,
+		"vk-ns-demo-0:" + meta.DefaultSnapshotTag:   true,
+	}}
 	r := &Reconciler{Client: cli, Scheme: scheme, Registry: reg}
 
 	if _, err := r.reconcileDelete(t.Context(), cs); err != nil {
@@ -767,7 +802,11 @@ func TestReconcileDeleteCleansTagsAfterPodsGone(t *testing.T) {
 	}
 
 	cli := ctrlfake.NewClientBuilder().WithScheme(scheme).WithObjects(cs).Build()
-	reg := &fakeRegistry{}
+	reg := &fakeRegistry{present: map[string]bool{
+		"vk-ns-demo-0:" + meta.HibernateSnapshotTag:  true,
+		"vk-ns-demo-1:" + meta.HibernateSnapshotTag:  true,
+		"vk-ns-demo-tb:" + meta.HibernateSnapshotTag: true,
+	}}
 	r := &Reconciler{Client: cli, Scheme: scheme, Registry: reg}
 
 	if _, err := r.reconcileDelete(t.Context(), cs); err != nil {
@@ -913,11 +952,16 @@ type fakeRegistry struct {
 	delay     time.Duration
 	block     map[string]chan struct{}
 	entered   chan string
+	probedMu  sync.Mutex
+	probed    []string
 	deletedMu sync.Mutex
 	deleted   []string
 }
 
 func (f *fakeRegistry) HasManifest(_ context.Context, name, tag string) (bool, error) {
+	f.probedMu.Lock()
+	f.probed = append(f.probed, name+":"+tag)
+	f.probedMu.Unlock()
 	if f.probeErr != nil {
 		return false, f.probeErr
 	}
