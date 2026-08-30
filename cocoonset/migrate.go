@@ -24,8 +24,8 @@ func (r *Reconciler) reconcileMigration(ctx context.Context, cs *cocoonv1.Cocoon
 		return false, ctrl.Result{}, nil
 	}
 	main := classified.main
-	// steady state of a pinned set skips the probe; safe because Migrating persists before the first side effect
-	if !migrating && podSettledOn(main, desired) {
+	// a non-quiesced main on its target or still unscheduled skips the probe; safe because Migrating persists before the first side effect
+	if !migrating && main != nil && !bool(meta.ReadHibernateState(main)) && (main.Spec.NodeName == "" || main.Spec.NodeName == desired) {
 		return false, ctrl.Result{}, nil
 	}
 	// a CR-owned hibernation quiesced on the target is not a migration; CR hibernation is the long-lived idle state
@@ -139,11 +139,6 @@ func (r *Reconciler) markMigrating(ctx context.Context, cs *cocoonv1.CocoonSet, 
 		return true, ctrl.Result{}, fmt.Errorf("migrate: patch migrating status %s/%s: %w", cs.Namespace, cs.Name, err)
 	}
 	return true, ctrl.Result{RequeueAfter: requeueMigratePoll}, nil
-}
-
-func podSettledOn(main *corev1.Pod, desired string) bool {
-	return main != nil && main.Spec.NodeName == desired &&
-		vmLive(main) && !bool(meta.ReadHibernateState(main))
 }
 
 // vmLive needs both checks: containerStatuses can report Running before vk pulls the snapshot.

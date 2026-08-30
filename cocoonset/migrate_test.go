@@ -287,6 +287,20 @@ func TestMigrationSkipsProbeWhenSettled(t *testing.T) {
 	}
 }
 
+func TestMigrationSkipsProbeWhileMainBoots(t *testing.T) {
+	for _, node := range []string{"", "node-b"} {
+		t.Run("node="+node, func(t *testing.T) {
+			cs := migCocoonSet("node-b")
+			main := migMainPod(t, cs, node, "", false)
+			r := &Reconciler{Scheme: testScheme(t), Registry: &fakeRegistry{probeErr: errors.New("boom")}}
+			handled, _, err := r.reconcileMigration(t.Context(), cs, classifiedPods{main: main})
+			if handled || err != nil {
+				t.Errorf("booting pinned main must skip the probe, handled=%v err=%v", handled, err)
+			}
+		})
+	}
+}
+
 func TestMigrationDisengagesFromCRWakeWindow(t *testing.T) {
 	cs := migCocoonSet("node-b")
 	main := migMainPod(t, cs, "node-b", "", false)
