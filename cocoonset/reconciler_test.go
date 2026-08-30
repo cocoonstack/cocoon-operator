@@ -715,9 +715,10 @@ func TestReconcileDeleteSnapshotPolicyGC(t *testing.T) {
 			cs.Status.Toolboxes = c.toolboxes
 
 			cli := ctrlfake.NewClientBuilder().WithScheme(scheme).WithObjects(cs).Build()
-			present := make(map[string]bool, len(c.want))
-			for _, ref := range c.want {
-				present[ref] = true
+			present := map[string]bool{}
+			for _, name := range statusVMNames(cs) {
+				present[name+":"+meta.HibernateSnapshotTag] = true
+				present[name+":"+meta.DefaultSnapshotTag] = true
 			}
 			reg := &fakeRegistry{present: present}
 			r := &Reconciler{Client: cli, Scheme: scheme, Registry: reg}
