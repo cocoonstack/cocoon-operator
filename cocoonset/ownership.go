@@ -12,9 +12,7 @@ import (
 	"github.com/cocoonstack/cocoon-common/meta"
 )
 
-// listOwnedPods lists pods labeled for this CocoonSet and drops any not
-// actually controlled by it, so stale-label pods can't be counted in status
-// or affected by suspend/delete. Callers wrap the error with a site-specific noun.
+// listOwnedPods drops stale-label pods that this CocoonSet does not control.
 func (r *Reconciler) listOwnedPods(ctx context.Context, cs *cocoonv1.CocoonSet) ([]corev1.Pod, error) {
 	var podList corev1.PodList
 	if err := r.List(

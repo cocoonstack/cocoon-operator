@@ -18,8 +18,7 @@ import (
 	"github.com/cocoonstack/cocoon-common/meta"
 )
 
-// annotationDeleteVMNames records VM names for the post-pod GC step, so a
-// CocoonSet deleted before Status.Agents was patched still gets every tag cleaned.
+// annotationDeleteVMNames survives a CocoonSet deleted before Status.Agents was ever patched.
 const annotationDeleteVMNames = "cocoonset.cocoonstack.io/delete-vm-names"
 
 func (r *Reconciler) reconcileDelete(ctx context.Context, cs *cocoonv1.CocoonSet) (ctrl.Result, error) {
@@ -31,12 +30,12 @@ func (r *Reconciler) reconcileDelete(ctx context.Context, cs *cocoonv1.CocoonSet
 		return ctrl.Result{}, fmt.Errorf("list owned pods for delete: %w", listErr)
 	}
 
-	// Stash VM names from live pods + Status before pods disappear.
+	// stash VM names from live pods and Status before the pods disappear
 	if err := r.stashDeleteVMNames(ctx, cs, owned); err != nil {
 		return ctrl.Result{}, fmt.Errorf("stash vm names: %w", err)
 	}
 
-	// vk-cocoon completes the snapshot push during the grace period before GC.
+	// vk-cocoon completes the snapshot push during the grace period before GC
 	for i := range owned {
 		if ctxErr := ctx.Err(); ctxErr != nil {
 			return ctrl.Result{}, ctxErr
@@ -47,8 +46,7 @@ func (r *Reconciler) reconcileDelete(ctx context.Context, cs *cocoonv1.CocoonSet
 		}
 	}
 
-	// Requeue if any pods still exist — vk-cocoon's DeletePod may still be running
-	// snapshot save/push. We only GC registry tags once every pod is fully gone.
+	// GC registry tags only once every pod is gone; vk-cocoon's DeletePod may still be pushing the snapshot
 	remainingOwned, listErr := r.listOwnedPods(ctx, cs)
 	if listErr != nil {
 		return ctrl.Result{}, fmt.Errorf("re-list pods after delete: %w", listErr)
@@ -58,14 +56,10 @@ func (r *Reconciler) reconcileDelete(ctx context.Context, cs *cocoonv1.CocoonSet
 		return ctrl.Result{RequeueAfter: requeueWaitForMain}, nil
 	}
 
-	// :hibernate is always orphaned at teardown. :latest is kept when
-	// shouldKeepLatestTag says vk-cocoon pushed it for retag. Probe before each
-	// delete because some registries materialize an empty repository while
-	// authorizing DELETE for a tag that never existed.
+	// :hibernate is always orphaned at teardown; :latest is kept when vk-cocoon pushed it for retag
 	if r.Registry != nil {
 		for _, name := range parseVMNamesAnnotation(cs.Annotations[annotationDeleteVMNames]) {
-			// Non-fatal, but log at error: a persistent delete failure (e.g. the
-			// registry SA lacking delete permission) silently leaks snapshots.
+			// non-fatal but logged at error: a persistent delete failure silently leaks snapshots
 			if err := r.deleteManifestIfPresent(ctx, name, meta.HibernateSnapshotTag); err != nil {
 				logger.Errorf(ctx, err, "delete snapshot %s:%s", name, meta.HibernateSnapshotTag)
 			}
@@ -88,6 +82,7 @@ func (r *Reconciler) reconcileDelete(ctx context.Context, cs *cocoonv1.CocoonSet
 	return ctrl.Result{}, nil
 }
 
+// deleteManifestIfPresent probes first: some registries materialize an empty repository while authorizing a DELETE for a missing tag.
 func (r *Reconciler) deleteManifestIfPresent(ctx context.Context, name, reference string) error {
 	present, err := r.Registry.HasManifest(ctx, name, reference)
 	if err != nil {
@@ -99,8 +94,6 @@ func (r *Reconciler) deleteManifestIfPresent(ctx context.Context, name, referenc
 	return r.Registry.DeleteManifest(ctx, name, reference)
 }
 
-// stashDeleteVMNames merges VM names from Status, the previously stashed
-// annotation, and live pods, then re-writes the annotation if anything changed.
 func (r *Reconciler) stashDeleteVMNames(ctx context.Context, cs *cocoonv1.CocoonSet, owned []corev1.Pod) error {
 	have := make(map[string]struct{})
 	for _, n := range statusVMNames(cs) {
@@ -130,8 +123,6 @@ func (r *Reconciler) stashDeleteVMNames(ctx context.Context, cs *cocoonv1.Cocoon
 	})
 }
 
-// statusVMNames collects the non-empty VM names recorded in the CocoonSet
-// status, agents first then toolboxes, preserving insertion order.
 func statusVMNames(cs *cocoonv1.CocoonSet) []string {
 	names := make([]string, 0, len(cs.Status.Agents)+len(cs.Status.Toolboxes))
 	for _, a := range cs.Status.Agents {
@@ -147,8 +138,7 @@ func statusVMNames(cs *cocoonv1.CocoonSet) []string {
 	return names
 }
 
-// shouldKeepLatestTag has only (CocoonSet, vmName) — no Pod/VMSpec — so it
-// derives the role via meta.ExtractAgentSlot directly instead of meta.ShouldSnapshotVM.
+// shouldKeepLatestTag has no Pod to hand meta.ShouldSnapshotVM, so it derives the role via meta.ExtractAgentSlot.
 func shouldKeepLatestTag(cs *cocoonv1.CocoonSet, vmName string) bool {
 	switch cs.Spec.SnapshotPolicy.Default() {
 	case cocoonv1.SnapshotPolicyNever:

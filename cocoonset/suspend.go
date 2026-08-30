@@ -17,8 +17,7 @@ import (
 	"github.com/cocoonstack/cocoon-operator/snapshot"
 )
 
-// reconcileSuspend polls the registry and stays in Suspending, requeueing
-// periodically, until every managed VM's snapshot lands.
+// reconcileSuspend polls the registry and stays Suspending until every managed VM's snapshot lands.
 func (r *Reconciler) reconcileSuspend(ctx context.Context, cs *cocoonv1.CocoonSet, classified classifiedPods) (ctrl.Result, error) {
 	logger := log.WithFunc("cocoonset.Reconciler.reconcileSuspend")
 	if classified.main == nil {
@@ -52,11 +51,7 @@ func (r *Reconciler) reconcileSuspend(ctx context.Context, cs *cocoonv1.CocoonSe
 	return result, r.patchStatus(ctx, cs, buildStatus(cs, classified, phase))
 }
 
-// allOwnedPodsHibernated reports whether every managed owned pod has a
-// hibernate snapshot published to the registry. Unmanaged pods (e.g. static
-// toolboxes) are skipped since they have no VM lifecycle to observe.
-// Returns (false, nil) whenever the expected state is not yet observed so
-// the caller requeues rather than treats it as an error.
+// allOwnedPodsHibernated returns (false, nil), not an error, while the expected state is not yet observed.
 func (r *Reconciler) allOwnedPodsHibernated(ctx context.Context, cs *cocoonv1.CocoonSet, classified classifiedPods) (bool, error) {
 	for _, name := range slices.Sorted(maps.Keys(classified.allByName)) {
 		if ctxErr := ctx.Err(); ctxErr != nil {
@@ -67,18 +62,14 @@ func (r *Reconciler) allOwnedPodsHibernated(ctx context.Context, cs *cocoonv1.Co
 		if !spec.Managed {
 			continue
 		}
-		// A terminal pod has no live VM to snapshot; waiting on it would park
-		// the set in Suspending forever. The normal flow triages it after unsuspend.
+		// a terminal pod has no VM to snapshot; waiting on it would park the set in Suspending forever
 		if podIsTerminal(pod) {
 			continue
 		}
 		if spec.VMName == "" {
 			return false, nil
 		}
-		// vk writes lifecycle-state and observed-generation atomically and
-		// flips to hibernated only after this round's push, so neither a stale
-		// :hibernate tag (unsuspend never deletes tags) nor a lagging informer
-		// snapshot of a prior round can satisfy the poll early.
+		// vk flips hibernated with observed-generation only after this round's push; a stale tag or lagging informer cannot pass
 		if st := meta.ReadLifecycleStatus(pod); st.State != meta.LifecycleStateHibernated ||
 			st.ObservedGeneration < cs.Generation {
 			return false, nil
@@ -94,7 +85,6 @@ func (r *Reconciler) allOwnedPodsHibernated(ctx context.Context, cs *cocoonv1.Co
 	return true, nil
 }
 
-// applySuspend writes HibernateState(true) onto every owned pod.
 func (r *Reconciler) applySuspend(ctx context.Context, classified classifiedPods) error {
 	return classified.forEachSorted(ctx, func(pod *corev1.Pod) error {
 		if err := commonk8s.PatchHibernateState(ctx, r.Client, pod, true); err != nil {
@@ -104,9 +94,7 @@ func (r *Reconciler) applySuspend(ctx context.Context, classified classifiedPods
 	})
 }
 
-// applyUnsuspend clears HibernateState from owned pods, skipping pods that are
-// targets of an active CocoonHibernation CR to avoid racing the hibernation
-// reconciler.
+// applyUnsuspend skips pods targeted by an active CocoonHibernation CR to avoid racing that reconciler.
 func (r *Reconciler) applyUnsuspend(ctx context.Context, namespace string, classified classifiedPods) error {
 	var hibernated []*corev1.Pod
 	for _, pod := range classified.allByName {
@@ -139,7 +127,7 @@ func (r *Reconciler) applyUnsuspend(ctx context.Context, namespace string, class
 	return nil
 }
 
-// podsHibernatedByCR returns pod names targeted by a desire=Hibernate CR.
+// podsHibernatedByCR returns pod names whose CR desires Hibernate or is already Hibernating.
 func (r *Reconciler) podsHibernatedByCR(ctx context.Context, namespace string) (map[string]struct{}, error) {
 	return r.hibernationPodNames(ctx, namespace, func(h *cocoonv1.CocoonHibernation) bool {
 		return h.Spec.Desire == cocoonv1.HibernationDesireHibernate || h.Status.Phase == cocoonv1.CocoonHibernationPhaseHibernating

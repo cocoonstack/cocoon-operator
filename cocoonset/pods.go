@@ -33,8 +33,6 @@ type classifiedPods struct {
 	allByName map[string]*corev1.Pod
 }
 
-// forEachSorted invokes fn for every pod in allByName in name-sorted order,
-// returning early on ctx cancellation or fn error.
 func (c classifiedPods) forEachSorted(ctx context.Context, fn func(*corev1.Pod) error) error {
 	for _, name := range slices.Sorted(maps.Keys(c.allByName)) {
 		if err := ctx.Err(); err != nil {
@@ -47,8 +45,7 @@ func (c classifiedPods) forEachSorted(ctx context.Context, fn func(*corev1.Pod) 
 	return nil
 }
 
-// classifyPods groups pods by role label; pods with an unknown role or an
-// unparsable slot stay visible through allByName only.
+// classifyPods keeps unknown-role or unparsable-slot pods visible through allByName only.
 func classifyPods(pods []corev1.Pod) classifiedPods {
 	out := classifiedPods{
 		sub:       map[int32]*corev1.Pod{},
@@ -57,7 +54,7 @@ func classifyPods(pods []corev1.Pod) classifiedPods {
 	}
 	for i := range pods {
 		p := &pods[i]
-		// Skip pods already being deleted to prevent re-delete loops.
+		// skip pods already being deleted to prevent re-delete loops
 		if !p.DeletionTimestamp.IsZero() {
 			continue
 		}
@@ -76,8 +73,7 @@ func classifyPods(pods []corev1.Pod) classifiedPods {
 	return out
 }
 
-// buildAgentPod constructs the desired Pod for an agent slot.
-// Slot 0 is main; slot >= 1 are sub-agents that fork from the main VM.
+// buildAgentPod builds slot 0 as main; slots >= 1 fork from the main VM.
 func buildAgentPod(cs *cocoonv1.CocoonSet, slot int32, mainVMName, bindNodeName string, scheme *runtime.Scheme) (*corev1.Pod, error) {
 	role := meta.RoleMain
 	forkFrom := ""
@@ -105,8 +101,7 @@ func buildAgentPod(cs *cocoonv1.CocoonSet, slot int32, mainVMName, bindNodeName 
 	if bindNodeName != "" {
 		pod.Spec.NodeName = bindNodeName
 	} else if slot == 0 && cs.Spec.NodeName != "" {
-		// Scheduler affinity, not a hard NodeName bind: the main lands only if
-		// it fits and the node is schedulable, else stays Pending.
+		// scheduler affinity, not a hard NodeName bind: the main stays Pending unless the node fits and is schedulable
 		pod.Spec.Affinity = hostnameAffinity(cs.Spec.NodeName)
 	}
 	return pod, nil
@@ -163,8 +158,7 @@ func buildToolboxPod(cs *cocoonv1.CocoonSet, tb cocoonv1.ToolboxSpec, scheme *ru
 	return pod, nil
 }
 
-// toolboxPodName is the deterministic pod name for a toolbox, shared by the
-// builder and the collision check so the two cannot diverge.
+// toolboxPodName is shared by the builder and the collision check so the two cannot diverge.
 func toolboxPodName(csName, tbName string) string {
 	return fmt.Sprintf("%s-%s", csName, tbName)
 }
@@ -212,11 +206,10 @@ func newManagedPod(cs *cocoonv1.CocoonSet, podName, role, slotLabel string, sche
 	return pod, nil
 }
 
-// podSpecMatchesAgent reports whether a running agent pod still matches what
-// buildAgentPod would produce from the current CocoonSet spec.
+// podSpecMatchesAgent reports whether a running agent pod still matches the current spec.
 func podSpecMatchesAgent(pod *corev1.Pod, cs *cocoonv1.CocoonSet, slot int32) bool {
 	current := meta.ParseVMSpec(pod)
-	// Sub-agents inherit ForkFrom; main agents leave it empty so a manual edit drifts.
+	// sub-agents inherit ForkFrom; main agents leave it empty so a manual edit drifts
 	forkFrom := ""
 	if slot > 0 {
 		forkFrom = current.ForkFrom
@@ -225,8 +218,7 @@ func podSpecMatchesAgent(pod *corev1.Pod, cs *cocoonv1.CocoonSet, slot int32) bo
 	if !vmSpecMatches(current, want) || !resourcesMatch(pod, cs.Spec.Agent.Resources) {
 		return false
 	}
-	// K8s fills ServiceAccountName with "default" when unset; normalize
-	// both sides so empty and "default" are treated as equivalent.
+	// K8s fills ServiceAccountName with "default" when unset; treat empty and "default" as equal
 	podSA := cmp.Or(pod.Spec.ServiceAccountName, "default")
 	wantSA := cmp.Or(cs.Spec.Agent.ServiceAccountName, "default")
 	if podSA != wantSA {
@@ -241,8 +233,7 @@ func podSpecMatchesAgent(pod *corev1.Pod, cs *cocoonv1.CocoonSet, slot int32) bo
 	return true
 }
 
-// podSpecMatchesToolbox reports whether a running toolbox pod still matches
-// what buildToolboxPod would produce from the current CocoonSet spec.
+// podSpecMatchesToolbox reports whether a running toolbox pod still matches the current spec.
 func podSpecMatchesToolbox(pod *corev1.Pod, cs *cocoonv1.CocoonSet, tb cocoonv1.ToolboxSpec) bool {
 	current := meta.ParseVMSpec(pod)
 	want := meta.FromToolboxSpec(tb, current.VMName, cs.Spec.SnapshotPolicy)
@@ -262,21 +253,18 @@ func podSpecMatchesToolbox(pod *corev1.Pod, cs *cocoonv1.CocoonSet, tb cocoonv1.
 }
 
 // vmSpecMatches uses struct equality so any future VMSpec field is covered.
-// Callers copy VMName/ForkFrom from current into want to avoid spurious mismatches.
 func vmSpecMatches(got, want meta.VMSpec) bool {
 	return got == want
 }
 
 func resourcesMatch(pod *corev1.Pod, want corev1.ResourceRequirements) bool {
 	got := pod.Spec.Containers[0].Resources
-	// Only CPU and memory: K8s defaulting copies the injected
-	// ephemeral-storage into both Limits and Requests, which would always
-	// mismatch a spec that never carries it.
-	// Guaranteed-QoS defaulting fills Requests from Limits; mirror it.
+	// Guaranteed-QoS defaulting fills Requests from Limits; mirror it
 	wantReq := want.Requests
 	if len(wantReq) == 0 {
 		wantReq = want.Limits
 	}
+	// only CPU and memory: K8s defaulting injects ephemeral-storage into both lists, which a spec never carries
 	for _, res := range []corev1.ResourceName{corev1.ResourceCPU, corev1.ResourceMemory} {
 		if !quantityEqual(got.Limits, want.Limits, res) {
 			return false
@@ -309,9 +297,7 @@ func schedulingMatches(pod *corev1.Pod, cs *cocoonv1.CocoonSet) bool {
 	return class == cs.Spec.SnapshotCompatibilityClass || (class == "" && !podIsTerminal(pod))
 }
 
-// applyStorageRequest propagates the VMOptions.Storage quantity into the
-// pod's ephemeral-storage resource request so the K8s scheduler can
-// account for VM disk usage. No-op when storage is nil.
+// applyStorageRequest sets ephemeral-storage from VMOptions.Storage so the scheduler accounts for VM disk.
 func applyStorageRequest(pod *corev1.Pod, storage *resource.Quantity) {
 	if storage == nil || storage.IsZero() {
 		return
@@ -323,7 +309,7 @@ func applyStorageRequest(pod *corev1.Pod, storage *resource.Quantity) {
 	if c.Resources.Limits == nil {
 		c.Resources.Limits = corev1.ResourceList{}
 	}
-	// Set both so Guaranteed QoS defaulting preserves the value.
+	// set both so Guaranteed QoS defaulting preserves the value
 	c.Resources.Requests[corev1.ResourceEphemeralStorage] = *storage
 	c.Resources.Limits[corev1.ResourceEphemeralStorage] = *storage
 }

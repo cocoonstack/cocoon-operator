@@ -1,5 +1,4 @@
-// Package main is the cocoon-operator entry point. It runs the CocoonSet
-// and CocoonHibernation reconcilers under controller-runtime.
+// Package main runs the CocoonSet and CocoonHibernation reconcilers under controller-runtime.
 package main
 
 import (

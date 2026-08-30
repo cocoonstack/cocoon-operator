@@ -15,9 +15,7 @@ const (
 	maxRebuildAttempts = 4
 )
 
-// rebuildEntry tracks how many times triageSubAgent has rebuilt a slot.
-// Persisted as a JSON map keyed by slot in the CocoonSet annotation so
-// the count survives the pod delete that erases the in-pod annotation.
+// rebuildEntry persists in a CocoonSet annotation so the count survives the pod delete.
 type rebuildEntry struct {
 	Count       int       `json:"count"`
 	LastDeleted time.Time `json:"lastDeleted"`
@@ -38,8 +36,6 @@ func readRebuildHistory(cs *cocoonv1.CocoonSet) map[int32]rebuildEntry {
 	return m
 }
 
-// encodeRebuildHistory garbage-collects entries for slots no longer in the
-// spec and returns the JSON payload for the annotation.
 func encodeRebuildHistory(replicas int32, m map[int32]rebuildEntry) (string, error) {
 	maps.DeleteFunc(m, func(slot int32, _ rebuildEntry) bool {
 		return slot > replicas

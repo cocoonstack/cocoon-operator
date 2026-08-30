@@ -19,9 +19,7 @@ import (
 	"github.com/cocoonstack/cocoon-operator/snapshot"
 )
 
-// reconcileSuspendRelease drives a suspended release-policy CocoonSet to zero
-// pods so its scheduling seat frees; pods are deleted only after every managed
-// VM's :hibernate snapshot is verified in the registry.
+// reconcileSuspendRelease drains a release-policy CocoonSet to zero pods once every VM's :hibernate snapshot is verified.
 func (r *Reconciler) reconcileSuspendRelease(ctx context.Context, cs *cocoonv1.CocoonSet, classified classifiedPods) (ctrl.Result, error) {
 	logger := log.WithFunc("cocoonset.Reconciler.reconcileSuspendRelease")
 
@@ -30,8 +28,7 @@ func (r *Reconciler) reconcileSuspendRelease(ctx context.Context, cs *cocoonv1.C
 	}
 
 	if len(classified.allByName) == 0 {
-		// Seat already released, or suspended before first boot — nothing to
-		// snapshot; settle Suspended.
+		// seat already released, or suspended before first boot: settle Suspended
 		return ctrl.Result{}, r.patchStatus(ctx, cs, buildStatus(cs, classified, cocoonv1.CocoonSetPhaseSuspended))
 	}
 
@@ -47,8 +44,7 @@ func (r *Reconciler) reconcileSuspendRelease(ctx context.Context, cs *cocoonv1.C
 			r.patchStatus(ctx, cs, buildStatus(cs, classified, cocoonv1.CocoonSetPhaseSuspending))
 	}
 
-	// Stash before the first delete: delete-time GC needs the vm names (status
-	// rebuilds empty once the pods are gone) and wake needs the node hint.
+	// stash before the first delete: GC needs the vm names and wake needs the node hint once the pods are gone
 	if err := r.stashDeleteVMNames(ctx, cs, podsSlice(classified)); err != nil {
 		return ctrl.Result{}, fmt.Errorf("stash vm names before slot release: %w", err)
 	}
@@ -60,11 +56,11 @@ func (r *Reconciler) reconcileSuspendRelease(ctx context.Context, cs *cocoonv1.C
 
 	deleteErr := classified.forEachSorted(ctx, func(pod *corev1.Pod) error {
 		if podIsTerminal(pod) {
-			// Terminal pods carry no VM state; keep them for post-unsuspend triage.
+			// terminal pods carry no VM state; keep them for post-unsuspend triage
 			return nil
 		}
 		logger.Infof(ctx, "slot release: deleting hibernated pod %s/%s (node=%s)", pod.Namespace, pod.Name, pod.Spec.NodeName)
-		// Best-effort: a lost flag costs the wake a registry pull; failing here would forfeit the seat.
+		// best-effort: a lost flag costs the wake a registry pull; failing here would forfeit the seat
 		if err := commonk8s.PatchKeepSnapshotOnDelete(ctx, r.Client, pod); err != nil {
 			logger.Errorf(ctx, err, "slot release: flag keep-snapshot on %s/%s; wake will cold-pull", pod.Namespace, pod.Name)
 		}
@@ -82,21 +78,16 @@ func (r *Reconciler) reconcileSuspendRelease(ctx context.Context, cs *cocoonv1.C
 		r.patchStatus(ctx, cs, buildStatus(cs, classified, cocoonv1.CocoonSetPhaseSuspended))
 }
 
-// reconcileWake owns the reconcile of a set coming back from a pod-less
-// Suspended state: durable Waking phase first, restore pod second, tag drop
-// only once the VM is live. Gated on phase, not current policy — a policy
-// edit made while suspended must not fresh-boot over the snapshot.
+// reconcileWake gates on Status.Phase, not policy, so a mid-suspend policy edit cannot fresh-boot over the snapshot.
 func (r *Reconciler) reconcileWake(ctx context.Context, cs *cocoonv1.CocoonSet, classified classifiedPods) (bool, ctrl.Result, error) {
 	logger := log.WithFunc("cocoonset.Reconciler.reconcileWake")
 	main := classified.main
 	hint := cs.Annotations[meta.AnnotationHibernatedOnNode]
 	waking := cs.Status.Phase == cocoonv1.CocoonSetPhaseWaking
 	suspended := cs.Status.Phase == cocoonv1.CocoonSetPhaseSuspended
-	// A fast unsuspend can land before the deletes settle Suspended; the node
-	// hint keeps the wake engaged (phase-scoped so a stale hint never fires).
+	// a fast unsuspend can land before the deletes settle Suspended; the phase-scoped node hint keeps the wake engaged
 	suspending := cs.Status.Phase == cocoonv1.CocoonSetPhaseSuspending && hint != ""
-	// A stale-phase read can overwrite Waking; a restore-marked, non-hibernating
-	// main with the hint set is an unfinished wake (completion clears the hint).
+	// a restore-marked, non-hibernating main with the hint still set is an unfinished wake; completion clears the hint
 	cleanupPending := main != nil && meta.ReadRestoreFromHibernate(main) &&
 		!bool(meta.ReadHibernateState(main)) && hint != ""
 	waking = waking || cleanupPending
@@ -109,8 +100,7 @@ func (r *Reconciler) reconcileWake(ctx context.Context, cs *cocoonv1.CocoonSet, 
 		return r.startReleasedWake(ctx, cs, classified)
 
 	case waking && !vmLive(main):
-		// Restore in flight. Unschedulable is the out-of-stock signal;
-		// surface it but keep waiting — a seat may free up.
+		// unschedulable is the out-of-stock signal: surface it but keep waiting for a seat
 		if msg := podUnschedulable(main); msg != "" {
 			metrics.SlotReleaseWakeUnschedulableTotal.WithLabelValues(cs.Namespace, cs.Name).Inc()
 			r.emitEventf(cs, corev1.EventTypeWarning, "WakeNoCapacity", "main pod %s unschedulable: %s", main.Name, msg)
@@ -123,8 +113,7 @@ func (r *Reconciler) reconcileWake(ctx context.Context, cs *cocoonv1.CocoonSet, 
 		if err := r.Registry.DeleteManifest(ctx, vmName, meta.HibernateSnapshotTag); err != nil {
 			return true, ctrl.Result{}, fmt.Errorf("wake: drop hibernate snapshot %s: %w", vmName, err)
 		}
-		// The hint is the wake's in-flight marker; a stale-status Requeue
-		// re-entry arrives hint-less and must not re-score the landing as pool.
+		// the hint is the wake's in-flight marker; a hint-less stale-status re-entry must not re-score the landing
 		if hint != "" {
 			logger.Infof(ctx, "wake %s/%s: restored on %s, dropping hibernate snapshot", cs.Namespace, cs.Name, main.Spec.NodeName)
 			placement := "pool"
@@ -136,36 +125,33 @@ func (r *Reconciler) reconcileWake(ctx context.Context, cs *cocoonv1.CocoonSet, 
 				return true, ctrl.Result{}, err
 			}
 		}
-		// Auto-derived phase; the requeued pass settles Running/Scaling.
+		// auto-derived phase; the requeued pass settles Running/Scaling
 		return true, ctrl.Result{Requeue: true}, r.patchStatus(ctx, cs, buildStatus(cs, classified, ""))
 
 	case (suspended || suspending) && hint != "" && !podIsTerminal(main):
-		// Either a stale view of the deleted main or a delete that never ran;
-		// only an uncached read can tell them apart.
+		// a stale view of the deleted main or a delete that never ran; only an uncached read tells them apart
 		return r.confirmReleasedDelete(ctx, main)
 
 	default:
-		// Retain placeholder or kept terminal pod: the normal flow owns these.
+		// retained placeholder or kept terminal pod: the normal flow owns these
 		return false, ctrl.Result{}, nil
 	}
 }
 
-// startReleasedWake probes the registry and recreates the main pod with
-// restore intent; handled=false only when there is no snapshot to restore.
+// startReleasedWake recreates main with restore intent; handled=false only when no snapshot exists.
 func (r *Reconciler) startReleasedWake(ctx context.Context, cs *cocoonv1.CocoonSet, classified classifiedPods) (bool, ctrl.Result, error) {
 	logger := log.WithFunc("cocoonset.Reconciler.startReleasedWake")
 	vmName := meta.VMNameForDeployment(cs.Namespace, cs.Name, 0)
 	present, probeErr := snapshot.HasHibernateSnapshot(ctx, r.Registry, vmName)
 	if probeErr != nil {
-		// Fail closed: falling through would fresh-boot over a real snapshot.
+		// fail closed: falling through would fresh-boot over a real snapshot
 		return true, ctrl.Result{}, fmt.Errorf("wake: %w", probeErr)
 	}
 	if !present {
-		// No snapshot: suspended before first boot; the normal flow fresh-boots.
+		// no snapshot means suspended before first boot; the normal flow fresh-boots
 		return false, ctrl.Result{}, nil
 	}
-	// Persist Waking before the create so a crash between the two steps
-	// resumes here instead of fresh-booting.
+	// persist Waking before the create so a crash between the two resumes here instead of fresh-booting
 	if err := r.patchStatus(ctx, cs, buildStatus(cs, classified, cocoonv1.CocoonSetPhaseWaking)); err != nil {
 		return true, ctrl.Result{}, err
 	}
@@ -174,8 +160,7 @@ func (r *Reconciler) startReleasedWake(ctx context.Context, cs *cocoonv1.CocoonS
 		return true, ctrl.Result{}, fmt.Errorf("wake: build main: %w", err)
 	}
 	meta.MarkRestoreFromHibernate(pod)
-	// Soft-prefer the hibernated-on seat; a spec.nodeName pin already set
-	// a required affinity in buildAgentPod and wins.
+	// soft-prefer the hibernated-on seat; a spec.nodeName pin already set a required affinity and wins
 	if node := cs.Annotations[meta.AnnotationHibernatedOnNode]; node != "" && pod.Spec.Affinity == nil {
 		pod.Spec.Affinity = preferredHostnameAffinity(node)
 	}

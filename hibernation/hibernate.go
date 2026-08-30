@@ -20,15 +20,11 @@ func (r *Reconciler) reconcileHibernate(ctx context.Context, hib *cocoonv1.Cocoo
 		return ctrl.Result{}, fmt.Errorf("patch hibernate annotation: %w", err)
 	}
 
-	// Gate on vk's per-round completion signal before paying the registry
-	// probe: a stale :hibernate tag left by a prior suspend cycle would
-	// otherwise satisfy the probe immediately. The generation floor (state and
-	// observed-generation are written atomically by vk) rejects lifecycle
-	// annotations that predate the pod's current CocoonSet round.
+	// gate on vk's completion signal for this generation before the probe; a stale tag from a prior cycle would satisfy it immediately
 	if st := meta.ReadLifecycleStatus(pod); st.State == meta.LifecycleStateHibernated &&
 		st.ObservedGeneration >= meta.ReadCocoonSetGeneration(pod) {
 		present, err := snapshot.HasHibernateSnapshot(ctx, r.Registry, vmName)
-		// A persistently failing probe must still hit the deadline below, or the phase starves in Hibernating.
+		// a persistently failing probe must still hit the deadline below, or the phase starves in Hibernating
 		if err != nil && !phaseDeadlineExceeded(hib, cocoonv1.CocoonHibernationPhaseHibernating, hibernateTimeout) {
 			return ctrl.Result{}, err
 		}

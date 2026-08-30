@@ -16,10 +16,7 @@ import (
 	"github.com/cocoonstack/cocoon-operator/snapshot"
 )
 
-// reconcileMigration drives cross-node migration of the main agent (slot 0);
-// handled=false hands back to the normal flow. Never lose live state: the old
-// pod dies only after the snapshot exists AND this controller quiesced it;
-// the snapshot drops only once the new VM runs.
+// reconcileMigration never loses live state: the old pod dies only after this controller quiesced it and the snapshot exists.
 func (r *Reconciler) reconcileMigration(ctx context.Context, cs *cocoonv1.CocoonSet, classified classifiedPods) (bool, ctrl.Result, error) {
 	desired := cs.Spec.NodeName
 	migrating := cs.Status.Phase == cocoonv1.CocoonSetPhaseMigrating
@@ -27,13 +24,11 @@ func (r *Reconciler) reconcileMigration(ctx context.Context, cs *cocoonv1.Cocoon
 		return false, ctrl.Result{}, nil
 	}
 	main := classified.main
-	// Steady state of a pinned set: skip the registry probe — safe because the
-	// Migrating phase is persisted before the first side effect.
+	// steady state of a pinned set skips the probe; safe because Migrating persists before the first side effect
 	if !migrating && podSettledOn(main, desired) {
 		return false, ctrl.Result{}, nil
 	}
-	// A CR-owned hibernation quiesced on the target is no migration either;
-	// short-circuit before the probe — CR hibernation is the long-lived idle state.
+	// a CR-owned hibernation quiesced on the target is not a migration; CR hibernation is the long-lived idle state
 	if main != nil && bool(meta.ReadHibernateState(main)) && (desired == "" || main.Spec.NodeName == desired) {
 		hibByCR, err := r.podsHibernatedByCR(ctx, cs.Namespace)
 		if err != nil {
@@ -46,14 +41,13 @@ func (r *Reconciler) reconcileMigration(ctx context.Context, cs *cocoonv1.Cocoon
 	vmName := meta.VMNameForDeployment(cs.Namespace, cs.Name, 0)
 	snap, err := snapshot.HasHibernateSnapshot(ctx, r.Registry, vmName)
 	if err != nil {
-		// handled=true: falling through to the normal flow would clear the
-		// hibernate annotation mid-migration or fresh-boot over the snapshot.
+		// handled=true: the normal flow would clear the hibernate annotation mid-migration or fresh-boot over the snapshot
 		return true, ctrl.Result{}, fmt.Errorf("migrate: %w", err)
 	}
 
 	if !snap {
 		if desired == "" || main == nil || main.Spec.NodeName == "" || main.Spec.NodeName == desired {
-			// Settled / aborted / fresh create: the normal flow takes it from here.
+			// settled, aborted, or fresh create: the normal flow takes it from here
 			return false, ctrl.Result{}, nil
 		}
 		return r.startMigration(ctx, cs, classified, desired)
@@ -61,8 +55,7 @@ func (r *Reconciler) reconcileMigration(ctx context.Context, cs *cocoonv1.Cocoon
 	return r.advanceMigration(ctx, cs, classified, vmName, desired)
 }
 
-// startMigration quiesces the wrong-node main pod so vk pushes the :hibernate
-// snapshot; Migrating persists first so the fast-path can trust the phase.
+// startMigration persists Migrating before quiescing so the fast path can trust the phase.
 func (r *Reconciler) startMigration(ctx context.Context, cs *cocoonv1.CocoonSet, classified classifiedPods, desired string) (bool, ctrl.Result, error) {
 	logger := log.WithFunc("cocoonset.Reconciler.startMigration")
 	main := classified.main
@@ -78,16 +71,13 @@ func (r *Reconciler) startMigration(ctx context.Context, cs *cocoonv1.CocoonSet,
 	return true, ctrl.Result{RequeueAfter: requeueMigratePoll}, nil
 }
 
-// advanceMigration steps a migration whose :hibernate snapshot exists through
-// teardown -> recreate -> restore-wait -> snapshot drop.
 func (r *Reconciler) advanceMigration(ctx context.Context, cs *cocoonv1.CocoonSet, classified classifiedPods, vmName, desired string) (bool, ctrl.Result, error) {
 	logger := log.WithFunc("cocoonset.Reconciler.advanceMigration")
 	main := classified.main
 
 	switch {
 	case main != nil && desired != "" && main.Spec.NodeName != "" && main.Spec.NodeName != desired:
-		// A tag this controller never quiesced is a leftover (suspend/unsuspend
-		// never deletes it); restoring it would roll the VM back. Drop it.
+		// a tag this controller never quiesced is a leftover that would roll the VM back; drop it first
 		if !meta.ReadHibernateState(main) {
 			logger.Warnf(ctx, "migrate %s/%s: stale hibernate snapshot for %s, dropping it first", cs.Namespace, cs.Name, vmName)
 			if err := r.Registry.DeleteManifest(ctx, vmName, meta.HibernateSnapshotTag); err != nil {
@@ -95,8 +85,7 @@ func (r *Reconciler) advanceMigration(ctx context.Context, cs *cocoonv1.CocoonSe
 			}
 			return r.markMigrating(ctx, cs, classified)
 		}
-		// Snapshot landed; tear down the old-node pod. NodeName != "" spares the
-		// just-recreated restore pod (still unscheduled), else it loops delete/recreate.
+		// NodeName != "" spares the just-recreated, still unscheduled restore pod from a delete/recreate loop
 		logger.Infof(ctx, "migrate %s/%s: snapshot in registry, deleting old pod on %s", cs.Namespace, cs.Name, main.Spec.NodeName)
 		if err := r.Delete(ctx, main); err != nil && !apierrors.IsNotFound(err) {
 			return true, ctrl.Result{}, fmt.Errorf("migrate: delete old main %s/%s: %w", main.Namespace, main.Name, err)
@@ -104,7 +93,7 @@ func (r *Reconciler) advanceMigration(ctx context.Context, cs *cocoonv1.CocoonSe
 		return r.markMigrating(ctx, cs, classified)
 
 	case main == nil:
-		// Recreating also finishes an aborted migration — never strand the snapshot.
+		// recreating also finishes an aborted migration; never strand the snapshot
 		pod, err := buildAgentPod(cs, 0, "", "", r.Scheme)
 		if err != nil {
 			return true, ctrl.Result{}, fmt.Errorf("migrate: build main: %w", err)
@@ -112,7 +101,7 @@ func (r *Reconciler) advanceMigration(ctx context.Context, cs *cocoonv1.CocoonSe
 		meta.MarkRestoreFromHibernate(pod)
 		if err := r.Create(ctx, pod); err != nil {
 			if apierrors.IsAlreadyExists(err) {
-				// Old pod still Terminating; wait.
+				// old pod still Terminating; wait
 				return true, ctrl.Result{RequeueAfter: requeueWaitForMain}, nil
 			}
 			return true, ctrl.Result{}, fmt.Errorf("migrate: recreate main on %s: %w", cmp.Or(desired, "any node"), err)
@@ -121,8 +110,7 @@ func (r *Reconciler) advanceMigration(ctx context.Context, cs *cocoonv1.CocoonSe
 		return r.markMigrating(ctx, cs, classified)
 
 	case bool(meta.ReadHibernateState(main)) && (desired == "" || main.Spec.NodeName == desired):
-		// Quiesced on the target: a re-target back mid-migration or an unsuspend
-		// racing the tag (CR-owned was excluded pre-probe). Wake it in place.
+		// quiesced on the target: a re-target back or an unsuspend racing the tag; wake it in place
 		logger.Infof(ctx, "migrate %s/%s: waking %s in place", cs.Namespace, cs.Name, main.Name)
 		if err := commonk8s.PatchHibernateState(ctx, r.Client, main, false); err != nil {
 			return true, ctrl.Result{}, fmt.Errorf("migrate: clear hibernate on %s/%s: %w", main.Namespace, main.Name, err)
@@ -130,15 +118,14 @@ func (r *Reconciler) advanceMigration(ctx context.Context, cs *cocoonv1.CocoonSe
 		return r.markMigrating(ctx, cs, classified)
 
 	case !vmLive(main):
-		// Restoring — wait for vk. Without the durable Migrating phase this is
-		// a CR wake mid-flight, not a migration: disengage, don't repaint.
+		// without the durable Migrating phase this is a CR wake mid-flight, not a migration: disengage
 		if cs.Status.Phase != cocoonv1.CocoonSetPhaseMigrating {
 			return false, ctrl.Result{}, nil
 		}
 		return r.markMigrating(ctx, cs, classified)
 
 	default:
-		// Restored with a fresh VMID: drop the snapshot; next pass settles to Running.
+		// restored with a fresh VMID: drop the snapshot; the next pass settles Running
 		logger.Infof(ctx, "migrate %s/%s: restored on %s, dropping hibernate snapshot", cs.Namespace, cs.Name, desired)
 		if err := r.Registry.DeleteManifest(ctx, vmName, meta.HibernateSnapshotTag); err != nil {
 			return true, ctrl.Result{}, fmt.Errorf("migrate: drop hibernate snapshot %s: %w", vmName, err)
@@ -154,16 +141,12 @@ func (r *Reconciler) markMigrating(ctx context.Context, cs *cocoonv1.CocoonSet, 
 	return true, ctrl.Result{RequeueAfter: requeueMigratePoll}, nil
 }
 
-// podSettledOn reports the steady state of a pinned CocoonSet: the main pod
-// runs on the desired node with a live VM and no pending quiesce.
 func podSettledOn(main *corev1.Pod, desired string) bool {
 	return main != nil && main.Spec.NodeName == desired &&
 		vmLive(main) && !bool(meta.ReadHibernateState(main))
 }
 
-// vmLive reports a running container with a vk-assigned VMID. Both checks are
-// load-bearing: containerStatuses can momentarily report Running before vk
-// pulls the snapshot (same gate as the hibernation wake's vmClonedAndRunning).
+// vmLive needs both checks: containerStatuses can report Running before vk pulls the snapshot.
 func vmLive(pod *corev1.Pod) bool {
 	return meta.ParseVMRuntime(pod).VMID != "" && meta.IsContainerRunning(pod)
 }

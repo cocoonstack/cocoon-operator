@@ -31,21 +31,18 @@ const (
 	requeueMigratePoll = 5 * time.Second
 )
 
-// Reconciler watches CocoonSet resources and manages the lifecycle of agent
-// and toolbox pods to match the declared spec.
+// Reconciler drives agent and toolbox pods to match each CocoonSet spec.
 type Reconciler struct {
 	client.Client
 	APIReader client.Reader
 	Scheme    *runtime.Scheme
 	Registry  snapshot.Registry
 	Recorder  record.EventRecorder
-	// Concurrency caps in-flight reconciles; at 1 one slow registry probe
-	// stalls every other CocoonSet.
+	// Concurrency caps in-flight reconciles; at 1, one slow registry probe stalls every other CocoonSet.
 	Concurrency int
 }
 
-// SetupWithManager registers the reconciler with predicates that filter out
-// status-only churn to avoid reconcile storms.
+// SetupWithManager registers the reconciler with predicates that drop status-only churn.
 func (r *Reconciler) SetupWithManager(_ context.Context, mgr ctrl.Manager) error {
 	if r.Concurrency < 1 {
 		return fmt.Errorf("cocoonset concurrency must be at least 1, got %d", r.Concurrency)
@@ -57,8 +54,7 @@ func (r *Reconciler) SetupWithManager(_ context.Context, mgr ctrl.Manager) error
 		Complete(r)
 }
 
-// Reconcile drives a single CocoonSet toward its desired state by ensuring
-// the correct set of agent and toolbox pods exist.
+// Reconcile drives one CocoonSet toward its declared agent and toolbox pods.
 func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	logger := log.WithFunc("cocoonset.Reconciler.Reconcile")
 
@@ -87,14 +83,12 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 	}
 	classified := classifyPods(owned)
 
-	// Stamp before any spec-driven patch so observed-generation reflects
-	// the spec revision that produced the resulting state.
+	// stamp before any spec-driven patch so observed-generation names the revision that produced the state
 	if err := r.syncCocoonSetGeneration(ctx, &cs, classified); err != nil {
 		return ctrl.Result{}, err
 	}
 
-	// lifecycle-state=Failed is the vk-cocoon-driven terminal path (fires before
-	// Pod Phase flips); IsPodTerminal is the kubelet-driven one.
+	// lifecycle-state=Failed is the vk-cocoon terminal path and fires before Pod Phase flips; IsPodTerminal is the kubelet path
 	if classified.main != nil {
 		if reason := mainPodFailedReason(classified.main); reason != "" {
 			return r.handleFailedMainAgent(ctx, &cs, classified, reason)
@@ -112,14 +106,12 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 		return r.reconcileSuspend(ctx, &cs, classified)
 	}
 
-	// Cross-node migration owns the reconcile while in flight; runs before
-	// applyUnsuspend so its internal hibernate annotation is not cleared.
+	// migration runs before applyUnsuspend, which would otherwise clear its hibernate annotation
 	if handled, res, err := r.reconcileMigration(ctx, &cs, classified); handled {
 		return res, err
 	}
 
-	// Released-seat wake runs before createMainAgent, whose restore intent
-	// only covers CocoonHibernation CRs and would fresh-boot over the snapshot.
+	// wake runs before createMainAgent, whose CR-only restore intent would fresh-boot over the snapshot
 	if handled, res, err := r.reconcileWake(ctx, &cs, classified); handled {
 		return res, err
 	}
@@ -140,7 +132,7 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 		return r.createMainAgent(ctx, &cs, intent)
 	}
 
-	// Sub-agents fork from main and need it live before creation.
+	// sub-agents fork from main and need it live before creation
 	if !meta.IsPodReady(classified.main) {
 		return ctrl.Result{RequeueAfter: requeueWaitForMain},
 			r.patchStatus(ctx, &cs, buildStatus(&cs, classified, cocoonv1.CocoonSetPhasePending))
@@ -167,7 +159,7 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 	return ctrl.Result{RequeueAfter: subRequeue}, nil
 }
 
-// handleFailedMainAgent recreates a terminal main agent whose spec has drifted; parking in Failed would wait for a Ready the drifted pod can never reach.
+// handleFailedMainAgent recreates a drifted terminal main; parked in Failed it would wait for a Ready it can never reach.
 func (r *Reconciler) handleFailedMainAgent(ctx context.Context, cs *cocoonv1.CocoonSet, classified classifiedPods, reason string) (ctrl.Result, error) {
 	if !podSpecMatchesAgent(classified.main, cs, 0) {
 		if err := r.Delete(ctx, classified.main); err != nil && !apierrors.IsNotFound(err) {
@@ -179,10 +171,7 @@ func (r *Reconciler) handleFailedMainAgent(ctx context.Context, cs *cocoonv1.Coc
 	return ctrl.Result{}, r.patchStatus(ctx, cs, buildStatus(cs, classified, cocoonv1.CocoonSetPhaseFailed))
 }
 
-// createMainAgent builds and creates the missing main agent pod, stamping
-// restore-from-hibernate when the agent is hibernated so a cross-node recreate
-// restores from the :hibernate snapshot instead of booting fresh. It always
-// requeues so sub-agents fork off the now-created main.
+// createMainAgent always requeues so sub-agents fork off the new main.
 func (r *Reconciler) createMainAgent(ctx context.Context, cs *cocoonv1.CocoonSet, intent restoreIntent) (ctrl.Result, error) {
 	logger := log.WithFunc("cocoonset.Reconciler.createMainAgent")
 	mainPod, err := buildAgentPod(cs, 0, "", "", r.Scheme)
@@ -199,7 +188,7 @@ func (r *Reconciler) createMainAgent(ctx context.Context, cs *cocoonv1.CocoonSet
 	}
 	if err := r.Create(ctx, mainPod); err != nil {
 		if apierrors.IsAlreadyExists(err) {
-			// Old pod still Terminating; requeue and wait.
+			// old pod still Terminating; requeue and wait
 			return ctrl.Result{RequeueAfter: requeueWaitForMain}, nil
 		}
 		return ctrl.Result{}, fmt.Errorf("create main agent: %w", err)
@@ -208,9 +197,7 @@ func (r *Reconciler) createMainAgent(ctx context.Context, cs *cocoonv1.CocoonSet
 	return ctrl.Result{Requeue: true}, nil
 }
 
-// observeMainPodFailed records the failure on the event channel and, when the
-// signal came from a vk-cocoon lifecycle annotation, bumps the dedicated
-// counter so the Pod-Phase-only path doesn't dilute the metric's meaning.
+// observeMainPodFailed bumps the lifecycle counter only on the annotation path so Pod-Phase failures do not dilute it.
 func (r *Reconciler) observeMainPodFailed(cs *cocoonv1.CocoonSet, pod *corev1.Pod, reason string) {
 	if reason == "PodLifecycleFailed" {
 		phase := cmp.Or(string(cs.Status.Phase), string(cocoonv1.CocoonSetPhasePending))
@@ -226,9 +213,7 @@ func (r *Reconciler) emitEventf(cs *cocoonv1.CocoonSet, eventType, reason, forma
 	}
 }
 
-// mainPodFailedReason maps a pod's terminal signal to the Event reason that
-// the operator emits when transitioning the CocoonSet to Failed; "" means
-// the pod is not terminal.
+// mainPodFailedReason maps a terminal signal to its Failed Event reason; "" means not terminal.
 func mainPodFailedReason(pod *corev1.Pod) string {
 	if meta.ReadLifecycleState(pod) == meta.LifecycleStateFailed {
 		return "PodLifecycleFailed"
