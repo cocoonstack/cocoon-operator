@@ -99,8 +99,12 @@ func TestSuspendReleaseKeepsTerminalPod(t *testing.T) {
 	cli := relClient(t, cs, pod)
 	r := &Reconciler{Client: cli, Scheme: testScheme(t), Registry: &fakeRegistry{}}
 
-	if _, err := r.reconcileSuspendRelease(t.Context(), cs, singlePod(pod)); err != nil {
+	res, err := r.reconcileSuspendRelease(t.Context(), cs, singlePod(pod))
+	if err != nil {
 		t.Fatalf("reconcileSuspendRelease: %v", err)
+	}
+	if res.RequeueAfter != 0 {
+		t.Errorf("only-terminal set must stop polling, got RequeueAfter=%s", res.RequeueAfter)
 	}
 	var got corev1.Pod
 	if err := cli.Get(t.Context(), types.NamespacedName{Namespace: "ns", Name: "demo-0"}, &got); err != nil {

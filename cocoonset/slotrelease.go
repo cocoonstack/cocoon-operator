@@ -27,8 +27,8 @@ func (r *Reconciler) reconcileSuspendRelease(ctx context.Context, cs *cocoonv1.C
 		return ctrl.Result{}, fmt.Errorf("hibernatePolicy=release on %s/%s requires a configured registry", cs.Namespace, cs.Name)
 	}
 
-	if len(classified.allByName) == 0 {
-		// seat already released, or suspended before first boot: settle Suspended
+	if !hasLivePod(classified) {
+		// seat already released, suspended before first boot, or only terminal pods left: settle Suspended
 		return ctrl.Result{}, r.patchStatus(ctx, cs, buildStatus(cs, classified, cocoonv1.CocoonSetPhaseSuspended))
 	}
 
@@ -185,6 +185,15 @@ func (r *Reconciler) confirmReleasedDelete(ctx context.Context, main *corev1.Pod
 	default:
 		return false, ctrl.Result{}, nil
 	}
+}
+
+func hasLivePod(c classifiedPods) bool {
+	for _, pod := range c.allByName {
+		if !podIsTerminal(pod) {
+			return true
+		}
+	}
+	return false
 }
 
 func podUnschedulable(pod *corev1.Pod) string {
