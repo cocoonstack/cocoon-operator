@@ -151,7 +151,7 @@ func (r *Reconciler) rebuildSubAgent(ctx context.Context, logger *log.Fields, po
 			return false, 0, err
 		}
 		metrics.SubAgentDeadLetterTotal.WithLabelValues(cs.Namespace, cs.Name).Inc()
-		r.emitEventf(cs, corev1.EventTypeWarning, "SubAgentDeadLetter",
+		commonk8s.Eventf(r.Recorder, cs, corev1.EventTypeWarning, "SubAgentDeadLetter",
 			"slot %d exhausted %d rebuilds; pod %s left in dead-letter", slot, maxRebuildAttempts, pod.Name)
 		return false, 0, nil
 	}
@@ -173,7 +173,7 @@ func (r *Reconciler) rebuildSubAgent(ctx context.Context, logger *log.Fields, po
 		return false, 0, fmt.Errorf("delete terminal sub-agent slot %d: %w", slot, err)
 	}
 	metrics.SubAgentRebuildTotal.WithLabelValues(cs.Namespace, cs.Name).Inc()
-	r.emitEventf(cs, corev1.EventTypeNormal, "SubAgentRebuilding",
+	commonk8s.Eventf(r.Recorder, cs, corev1.EventTypeNormal, "SubAgentRebuilding",
 		"slot %d attempt %d/%d", slot, entry.Count, maxRebuildAttempts)
 	return true, 0, nil
 }

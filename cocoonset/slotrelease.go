@@ -103,7 +103,7 @@ func (r *Reconciler) reconcileWake(ctx context.Context, cs *cocoonv1.CocoonSet, 
 		// unschedulable is the out-of-stock signal: surface it but keep waiting for a seat
 		if msg := podUnschedulable(main); msg != "" {
 			metrics.SlotReleaseWakeUnschedulableTotal.WithLabelValues(cs.Namespace, cs.Name).Inc()
-			r.emitEventf(cs, corev1.EventTypeWarning, "WakeNoCapacity", "main pod %s unschedulable: %s", main.Name, msg)
+			commonk8s.Eventf(r.Recorder, cs, corev1.EventTypeWarning, "WakeNoCapacity", "main pod %s unschedulable: %s", main.Name, msg)
 		}
 		return true, ctrl.Result{RequeueAfter: requeueSuspendPoll},
 			r.patchStatus(ctx, cs, buildStatus(cs, classified, cocoonv1.CocoonSetPhaseWaking))

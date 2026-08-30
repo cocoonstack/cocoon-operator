@@ -265,26 +265,20 @@ func (r *Reconciler) firstTransitionAt(hib *cocoonv1.CocoonHibernation) bool {
 	return false
 }
 
-func (r *Reconciler) emitEventf(hib *cocoonv1.CocoonHibernation, eventType, reason, format string, args ...any) {
-	if r.Recorder != nil {
-		r.Recorder.Eventf(hib, eventType, reason, format, args...)
-	}
-}
-
 // announcePhaseExitf observes the phase-duration exit and emits its event, once per Ready transition.
 func (r *Reconciler) announcePhaseExitf(hib *cocoonv1.CocoonHibernation, result, eventType, reason, format string, args ...any) {
 	if !r.firstTransitionAt(hib) {
 		return
 	}
 	observePhaseExit(hib, result)
-	r.emitEventf(hib, eventType, reason, format, args...)
+	commonk8s.Eventf(r.Recorder, hib, eventType, reason, format, args...)
 }
 
 func (r *Reconciler) announceRetryFromFailed(hib *cocoonv1.CocoonHibernation, desire cocoonv1.HibernationDesire) {
 	if hib.Status.Phase != cocoonv1.CocoonHibernationPhaseFailed {
 		return
 	}
-	r.emitEventf(hib, corev1.EventTypeNormal, "RetryRequested", "retrying %s after prior failure", desire)
+	commonk8s.Eventf(r.Recorder, hib, corev1.EventTypeNormal, "RetryRequested", "retrying %s after prior failure", desire)
 }
 
 // markFailed sets the Failed phase. A subsequent reconcile can recover by overwriting it.

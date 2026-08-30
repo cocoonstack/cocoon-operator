@@ -19,6 +19,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/predicate"
 
 	cocoonv1 "github.com/cocoonstack/cocoon-common/apis/v1"
+	commonk8s "github.com/cocoonstack/cocoon-common/k8s"
 	"github.com/cocoonstack/cocoon-common/meta"
 	"github.com/cocoonstack/cocoon-operator/metrics"
 	"github.com/cocoonstack/cocoon-operator/snapshot"
@@ -94,7 +95,7 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 			return r.handleFailedMainAgent(ctx, &cs, classified, reason)
 		}
 		if cs.Status.Phase == cocoonv1.CocoonSetPhaseFailed && meta.IsPodReady(classified.main) {
-			r.emitEventf(&cs, corev1.EventTypeNormal, "RecoveredFromFailure",
+			commonk8s.Eventf(r.Recorder, &cs, corev1.EventTypeNormal, "RecoveredFromFailure",
 				"main pod %s/%s is Ready again", classified.main.Namespace, classified.main.Name)
 		}
 	}
@@ -199,13 +200,7 @@ func (r *Reconciler) observeMainPodFailed(cs *cocoonv1.CocoonSet, pod *corev1.Po
 		metrics.LifecycleStateFailedObservedTotal.WithLabelValues(phase).Inc()
 	}
 	msg := cmp.Or(pod.Annotations[meta.AnnotationLifecycleStateMessage], string(pod.Status.Phase))
-	r.emitEventf(cs, corev1.EventTypeWarning, reason, "main pod %s/%s: %s", pod.Namespace, pod.Name, msg)
-}
-
-func (r *Reconciler) emitEventf(cs *cocoonv1.CocoonSet, eventType, reason, format string, args ...any) {
-	if r.Recorder != nil {
-		r.Recorder.Eventf(cs, eventType, reason, format, args...)
-	}
+	commonk8s.Eventf(r.Recorder, cs, corev1.EventTypeWarning, reason, "main pod %s/%s: %s", pod.Namespace, pod.Name, msg)
 }
 
 // mainPodFailedReason maps a terminal signal to its Failed Event reason; "" means not terminal.
