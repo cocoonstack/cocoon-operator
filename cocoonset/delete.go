@@ -58,19 +58,21 @@ func (r *Reconciler) reconcileDelete(ctx context.Context, cs *cocoonv1.CocoonSet
 		return ctrl.Result{RequeueAfter: requeueWaitForMain}, nil
 	}
 
-	// :hibernate is always orphaned at teardown — drop unconditionally. :latest
-	// is kept when shouldKeepLatestTag says vk-cocoon pushed it for retag.
+	// :hibernate is always orphaned at teardown. :latest is kept when
+	// shouldKeepLatestTag says vk-cocoon pushed it for retag. Probe before each
+	// delete because some registries materialize an empty repository while
+	// authorizing DELETE for a tag that never existed.
 	if r.Registry != nil {
 		for _, name := range parseVMNamesAnnotation(cs.Annotations[annotationDeleteVMNames]) {
 			// Non-fatal, but log at error: a persistent delete failure (e.g. the
 			// registry SA lacking delete permission) silently leaks snapshots.
-			if err := r.Registry.DeleteManifest(ctx, name, meta.HibernateSnapshotTag); err != nil {
+			if err := r.deleteManifestIfPresent(ctx, name, meta.HibernateSnapshotTag); err != nil {
 				logger.Errorf(ctx, err, "delete snapshot %s:%s", name, meta.HibernateSnapshotTag)
 			}
 			if shouldKeepLatestTag(cs, name) {
 				continue
 			}
-			if err := r.Registry.DeleteManifest(ctx, name, meta.DefaultSnapshotTag); err != nil {
+			if err := r.deleteManifestIfPresent(ctx, name, meta.DefaultSnapshotTag); err != nil {
 				logger.Errorf(ctx, err, "delete snapshot %s:%s", name, meta.DefaultSnapshotTag)
 			}
 		}
@@ -84,6 +86,17 @@ func (r *Reconciler) reconcileDelete(ctx context.Context, cs *cocoonv1.CocoonSet
 		}
 	}
 	return ctrl.Result{}, nil
+}
+
+func (r *Reconciler) deleteManifestIfPresent(ctx context.Context, name, reference string) error {
+	present, err := r.Registry.HasManifest(ctx, name, reference)
+	if err != nil {
+		return fmt.Errorf("probe snapshot %s:%s: %w", name, reference, err)
+	}
+	if !present {
+		return nil
+	}
+	return r.Registry.DeleteManifest(ctx, name, reference)
 }
 
 // stashDeleteVMNames merges VM names from Status, the previously stashed
