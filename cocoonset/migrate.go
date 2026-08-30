@@ -28,8 +28,8 @@ func (r *Reconciler) reconcileMigration(ctx context.Context, cs *cocoonv1.Cocoon
 	if !migrating && main != nil && !bool(meta.ReadHibernateState(main)) && (main.Spec.NodeName == "" || main.Spec.NodeName == desired) {
 		return false, ctrl.Result{}, nil
 	}
-	// a CR-owned hibernation quiesced on the target is not a migration; CR hibernation is the long-lived idle state
-	if main != nil && bool(meta.ReadHibernateState(main)) && (desired == "" || main.Spec.NodeName == desired) {
+	// a CR-owned hibernation is never migrated; CR hibernation is the long-lived idle state and that reconciler owns the pod
+	if main != nil && bool(meta.ReadHibernateState(main)) {
 		hibByCR, err := r.podsHibernatedByCR(ctx, cs.Namespace)
 		if err != nil {
 			return true, ctrl.Result{}, fmt.Errorf("migrate: %w", err)

@@ -253,6 +253,35 @@ func TestMigrationLeavesCRHibernationAlone(t *testing.T) {
 	}
 }
 
+func TestMigrationLeavesCRHibernationAloneOffTarget(t *testing.T) {
+	cs := migCocoonSet("node-b")
+	main := migMainPod(t, cs, "node-a", "", false)
+	meta.HibernateState(true).Apply(main)
+	hib := &cocoonv1.CocoonHibernation{
+		ObjectMeta: metav1.ObjectMeta{Name: "h", Namespace: "ns"},
+		Spec: cocoonv1.CocoonHibernationSpec{
+			PodRef: cocoonv1.HibernationPodRef{Name: main.Name},
+			Desire: cocoonv1.HibernationDesireHibernate,
+		},
+	}
+	reg := &fakeRegistry{probeErr: errors.New("boom")}
+	cli := ctrlfake.NewClientBuilder().WithScheme(testScheme(t)).
+		WithObjects(cs, main, hib).WithStatusSubresource(&cocoonv1.CocoonSet{}).Build()
+	r := &Reconciler{Client: cli, Scheme: testScheme(t), Registry: reg}
+
+	handled, _, err := r.reconcileMigration(t.Context(), cs, classifiedPods{main: main})
+	if err != nil {
+		t.Fatalf("reconcileMigration: %v", err)
+	}
+	if handled {
+		t.Error("a CR-hibernated main off the target must wait for its CR, not migrate")
+	}
+	var got corev1.Pod
+	if err := cli.Get(t.Context(), types.NamespacedName{Namespace: "ns", Name: "demo-0"}, &got); err != nil {
+		t.Fatalf("CR-hibernated main must not be deleted: %v", err)
+	}
+}
+
 func TestMigrationFinishesAbortedRestore(t *testing.T) {
 	cs := migCocoonSet("")
 	cs.Status.Phase = cocoonv1.CocoonSetPhaseMigrating
