@@ -310,7 +310,6 @@ func (r *Reconciler) patchNotReady(ctx context.Context, hib *cocoonv1.CocoonHibe
 	return nil
 }
 
-// hasPhaseDeadline marks phases whose deadline resets on re-entry so a retry does not inherit the old clock.
 // podWatchPredicate admits creation, deletion, and annotation changes; status churn is left to the requeue poll.
 func podWatchPredicate() predicate.Predicate {
 	return predicate.Or(
@@ -323,6 +322,7 @@ func podWatchPredicate() predicate.Predicate {
 	)
 }
 
+// hasPhaseDeadline marks phases whose deadline resets on re-entry so a retry does not inherit the old clock.
 func hasPhaseDeadline(p cocoonv1.CocoonHibernationPhase) bool {
 	return p == cocoonv1.CocoonHibernationPhaseHibernating || p == cocoonv1.CocoonHibernationPhaseWaking
 }
