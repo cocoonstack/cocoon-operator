@@ -1,6 +1,6 @@
 # Observability
 
-Reconciler failures surface as K8s Events on the CR plus Prometheus counters on the controller-runtime `/metrics` endpoint:
+Reconciler failures surface as K8s Events on the CR plus Prometheus metrics (counters, and a duration histogram each for hibernate and wake) on the controller-runtime `/metrics` endpoint:
 
 | Event reason (CocoonHibernation) | Type |
 |---|---|

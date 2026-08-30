@@ -8,7 +8,7 @@ hibernate / wake requests). Both reconcilers are built on
 ```
 CocoonSet          ──► cocoonset.Reconciler    ──► main + sub-agent + toolbox pods
 CocoonHibernation  ──► hibernation.Reconciler  ──► HibernateState patch + registry manifest probe
-                                                ──► snapshot.Registry (OCI, via registryclient)
+                                                ──► snapshot.Registry (OCI, via cocoon-common/oci)
 ```
 
 ## Guides

@@ -14,10 +14,12 @@ the typed CRD shapes shipped from
 ```
 cocoon-operator/
 ├── main.go              # manager wiring + flag parsing
+├── logbridge.go         # controller-runtime logr sink over core/log
 ├── cocoonset/           # CocoonSet reconciler, pod builders, slot release, status diff
 ├── hibernation/         # CocoonHibernation reconciler
 ├── metrics/             # Prometheus collectors both reconcilers write to
-└── snapshot/            # snapshot.Registry interface consumed by both reconcilers
+├── snapshot/            # snapshot.Registry interface consumed by both reconcilers
+└── version/             # ldflags-injected build identity
 ```
 
 ## Quick start

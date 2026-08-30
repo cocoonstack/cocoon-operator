@@ -50,4 +50,4 @@ make import-crds
 git add config/crd/bases && git commit
 ```
 
-The `import-crds` target uses `go list -m -f '{{.Dir}}'` to resolve the cocoon-common module path and copies the YAML straight from there. CI rejects PRs that forget this step.
+The `import-crds` target uses `go list -m -f '{{.Dir}}'` to resolve the cocoon-common module path and copies the YAML straight from there. Nothing in CI checks for a stale copy, so run it in the same commit as the bump.

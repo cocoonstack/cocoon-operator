@@ -12,10 +12,12 @@ The binary entry point is `main.go`; the reconcilers themselves live in subpacka
 ```
 cocoon-operator/
 ├── main.go              # manager wiring + flag parsing
+├── logbridge.go         # controller-runtime logr sink over core/log
 ├── cocoonset/           # CocoonSet reconciler, pod builders, slot release, status diff
 ├── hibernation/         # CocoonHibernation reconciler
 ├── metrics/             # Prometheus collectors both reconcilers write to
-└── snapshot/            # snapshot.Registry interface consumed by both reconcilers
+├── snapshot/            # snapshot.Registry interface consumed by both reconcilers
+└── version/             # ldflags-injected build identity
 ```
 
 ## Component diagram
@@ -29,14 +31,14 @@ cocoon-operator/
 │  │  - finalizer + GC       │    │  - HibernateState patches   │  │
 │  │  - migration (nodeName) │    │  - registry manifest probe  │  │
 │  │  - main → subs → tbs    │    │  - Conditions               │  │
-│  │  - patch /status        │    │                             │  │
+│  │  - /status + Conditions │    │                             │  │
 │  └────────┬───────────────┘    └────────────┬────────────────┘  │
 │           │                                  │                   │
 │           ▼                                  ▼                   │
 │  ┌────────────────────┐         ┌──────────────────────┐        │
 │  │ controller-runtime │         │ snapshot.Registry    │        │
-│  │ Manager            │         │ (HTTP via            │        │
-│  │  - leader election │         │  registryclient)     │        │
+│  │ Manager            │         │ (OCI via             │        │
+│  │  - leader election │         │  cocoon-common/oci)  │        │
 │  │  - metrics :8080   │         └──────────────────────┘        │
 │  │  - probes :8081    │                                          │
 │  └────────────────────┘                                          │
