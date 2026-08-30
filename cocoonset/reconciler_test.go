@@ -13,6 +13,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 	ctrlfake "sigs.k8s.io/controller-runtime/pkg/client/fake"
 
 	cocoonv1 "github.com/cocoonstack/cocoon-common/apis/v1"
@@ -903,6 +904,45 @@ func TestSetupWithManagerRejectsInvalidConcurrency(t *testing.T) {
 			t.Errorf("concurrency %d must be rejected", n)
 		}
 	}
+}
+
+func TestEnsureSubAgentsStashesRemovedSlotVMName(t *testing.T) {
+	scheme := testScheme(t)
+	cs := newCocoonSet("demo", func(cs *cocoonv1.CocoonSet) { cs.Spec.Agent.Replicas = 1 })
+	sub := mustBuildAgentPod(t, cs, 1, "vk-ns-demo-0", "", scheme)
+	cs.Spec.Agent.Replicas = 0
+	cli := ctrlfake.NewClientBuilder().WithScheme(scheme).WithObjects(cs, sub).Build()
+	r := &Reconciler{Client: cli, Scheme: scheme}
+	if _, _, err := r.ensureSubAgents(t.Context(), cs, classifyPods([]corev1.Pod{*sub}), "vk-ns-demo-0", "", r.newRestoreIntent(t.Context(), cs.Namespace)); err != nil {
+		t.Fatalf("ensureSubAgents: %v", err)
+	}
+	if names := stashedVMNames(t, cli); !slices.Contains(names, "vk-ns-demo-1") {
+		t.Errorf("delete-vm-names = %v, want vk-ns-demo-1 stashed for teardown GC", names)
+	}
+}
+
+func TestEnsureToolboxesStashesRemovedToolboxVMName(t *testing.T) {
+	scheme := testScheme(t)
+	cs := newCocoonSet("demo")
+	tb := cocoonv1.ToolboxSpec{Name: "tb", Image: "image", Mode: cocoonv1.ToolboxModeRun}
+	pod := mustBuildToolboxPod(t, cs, tb, scheme)
+	cli := ctrlfake.NewClientBuilder().WithScheme(scheme).WithObjects(cs, pod).Build()
+	r := &Reconciler{Client: cli, Scheme: scheme}
+	if _, err := r.ensureToolboxes(t.Context(), cs, classifyPods([]corev1.Pod{*pod}), r.newRestoreIntent(t.Context(), cs.Namespace)); err != nil {
+		t.Fatalf("ensureToolboxes: %v", err)
+	}
+	if names := stashedVMNames(t, cli); !slices.Contains(names, "vk-ns-demo-tb") {
+		t.Errorf("delete-vm-names = %v, want vk-ns-demo-tb stashed for teardown GC", names)
+	}
+}
+
+func stashedVMNames(t *testing.T, cli client.Client) []string {
+	t.Helper()
+	var cs cocoonv1.CocoonSet
+	if err := cli.Get(t.Context(), types.NamespacedName{Namespace: "ns", Name: "demo"}, &cs); err != nil {
+		t.Fatalf("get cocoonset: %v", err)
+	}
+	return parseVMNamesAnnotation(cs.Annotations[annotationDeleteVMNames])
 }
 
 func lifecycleHibernated(p *corev1.Pod) *corev1.Pod {

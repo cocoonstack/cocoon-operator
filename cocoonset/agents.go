@@ -62,6 +62,9 @@ func (r *Reconciler) ensureSubAgents(ctx context.Context, cs *cocoonv1.CocoonSet
 			continue
 		}
 		pod := classified.sub[slot]
+		if err := r.stashDeleteVMNames(ctx, cs, []corev1.Pod{*pod}); err != nil {
+			return changed, requeueAfter, fmt.Errorf("stash vm name of sub-agent slot %d: %w", slot, err)
+		}
 		if err := r.Delete(ctx, pod); err != nil {
 			if apierrors.IsNotFound(err) {
 				continue

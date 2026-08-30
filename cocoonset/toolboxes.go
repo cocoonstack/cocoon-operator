@@ -75,6 +75,9 @@ func (r *Reconciler) ensureToolboxes(ctx context.Context, cs *cocoonv1.CocoonSet
 			continue
 		}
 		pod := classified.toolbox[name]
+		if err := r.stashDeleteVMNames(ctx, cs, []corev1.Pod{*pod}); err != nil {
+			return changed, fmt.Errorf("stash vm name of toolbox %s: %w", name, err)
+		}
 		if err := r.Delete(ctx, pod); err != nil {
 			if apierrors.IsNotFound(err) {
 				continue
