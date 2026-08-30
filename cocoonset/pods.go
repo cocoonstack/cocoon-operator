@@ -33,18 +33,6 @@ type classifiedPods struct {
 	allByName map[string]*corev1.Pod
 }
 
-func (c classifiedPods) forEachSorted(ctx context.Context, fn func(*corev1.Pod) error) error {
-	for _, name := range slices.Sorted(maps.Keys(c.allByName)) {
-		if err := ctx.Err(); err != nil {
-			return err
-		}
-		if err := fn(c.allByName[name]); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
 // classifyPods keeps unknown-role or unparsable-slot pods visible through allByName only.
 func classifyPods(pods []corev1.Pod) classifiedPods {
 	out := classifiedPods{
@@ -71,6 +59,18 @@ func classifyPods(pods []corev1.Pod) classifiedPods {
 		}
 	}
 	return out
+}
+
+func (c classifiedPods) forEachSorted(ctx context.Context, fn func(*corev1.Pod) error) error {
+	for _, name := range slices.Sorted(maps.Keys(c.allByName)) {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		if err := fn(c.allByName[name]); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func buildAgentPod(cs *cocoonv1.CocoonSet, slot int32, mainVMName, bindNodeName string, scheme *runtime.Scheme) (*corev1.Pod, error) {
