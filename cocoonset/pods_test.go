@@ -637,6 +637,21 @@ func TestPodSpecMatchesAgentIgnoresAffinity(t *testing.T) {
 	}
 }
 
+func TestBuildAgentPodDoesNotShareSpecResourceMaps(t *testing.T) {
+	storage := resource.MustParse("20Gi")
+	cs := newCocoonSet("demo", func(cs *cocoonv1.CocoonSet) {
+		cs.Spec.Agent.Resources.Limits = corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("1")}
+		cs.Spec.Agent.Storage = &storage
+	})
+	pod := mustBuildAgentPod(t, cs, 0, "", "", testScheme(t))
+	if _, ok := cs.Spec.Agent.Resources.Limits[corev1.ResourceEphemeralStorage]; ok {
+		t.Error("buildAgentPod must not write ephemeral-storage into the CocoonSet spec")
+	}
+	if _, ok := pod.Spec.Containers[0].Resources.Limits[corev1.ResourceEphemeralStorage]; !ok {
+		t.Error("pod must carry the ephemeral-storage limit")
+	}
+}
+
 func testScheme(t testing.TB) *runtime.Scheme {
 	t.Helper()
 	scheme := runtime.NewScheme()

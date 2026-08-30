@@ -92,7 +92,7 @@ func buildAgentPod(cs *cocoonv1.CocoonSet, slot int32, mainVMName, bindNodeName 
 
 	meta.FromAgentSpec(cs.Spec.Agent, vmName, cs.Spec.SnapshotPolicy, forkFrom).Apply(pod)
 
-	pod.Spec.Containers[0].Resources = cs.Spec.Agent.Resources
+	pod.Spec.Containers[0].Resources = *cs.Spec.Agent.Resources.DeepCopy()
 	applyStorageRequest(pod, cs.Spec.Agent.Storage)
 	pod.Spec.Containers[0].EnvFrom = cs.Spec.Agent.EnvFrom
 	if cs.Spec.Agent.ServiceAccountName != "" {
@@ -153,7 +153,7 @@ func buildToolboxPod(cs *cocoonv1.CocoonSet, tb cocoonv1.ToolboxSpec, scheme *ru
 		vmRuntime := meta.VMRuntime{VMID: tb.StaticVMID, IP: tb.StaticIP, VNCPort: tb.VNCPort}
 		vmRuntime.Apply(pod)
 	}
-	pod.Spec.Containers[0].Resources = tb.Resources
+	pod.Spec.Containers[0].Resources = *tb.Resources.DeepCopy()
 	applyStorageRequest(pod, tb.Storage)
 	return pod, nil
 }
