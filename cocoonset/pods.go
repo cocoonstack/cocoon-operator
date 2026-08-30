@@ -227,10 +227,7 @@ func podSpecMatchesAgent(pod *corev1.Pod, cs *cocoonv1.CocoonSet, slot int32) bo
 	if !equality.Semantic.DeepEqual(pod.Spec.Containers[0].EnvFrom, cs.Spec.Agent.EnvFrom) {
 		return false
 	}
-	if !schedulingMatches(pod, cs) {
-		return false
-	}
-	return true
+	return schedulingMatches(pod, cs)
 }
 
 // podSpecMatchesToolbox reports whether a running toolbox pod still matches the current spec.
@@ -243,13 +240,11 @@ func podSpecMatchesToolbox(pod *corev1.Pod, cs *cocoonv1.CocoonSet, tb cocoonv1.
 	if !schedulingMatches(pod, cs) {
 		return false
 	}
-	if tb.Mode == cocoonv1.ToolboxModeStatic {
-		got := meta.ParseVMRuntime(pod)
-		if got.VMID != tb.StaticVMID || got.IP != tb.StaticIP || got.VNCPort != tb.VNCPort {
-			return false
-		}
+	if tb.Mode != cocoonv1.ToolboxModeStatic {
+		return true
 	}
-	return true
+	got := meta.ParseVMRuntime(pod)
+	return got.VMID == tb.StaticVMID && got.IP == tb.StaticIP && got.VNCPort == tb.VNCPort
 }
 
 // vmSpecMatches uses struct equality so any future VMSpec field is covered.

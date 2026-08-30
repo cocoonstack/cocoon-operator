@@ -151,12 +151,8 @@ func shouldKeepLatestTag(cs *cocoonv1.CocoonSet, vmName string) bool {
 }
 
 func parseVMNamesAnnotation(raw string) []string {
-	if raw == "" {
-		return nil
-	}
-	parts := strings.Split(raw, ",")
-	out := make([]string, 0, len(parts))
-	for _, p := range parts {
+	var out []string
+	for p := range strings.SplitSeq(raw, ",") {
 		if p = strings.TrimSpace(p); p != "" {
 			out = append(out, p)
 		}

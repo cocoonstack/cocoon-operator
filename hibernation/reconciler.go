@@ -297,16 +297,7 @@ func (r *Reconciler) announceRetryFromFailed(hib *cocoonv1.CocoonHibernation, de
 
 // markFailed sets the Failed phase. A subsequent reconcile can recover by overwriting it.
 func (r *Reconciler) markFailed(ctx context.Context, hib *cocoonv1.CocoonHibernation, msg string) error {
-	if err := commonk8s.PatchStatus(ctx, r.Client, hib, func(h *cocoonv1.CocoonHibernation) {
-		h.Status.ObservedGeneration = h.Generation
-		h.Status.Phase = cocoonv1.CocoonHibernationPhaseFailed
-		apimeta.SetStatusCondition(&h.Status.Conditions, commonk8s.NewReadyCondition(
-			h.Generation, metav1.ConditionFalse, conditionReasonFailed, msg,
-		))
-	}); err != nil {
-		return fmt.Errorf("patch failed status: %w", err)
-	}
-	return nil
+	return r.patchNotReady(ctx, hib, cocoonv1.CocoonHibernationPhaseFailed, conditionReasonFailed, msg)
 }
 
 // markPending never demotes Hibernated or Waking: they carry cocoonset's restore intent, and losing it would fresh-boot a recreate.
@@ -319,14 +310,16 @@ func (r *Reconciler) markPending(ctx context.Context, hib *cocoonv1.CocoonHibern
 			return nil
 		}
 	}
+	return r.patchNotReady(ctx, hib, cocoonv1.CocoonHibernationPhasePending, conditionReasonPending, msg)
+}
+
+func (r *Reconciler) patchNotReady(ctx context.Context, hib *cocoonv1.CocoonHibernation, phase cocoonv1.CocoonHibernationPhase, reason, msg string) error {
 	if err := commonk8s.PatchStatus(ctx, r.Client, hib, func(h *cocoonv1.CocoonHibernation) {
 		h.Status.ObservedGeneration = h.Generation
-		h.Status.Phase = cocoonv1.CocoonHibernationPhasePending
-		apimeta.SetStatusCondition(&h.Status.Conditions, commonk8s.NewReadyCondition(
-			h.Generation, metav1.ConditionFalse, conditionReasonPending, msg,
-		))
+		h.Status.Phase = phase
+		apimeta.SetStatusCondition(&h.Status.Conditions, commonk8s.NewReadyCondition(h.Generation, metav1.ConditionFalse, reason, msg))
 	}); err != nil {
-		return fmt.Errorf("patch pending status: %w", err)
+		return fmt.Errorf("patch %s status: %w", phase, err)
 	}
 	return nil
 }
