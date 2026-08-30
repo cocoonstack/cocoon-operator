@@ -16,6 +16,7 @@ import (
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 	ctrl "sigs.k8s.io/controller-runtime"
 	ctrlfake "sigs.k8s.io/controller-runtime/pkg/client/fake"
+	"sigs.k8s.io/controller-runtime/pkg/event"
 
 	cocoonv1 "github.com/cocoonstack/cocoon-common/apis/v1"
 	commonk8s "github.com/cocoonstack/cocoon-common/k8s"
@@ -1298,6 +1299,23 @@ func TestSetupWithManagerRejectsInvalidConcurrency(t *testing.T) {
 		if err := (&Reconciler{Concurrency: n}).SetupWithManager(t.Context(), nil); err == nil {
 			t.Errorf("concurrency %d must be rejected", n)
 		}
+	}
+}
+
+func TestPodWatchPredicateIgnoresStatusOnlyUpdates(t *testing.T) {
+	old := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "demo-0", Namespace: "ns", Annotations: map[string]string{"a": "1"}}}
+	updated := old.DeepCopy()
+	updated.Status.Phase = corev1.PodRunning
+	p := podWatchPredicate()
+	if p.Update(event.UpdateEvent{ObjectOld: old, ObjectNew: updated}) {
+		t.Error("status-only update must not enqueue")
+	}
+	updated.Annotations["a"] = "2"
+	if !p.Update(event.UpdateEvent{ObjectOld: old, ObjectNew: updated}) {
+		t.Error("annotation change must enqueue")
+	}
+	if !p.Create(event.CreateEvent{Object: old}) || !p.Delete(event.DeleteEvent{Object: old}) {
+		t.Error("create and delete must enqueue")
 	}
 }
 

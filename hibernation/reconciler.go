@@ -90,14 +90,7 @@ func (r *Reconciler) SetupWithManager(ctx context.Context, mgr ctrl.Manager) err
 		Watches(
 			&corev1.Pod{},
 			handler.EnqueueRequestsFromMapFunc(r.hibernationsTargetingPod),
-			// ignore status-only churn; only creation, deletion, and annotation changes matter
-			builder.WithPredicates(predicate.Or(
-				predicate.AnnotationChangedPredicate{},
-				predicate.Funcs{
-					CreateFunc: func(event.CreateEvent) bool { return true },
-					DeleteFunc: func(event.DeleteEvent) bool { return true },
-				},
-			)),
+			builder.WithPredicates(podWatchPredicate()),
 		).
 		WithOptions(controller.Options{MaxConcurrentReconciles: r.Concurrency}).
 		Complete(r)
@@ -325,6 +318,18 @@ func (r *Reconciler) patchNotReady(ctx context.Context, hib *cocoonv1.CocoonHibe
 }
 
 // hasPhaseDeadline marks phases whose deadline resets on re-entry so a retry does not inherit the old clock.
+// podWatchPredicate admits creation, deletion, and annotation changes; status churn is left to the requeue poll.
+func podWatchPredicate() predicate.Predicate {
+	return predicate.Or(
+		predicate.AnnotationChangedPredicate{},
+		predicate.Funcs{
+			CreateFunc: func(event.CreateEvent) bool { return true },
+			DeleteFunc: func(event.DeleteEvent) bool { return true },
+			UpdateFunc: func(event.UpdateEvent) bool { return false },
+		},
+	)
+}
+
 func hasPhaseDeadline(p cocoonv1.CocoonHibernationPhase) bool {
 	return p == cocoonv1.CocoonHibernationPhaseHibernating || p == cocoonv1.CocoonHibernationPhaseWaking
 }
