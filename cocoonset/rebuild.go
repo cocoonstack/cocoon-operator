@@ -22,16 +22,12 @@ type rebuildEntry struct {
 }
 
 func readRebuildHistory(cs *cocoonv1.CocoonSet) map[int32]rebuildEntry {
-	raw := cs.Annotations[annotationRebuildHistory]
-	if raw == "" {
-		return map[int32]rebuildEntry{}
-	}
 	m := map[int32]rebuildEntry{}
-	if err := json.Unmarshal([]byte(raw), &m); err != nil {
-		return map[int32]rebuildEntry{}
-	}
-	if m == nil { // json "null" leaves m nil; callers write to it
-		return map[int32]rebuildEntry{}
+	if raw := cs.Annotations[annotationRebuildHistory]; raw != "" {
+		// json "null" leaves m nil; callers write to it
+		if err := json.Unmarshal([]byte(raw), &m); err != nil || m == nil {
+			return map[int32]rebuildEntry{}
+		}
 	}
 	return m
 }

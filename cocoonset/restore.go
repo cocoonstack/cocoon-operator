@@ -47,6 +47,15 @@ func (r *Reconciler) podsRestorableByCR(ctx context.Context, namespace string) (
 	})
 }
 
+func (r *Reconciler) markRestoreFromIntent(ctx context.Context, pod *corev1.Pod, intent restoreIntent) error {
+	restorable, err := intent()
+	if err != nil {
+		return err
+	}
+	_, want := restorable[pod.Name]
+	return r.markRestoreIfHibernated(ctx, pod, want)
+}
+
 // markRestoreIfHibernated fails closed; a fresh boot on probe error would let a re-hibernate overwrite the snapshot.
 func (r *Reconciler) markRestoreIfHibernated(ctx context.Context, pod *corev1.Pod, intent bool) error {
 	logger := log.WithFunc("cocoonset.Reconciler.markRestoreIfHibernated")

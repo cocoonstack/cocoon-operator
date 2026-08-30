@@ -95,10 +95,7 @@ func (r *Reconciler) deleteManifestIfPresent(ctx context.Context, name, referenc
 
 func (r *Reconciler) stashDeleteVMNames(ctx context.Context, cs *cocoonv1.CocoonSet, owned []corev1.Pod) error {
 	have := make(map[string]struct{})
-	for _, n := range statusVMNames(cs) {
-		have[n] = struct{}{}
-	}
-	for _, n := range parseVMNamesAnnotation(cs.Annotations[annotationDeleteVMNames]) {
+	for _, n := range slices.Concat(statusVMNames(cs), parseVMNamesAnnotation(cs.Annotations[annotationDeleteVMNames])) {
 		have[n] = struct{}{}
 	}
 	for i := range owned {

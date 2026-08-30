@@ -41,18 +41,14 @@ func (r *Reconciler) ensureSubAgents(ctx context.Context, cs *cocoonv1.CocoonSet
 		if err != nil {
 			return changed, requeueAfter, err
 		}
-		if deleted {
-			changed = true
-		}
+		changed = changed || deleted
 		if wait > 0 && (requeueAfter == 0 || wait < requeueAfter) {
 			requeueAfter = wait
 		}
 	}
 
 	created, err := r.createSubAgents(ctx, logger, cs, missing, mainVMName, mainNodeName, intent)
-	if created {
-		changed = true
-	}
+	changed = changed || created
 	if err != nil {
 		return changed, requeueAfter, err
 	}
@@ -81,11 +77,6 @@ func (r *Reconciler) createSubAgents(ctx context.Context, logger *log.Fields, cs
 	if len(missing) == 0 {
 		return false, nil
 	}
-	// resolved before the fan-out so the goroutines only read it
-	restorable, err := intent()
-	if err != nil {
-		return false, err
-	}
 	g, gctx := errgroup.WithContext(ctx)
 	g.SetLimit(subAgentCreateConcurrency)
 	var created atomic.Bool
@@ -95,8 +86,7 @@ func (r *Reconciler) createSubAgents(ctx context.Context, logger *log.Fields, cs
 			if err != nil {
 				return fmt.Errorf("build sub-agent slot %d: %w", slot, err)
 			}
-			_, wantRestore := restorable[subPod.Name]
-			if err := r.markRestoreIfHibernated(gctx, subPod, wantRestore); err != nil {
+			if err := r.markRestoreFromIntent(gctx, subPod, intent); err != nil {
 				return fmt.Errorf("mark restore sub-agent slot %d: %w", slot, err)
 			}
 			if err := r.Create(gctx, subPod); err != nil {
@@ -140,9 +130,8 @@ func (r *Reconciler) rebuildDeadLetteredOnDrift(ctx context.Context, logger *log
 	}
 	history := readRebuildHistory(cs)
 	if _, ok := history[slot]; ok {
-		next := maps.Clone(history)
-		delete(next, slot)
-		if err := r.patchRebuildHistory(ctx, cs, next); err != nil {
+		delete(history, slot)
+		if err := r.patchRebuildHistory(ctx, cs, history); err != nil {
 			return false, 0, fmt.Errorf("reset rebuild history for slot %d: %w", slot, err)
 		}
 	}
@@ -172,19 +161,20 @@ func (r *Reconciler) rebuildSubAgent(ctx context.Context, logger *log.Fields, po
 			return false, remaining, nil
 		}
 	}
-	next := maps.Clone(history)
-	next[slot] = rebuildEntry{Count: entry.Count + 1, LastDeleted: time.Now()}
-	if err := r.patchRebuildHistory(ctx, cs, next); err != nil {
+	entry.Count++
+	entry.LastDeleted = time.Now()
+	history[slot] = entry
+	if err := r.patchRebuildHistory(ctx, cs, history); err != nil {
 		return false, 0, fmt.Errorf("persist rebuild history: %w", err)
 	}
 	logger.Infof(ctx, "sub-agent %s/%s slot %d terminal (phase=%s lifecycle=%s), rebuild attempt %d/%d",
-		pod.Namespace, pod.Name, slot, pod.Status.Phase, meta.ReadLifecycleState(pod), next[slot].Count, maxRebuildAttempts)
+		pod.Namespace, pod.Name, slot, pod.Status.Phase, meta.ReadLifecycleState(pod), entry.Count, maxRebuildAttempts)
 	if err := r.Delete(ctx, pod); err != nil && !apierrors.IsNotFound(err) {
 		return false, 0, fmt.Errorf("delete terminal sub-agent slot %d: %w", slot, err)
 	}
 	metrics.SubAgentRebuildTotal.WithLabelValues(cs.Namespace, cs.Name).Inc()
 	r.emitEventf(cs, corev1.EventTypeNormal, "SubAgentRebuilding",
-		"slot %d attempt %d/%d", slot, next[slot].Count, maxRebuildAttempts)
+		"slot %d attempt %d/%d", slot, entry.Count, maxRebuildAttempts)
 	return true, 0, nil
 }
 

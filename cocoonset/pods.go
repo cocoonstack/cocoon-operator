@@ -213,26 +213,22 @@ func podSpecMatchesAgent(pod *corev1.Pod, cs *cocoonv1.CocoonSet, slot int32) bo
 		forkFrom = current.ForkFrom
 	}
 	want := meta.FromAgentSpec(cs.Spec.Agent, current.VMName, cs.Spec.SnapshotPolicy, forkFrom)
-	if !vmSpecMatches(current, want) || !resourcesMatch(pod, cs.Spec.Agent.Resources) {
+	if current != want || !resourcesMatch(pod, cs.Spec.Agent.Resources) {
 		return false
 	}
 	// K8s fills ServiceAccountName with "default" when unset; treat empty and "default" as equal
 	podSA := cmp.Or(pod.Spec.ServiceAccountName, "default")
 	wantSA := cmp.Or(cs.Spec.Agent.ServiceAccountName, "default")
-	if podSA != wantSA {
-		return false
-	}
-	if !equality.Semantic.DeepEqual(pod.Spec.Containers[0].EnvFrom, cs.Spec.Agent.EnvFrom) {
-		return false
-	}
-	return schedulingMatches(pod, cs)
+	return podSA == wantSA &&
+		equality.Semantic.DeepEqual(pod.Spec.Containers[0].EnvFrom, cs.Spec.Agent.EnvFrom) &&
+		schedulingMatches(pod, cs)
 }
 
 // podSpecMatchesToolbox reports whether a running toolbox pod still matches the current spec.
 func podSpecMatchesToolbox(pod *corev1.Pod, cs *cocoonv1.CocoonSet, tb cocoonv1.ToolboxSpec) bool {
 	current := meta.ParseVMSpec(pod)
 	want := meta.FromToolboxSpec(tb, current.VMName, cs.Spec.SnapshotPolicy)
-	if !vmSpecMatches(current, want) || !resourcesMatch(pod, tb.Resources) {
+	if current != want || !resourcesMatch(pod, tb.Resources) {
 		return false
 	}
 	if !schedulingMatches(pod, cs) {
@@ -243,11 +239,6 @@ func podSpecMatchesToolbox(pod *corev1.Pod, cs *cocoonv1.CocoonSet, tb cocoonv1.
 	}
 	got := meta.ParseVMRuntime(pod)
 	return got.VMID == tb.StaticVMID && got.IP == tb.StaticIP && got.VNCPort == tb.VNCPort
-}
-
-// vmSpecMatches uses struct equality so any future VMSpec field is covered.
-func vmSpecMatches(got, want meta.VMSpec) bool {
-	return got == want
 }
 
 func resourcesMatch(pod *corev1.Pod, want corev1.ResourceRequirements) bool {
@@ -272,13 +263,7 @@ func resourcesMatch(pod *corev1.Pod, want corev1.ResourceRequirements) bool {
 func quantityEqual(a, b corev1.ResourceList, name corev1.ResourceName) bool {
 	qa, oka := a[name]
 	qb, okb := b[name]
-	if !oka && !okb {
-		return true
-	}
-	if !oka || !okb {
-		return false
-	}
-	return qa.Cmp(qb) == 0
+	return oka == okb && qa.Cmp(qb) == 0
 }
 
 func schedulingMatches(pod *corev1.Pod, cs *cocoonv1.CocoonSet) bool {

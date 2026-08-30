@@ -44,9 +44,8 @@ func (s *crSink) WithValues(kvs ...any) logr.LogSink {
 
 func (s *crSink) WithName(name string) logr.LogSink {
 	next := *s
-	if s.name == "" {
-		next.name = name
-	} else {
+	next.name = name
+	if s.name != "" {
 		next.name = s.name + "." + name
 	}
 	return &next

@@ -1,7 +1,6 @@
 package cocoonset
 
 import (
-	"cmp"
 	"context"
 	"fmt"
 	"maps"
@@ -101,17 +100,14 @@ func (r *Reconciler) applySuspend(ctx context.Context, classified classifiedPods
 // applyUnsuspend skips pods targeted by an active CocoonHibernation CR to avoid racing that reconciler.
 func (r *Reconciler) applyUnsuspend(ctx context.Context, namespace string, classified classifiedPods) error {
 	var hibernated []*corev1.Pod
-	for _, pod := range classified.allByName {
-		if meta.ReadHibernateState(pod) {
+	for _, name := range slices.Sorted(maps.Keys(classified.allByName)) {
+		if pod := classified.allByName[name]; meta.ReadHibernateState(pod) {
 			hibernated = append(hibernated, pod)
 		}
 	}
 	if len(hibernated) == 0 {
 		return nil
 	}
-	slices.SortFunc(hibernated, func(a, b *corev1.Pod) int {
-		return cmp.Compare(a.Name, b.Name)
-	})
 
 	hibernatedByCR, err := r.podsHibernatedByCR(ctx, namespace)
 	if err != nil {

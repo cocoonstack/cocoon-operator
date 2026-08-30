@@ -178,12 +178,7 @@ func (r *Reconciler) createMainAgent(ctx context.Context, cs *cocoonv1.CocoonSet
 	if err != nil {
 		return ctrl.Result{}, fmt.Errorf("build main agent: %w", err)
 	}
-	restorable, err := intent()
-	if err != nil {
-		return ctrl.Result{}, err
-	}
-	_, wantRestore := restorable[mainPod.Name]
-	if err := r.markRestoreIfHibernated(ctx, mainPod, wantRestore); err != nil {
+	if err := r.markRestoreFromIntent(ctx, mainPod, intent); err != nil {
 		return ctrl.Result{}, err
 	}
 	if err := r.Create(ctx, mainPod); err != nil {

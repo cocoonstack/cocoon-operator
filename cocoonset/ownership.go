@@ -22,11 +22,7 @@ func (r *Reconciler) listOwnedPods(ctx context.Context, cs *cocoonv1.CocoonSet) 
 	); err != nil {
 		return nil, err
 	}
-	return filterOwnedPods(podList.Items, cs), nil
-}
-
-func filterOwnedPods(pods []corev1.Pod, owner metav1.Object) []corev1.Pod {
-	return slices.DeleteFunc(pods, func(p corev1.Pod) bool {
-		return !metav1.IsControlledBy(&p, owner)
-	})
+	return slices.DeleteFunc(podList.Items, func(p corev1.Pod) bool {
+		return !metav1.IsControlledBy(&p, cs)
+	}), nil
 }

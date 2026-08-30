@@ -218,10 +218,9 @@ func (r *Reconciler) hibernationsTargetingPod(ctx context.Context, obj client.Ob
 			Warnf(ctx, "list hibernations targeting %s/%s: %v", obj.GetNamespace(), obj.GetName(), err)
 		return nil
 	}
-	out := make([]ctrl.Request, 0, len(list.Items))
+	out := make([]ctrl.Request, len(list.Items))
 	for i := range list.Items {
-		h := &list.Items[i]
-		out = append(out, ctrl.Request{NamespacedName: types.NamespacedName{Namespace: h.Namespace, Name: h.Name}})
+		out[i] = ctrl.Request{NamespacedName: client.ObjectKeyFromObject(&list.Items[i])}
 	}
 	return out
 }
