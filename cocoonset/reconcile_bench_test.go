@@ -21,8 +21,6 @@ const (
 	benchRegistryDelay = 5 * time.Millisecond
 )
 
-// BenchmarkReconcileThroughput drives independent CocoonSets that each block on
-// one fixed-latency registry probe; concurrency 1 is the pre-change behavior.
 func BenchmarkReconcileThroughput(b *testing.B) {
 	for _, concurrency := range []int{1, 4, 8} {
 		b.Run(fmt.Sprintf("concurrency=%d", concurrency), func(b *testing.B) {
@@ -44,8 +42,6 @@ func BenchmarkReconcileThroughput(b *testing.B) {
 	}
 }
 
-// runReconciles drains sets through a worker pool, the shape controller-runtime
-// gives MaxConcurrentReconciles.
 func runReconciles(b *testing.B, r *Reconciler, sets []*cocoonv1.CocoonSet, concurrency int) []time.Duration {
 	b.Helper()
 	queue := make(chan *cocoonv1.CocoonSet, len(sets))
@@ -72,8 +68,6 @@ func runReconciles(b *testing.B, r *Reconciler, sets []*cocoonv1.CocoonSet, conc
 	return latencies
 }
 
-// newBenchFixture builds independent CocoonSets each missing its main agent and
-// carrying a hibernated CR, so every reconcile pays exactly one registry probe.
 func newBenchFixture(b *testing.B) (*Reconciler, []*cocoonv1.CocoonSet) {
 	b.Helper()
 	scheme := testScheme(b)

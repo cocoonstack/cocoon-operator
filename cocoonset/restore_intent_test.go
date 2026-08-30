@@ -18,8 +18,6 @@ import (
 	"github.com/cocoonstack/cocoon-common/meta"
 )
 
-// TestReconcileSteadyStateSkipsHibernationList pins the lazy load: with every
-// desired pod present, the reconcile must not pay the CocoonHibernation List.
 func TestReconcileSteadyStateSkipsHibernationList(t *testing.T) {
 	scheme := testScheme(t)
 	cs := newCocoonSet("demo", func(cs *cocoonv1.CocoonSet) {
@@ -45,8 +43,6 @@ func TestReconcileSteadyStateSkipsHibernationList(t *testing.T) {
 	if _, err := r.Reconcile(t.Context(), reqFor(cs)); err != nil {
 		t.Fatalf("Reconcile: %v", err)
 	}
-	// Guards the assertion below against a vacuous pass: 0 Lists would also
-	// follow from an early return or from triage deleting a drifted pod.
 	for _, p := range []*corev1.Pod{mainPod, subPod, tbPod} {
 		if err := cli.Get(t.Context(), client.ObjectKeyFromObject(p), &corev1.Pod{}); err != nil {
 			t.Fatalf("pod %s must survive a steady reconcile: %v", p.Name, err)
@@ -57,8 +53,6 @@ func TestReconcileSteadyStateSkipsHibernationList(t *testing.T) {
 	}
 }
 
-// TestReconcileMissingPodsListsHibernationsOnce pins the sharing: a reconcile
-// missing both a sub-agent and a toolbox loads restore intent exactly once.
 func TestReconcileMissingPodsListsHibernationsOnce(t *testing.T) {
 	scheme := testScheme(t)
 	cs := newCocoonSet("demo", func(cs *cocoonv1.CocoonSet) {
@@ -92,8 +86,6 @@ func TestReconcileMissingPodsListsHibernationsOnce(t *testing.T) {
 	}
 }
 
-// TestReconcileUnrelatedKeyProgressesWhileProbeBlocks pins what concurrency
-// buys: with one CocoonSet's probe wedged, a second must still finish.
 func TestReconcileUnrelatedKeyProgressesWhileProbeBlocks(t *testing.T) {
 	scheme := testScheme(t)
 	blocked, wedged := newCocoonSet("blocked", withMainRestore), newCocoonSet("free", withMainRestore)
@@ -112,8 +104,6 @@ func TestReconcileUnrelatedKeyProgressesWhileProbeBlocks(t *testing.T) {
 	}}
 
 	go func() { _, _ = r.Reconcile(t.Context(), reqFor(blocked)) }()
-	// Wait until the probe is genuinely wedged; otherwise the second reconcile
-	// could finish first and pass even under full serialization.
 	select {
 	case <-entered:
 	case <-time.After(5 * time.Second):

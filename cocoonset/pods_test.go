@@ -149,7 +149,7 @@ func TestClassifyPodsUnknownRoleStaysInAllByName(t *testing.T) {
 	pod := corev1.Pod{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:   "stranger",
-			Labels: map[string]string{}, // no role label
+			Labels: map[string]string{},
 		},
 	}
 	got := classifyPods([]corev1.Pod{pod})
@@ -238,8 +238,6 @@ func TestNewManagedPodStampsCocoonSetGeneration(t *testing.T) {
 	}
 }
 
-// If VMSpec.Apply ever replaces pod.Annotations instead of merging, it would
-// silently strip newManagedPod's generation stamp.
 func TestBuildAgentPodPreservesCocoonSetGeneration(t *testing.T) {
 	cs := newCocoonSet("demo", func(cs *cocoonv1.CocoonSet) {
 		cs.Generation = 11
@@ -434,7 +432,7 @@ func TestPodSpecMatchesAgentDetectsNodePoolDrift(t *testing.T) {
 }
 
 func TestPodSpecMatchesAgentNodePoolDefaultFallback(t *testing.T) {
-	cs := newCocoonSet("demo") // NodePool empty -> DefaultNodePool
+	cs := newCocoonSet("demo")
 	scheme := testScheme(t)
 	pod := mustBuildAgentPod(t, cs, 0, "", "", scheme)
 	if !podSpecMatchesAgent(pod, cs, 0) {
@@ -628,13 +626,10 @@ func TestBuildAgentPodSubAgentIgnoresNodeNameAffinity(t *testing.T) {
 	}
 }
 
-// Affinity/nodeName are placement-only: if podSpecMatchesAgent ever compared
-// them, every pinned CocoonSet would drift into a delete/recreate loop.
 func TestPodSpecMatchesAgentIgnoresAffinity(t *testing.T) {
 	cs := newCocoonSet("demo", func(cs *cocoonv1.CocoonSet) {
 		cs.Spec.NodeName = "node-b"
 	})
-	// A pre-migration pod: built before nodeName was set, so no affinity.
 	pre := newCocoonSet("demo")
 	pod := mustBuildAgentPod(t, pre, 0, "", "", testScheme(t))
 	if !podSpecMatchesAgent(pod, cs, 0) {

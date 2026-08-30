@@ -51,7 +51,7 @@ func TestSuspendReleaseWaitsForSnapshotVerification(t *testing.T) {
 	cs := relCocoonSet()
 	pod := relHibernatedPod(t, cs, "node-a")
 	cli := relClient(t, cs, pod)
-	r := &Reconciler{Client: cli, Scheme: testScheme(t), Registry: &fakeRegistry{}} // snapshot absent
+	r := &Reconciler{Client: cli, Scheme: testScheme(t), Registry: &fakeRegistry{}}
 
 	if _, err := r.reconcileSuspendRelease(t.Context(), cs, singlePod(pod)); err != nil {
 		t.Fatalf("reconcileSuspendRelease: %v", err)
@@ -119,7 +119,6 @@ func TestSuspendReleaseFlagsKeepSnapshotBeforeDelete(t *testing.T) {
 	flaggedAtDelete := false
 	cli := relInterceptedClient(t, interceptor.Funcs{
 		Delete: func(ctx context.Context, c client.WithWatch, obj client.Object, opts ...client.DeleteOption) error {
-			// Re-read from the API: the flag must be durable, not merely set in memory.
 			var live corev1.Pod
 			if err := c.Get(ctx, client.ObjectKeyFromObject(obj), &live); err == nil {
 				flaggedAtDelete = meta.ReadKeepSnapshotOnDelete(&live)
@@ -143,7 +142,6 @@ func TestSuspendReleaseFreesSeatWhenFlagPatchFails(t *testing.T) {
 	reg := &fakeRegistry{present: map[string]bool{relHibernateTagKey: true}}
 	cli := relInterceptedClient(t, interceptor.Funcs{
 		Patch: func(ctx context.Context, c client.WithWatch, obj client.Object, patch client.Patch, opts ...client.PatchOption) error {
-			// Only the keep-snapshot patch fails; the suspend patch must still land.
 			if p, ok := obj.(*corev1.Pod); ok && meta.ReadKeepSnapshotOnDelete(p) {
 				return errors.New("webhook rejected the pod patch")
 			}
@@ -232,8 +230,6 @@ func TestWakeRespectsNodeNamePin(t *testing.T) {
 }
 
 func TestWakeRestoresOnFastUnsuspendFromSuspending(t *testing.T) {
-	// Deletes ran but the phase still reads Suspending: a fast unsuspend here
-	// must restore — falling through would fresh-boot over the snapshot.
 	cs := relCocoonSet(func(cs *cocoonv1.CocoonSet) {
 		cs.Spec.Suspend = false
 		cs.Status.Phase = cocoonv1.CocoonSetPhaseSuspending
@@ -260,7 +256,6 @@ func TestWakeRestoresOnFastUnsuspendFromSuspending(t *testing.T) {
 }
 
 func TestWakeLeavesSuspendingWithoutHintToNormalFlow(t *testing.T) {
-	// Suspending without the hint is not a released seat; the normal flow owns it.
 	cs := relCocoonSet(func(cs *cocoonv1.CocoonSet) {
 		cs.Spec.Suspend = false
 		cs.Status.Phase = cocoonv1.CocoonSetPhaseSuspending
@@ -273,8 +268,6 @@ func TestWakeLeavesSuspendingWithoutHintToNormalFlow(t *testing.T) {
 }
 
 func TestWakeWaitsOutStalePodCacheThenRestores(t *testing.T) {
-	// Fresh CS view (suspend=false, Suspended) with a stale pod cache still
-	// showing the deleted hibernated main: wait, then restore once it clears.
 	cs := relCocoonSet(func(cs *cocoonv1.CocoonSet) {
 		cs.Spec.Suspend = false
 		cs.Status.Phase = cocoonv1.CocoonSetPhaseSuspended
@@ -283,7 +276,7 @@ func TestWakeWaitsOutStalePodCacheThenRestores(t *testing.T) {
 	stale := relHibernatedPod(t, cs, "node-a")
 	meta.HibernateState(true).Apply(stale)
 	reg := &fakeRegistry{present: map[string]bool{relHibernateTagKey: true}}
-	cli := relClient(t, cs) // pod absent: the live read sees the delete
+	cli := relClient(t, cs)
 	r := &Reconciler{Client: cli, APIReader: cli, Scheme: testScheme(t), Registry: reg}
 
 	handled, _, err := r.reconcileWake(t.Context(), cs, singlePod(stale))
@@ -308,8 +301,6 @@ func TestWakeWaitsOutStalePodCacheThenRestores(t *testing.T) {
 }
 
 func TestWakeWaitsOutStaleSuspendingViewThenRestores(t *testing.T) {
-	// Delete ran but the Suspended receipt never landed: a stale main view
-	// under Suspending must wait, not fresh-boot.
 	cs := relCocoonSet(func(cs *cocoonv1.CocoonSet) {
 		cs.Spec.Suspend = false
 		cs.Status.Phase = cocoonv1.CocoonSetPhaseSuspending
@@ -318,7 +309,7 @@ func TestWakeWaitsOutStaleSuspendingViewThenRestores(t *testing.T) {
 	stale := relHibernatedPod(t, cs, "node-a")
 	meta.HibernateState(true).Apply(stale)
 	reg := &fakeRegistry{present: map[string]bool{relHibernateTagKey: true}}
-	cli := relClient(t, cs) // pod absent: the live read sees the delete
+	cli := relClient(t, cs)
 	r := &Reconciler{Client: cli, APIReader: cli, Scheme: testScheme(t), Registry: reg}
 
 	handled, _, err := r.reconcileWake(t.Context(), cs, singlePod(stale))
@@ -339,7 +330,6 @@ func TestWakeWaitsOutStaleSuspendingViewThenRestores(t *testing.T) {
 }
 
 func TestWakeLeavesUndeletedMainToInPlaceWake(t *testing.T) {
-	// The delete never finished (pod truly alive): in-place unsuspend owns it.
 	cs := relCocoonSet(func(cs *cocoonv1.CocoonSet) {
 		cs.Spec.Suspend = false
 		cs.Status.Phase = cocoonv1.CocoonSetPhaseSuspending
@@ -388,7 +378,7 @@ func TestWakeWaitsWhileRestoring(t *testing.T) {
 		cs.Spec.Suspend = false
 		cs.Status.Phase = cocoonv1.CocoonSetPhaseWaking
 	})
-	main := migMainPod(t, cs, "", "", false) // unscheduled, no VMID
+	main := migMainPod(t, cs, "", "", false)
 	reg := &fakeRegistry{present: map[string]bool{relHibernateTagKey: true}}
 	cli := relClient(t, cs, main)
 	r := &Reconciler{Client: cli, Scheme: testScheme(t), Registry: reg}
@@ -431,8 +421,6 @@ func TestWakeIgnoresRunningPhase(t *testing.T) {
 		cs.Spec.Suspend = false
 		cs.Status.Phase = cocoonv1.CocoonSetPhaseRunning
 	})
-	// probeErr proves the registry is never consulted: a stale tag on a
-	// running set must not be trusted (it would roll the VM back).
 	r := &Reconciler{Scheme: testScheme(t), Registry: &fakeRegistry{probeErr: errors.New("boom")}}
 	handled, _, err := r.reconcileWake(t.Context(), cs, classifiedPods{})
 	if handled || err != nil {
@@ -441,8 +429,6 @@ func TestWakeIgnoresRunningPhase(t *testing.T) {
 }
 
 func TestWakeCompletionSurvivesStalePhase(t *testing.T) {
-	// A stale-phase reconcile overwrote Waking mid-wake (e.g. to Pending); the
-	// restore-marked live pod + present node hint must keep completion reachable.
 	cs := relCocoonSet(func(cs *cocoonv1.CocoonSet) {
 		cs.Spec.Suspend = false
 		cs.Status.Phase = cocoonv1.CocoonSetPhasePending
@@ -468,8 +454,6 @@ func TestWakeCompletionSurvivesStalePhase(t *testing.T) {
 }
 
 func TestWakeWaitsOnStalePhaseWhileRestoring(t *testing.T) {
-	// Same staleness race but the VM is not live yet: re-enter the waiting
-	// branch (and repaint Waking), do not drop the tag.
 	cs := relCocoonSet(func(cs *cocoonv1.CocoonSet) {
 		cs.Spec.Suspend = false
 		cs.Status.Phase = cocoonv1.CocoonSetPhasePending
@@ -491,8 +475,6 @@ func TestWakeWaitsOnStalePhaseWhileRestoring(t *testing.T) {
 }
 
 func TestWakeDisengagesAfterCleanup(t *testing.T) {
-	// Steady state: the pod keeps its restore annotation for life but the hint
-	// is gone — no re-engage (probeErr proves the registry is never consulted).
 	cs := relCocoonSet(func(cs *cocoonv1.CocoonSet) {
 		cs.Spec.Suspend = false
 		cs.Status.Phase = cocoonv1.CocoonSetPhaseRunning
@@ -523,14 +505,12 @@ func TestWakeLeavesSuspendedPlaceholderToNormalFlow(t *testing.T) {
 }
 
 func TestWakeScoresPlacementOnceAcrossStaleStatusReentry(t *testing.T) {
-	// The completion arm Requeues; a re-entry off a stale Waking status is
-	// hint-less and must not score the same landing a second time as pool.
 	cs := relCocoonSet(func(cs *cocoonv1.CocoonSet) {
 		cs.Spec.Suspend = false
 		cs.Status.Phase = cocoonv1.CocoonSetPhaseWaking
 		cs.Annotations = map[string]string{meta.AnnotationHibernatedOnNode: "node-a"}
 	})
-	main := migMainPod(t, cs, "node-a", "vmid-new", true) // landed back on the hinted node
+	main := migMainPod(t, cs, "node-a", "vmid-new", true)
 	reg := &fakeRegistry{present: map[string]bool{relHibernateTagKey: true}}
 	cli := relClient(t, cs, main)
 	r := &Reconciler{Client: cli, Scheme: testScheme(t), Registry: reg}
@@ -547,7 +527,6 @@ func TestWakeScoresPlacementOnceAcrossStaleStatusReentry(t *testing.T) {
 		t.Errorf("landing on the hinted node must score hint-node once, got %v", got)
 	}
 
-	// The hint patch has landed; the status write has not.
 	stale := mustGetCS(t, cli)
 	stale.Status.Phase = cocoonv1.CocoonSetPhaseWaking
 	if _, _, err := r.reconcileWake(t.Context(), &stale, singlePod(main)); err != nil {
@@ -569,8 +548,6 @@ func relCocoonSet(mods ...func(*cocoonv1.CocoonSet)) *cocoonv1.CocoonSet {
 	}}, mods...)...)
 }
 
-// relHibernatedPod builds the main pod in the state vk publishes after a
-// completed hibernate: lifecycle=hibernated at the CR's generation.
 func relHibernatedPod(t *testing.T, cs *cocoonv1.CocoonSet, node string) *corev1.Pod {
 	t.Helper()
 	pod := mustBuildAgentPod(t, cs, 0, "", "", testScheme(t))

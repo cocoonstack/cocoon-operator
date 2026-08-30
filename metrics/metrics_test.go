@@ -7,8 +7,6 @@ import (
 	"github.com/prometheus/client_golang/prometheus"
 )
 
-// Emitted names are the operator's monitoring contract: the Namespace/Subsystem
-// split must still render the flat cocoon_operator_ prefix, byte-for-byte.
 func TestRegisterEmitsStableNames(t *testing.T) {
 	reg := prometheus.NewRegistry()
 	Register(reg)

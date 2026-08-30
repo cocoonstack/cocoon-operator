@@ -35,7 +35,6 @@ func TestApplyUnsuspendClearsHibernateAnnotation(t *testing.T) {
 	tbPod := &corev1.Pod{
 		ObjectMeta: metav1.ObjectMeta{Name: "demo-tb", Namespace: "ns"},
 	}
-	// tbPod was never suspended; must be skipped.
 
 	cli := ctrlfake.NewClientBuilder().
 		WithScheme(scheme).
@@ -253,7 +252,6 @@ func TestAllOwnedPodsHibernatedSkipsUnmanagedToolbox(t *testing.T) {
 		toolbox:   map[string]*corev1.Pod{"tb": tb},
 		allByName: map[string]*corev1.Pod{main.Name: main, tb.Name: tb},
 	}
-	// Only main's snapshot is present; static toolbox has no snapshot and must be skipped.
 	reg := &fakeRegistry{present: map[string]bool{
 		"vk-ns-demo-0:" + meta.HibernateSnapshotTag: true,
 	}}
@@ -284,12 +282,10 @@ func TestAllOwnedPodsHibernatedPropagatesProbeError(t *testing.T) {
 	}
 }
 
-// A :hibernate tag left by a prior suspend cycle must not satisfy the poll
-// before vk reports lifecycle-state=hibernated for this round.
 func TestAllOwnedPodsHibernatedIgnoresStaleTag(t *testing.T) {
 	scheme := testScheme(t)
 	cs := newCocoonSet("demo")
-	main := mustBuildAgentPod(t, cs, 0, "", "", scheme) // no lifecycle-state yet
+	main := mustBuildAgentPod(t, cs, 0, "", "", scheme)
 	classified := classifiedPods{
 		main:      main,
 		sub:       map[int32]*corev1.Pod{},
@@ -297,7 +293,7 @@ func TestAllOwnedPodsHibernatedIgnoresStaleTag(t *testing.T) {
 		allByName: map[string]*corev1.Pod{main.Name: main},
 	}
 	reg := &fakeRegistry{present: map[string]bool{
-		"vk-ns-demo-0:" + meta.HibernateSnapshotTag: true, // stale tag
+		"vk-ns-demo-0:" + meta.HibernateSnapshotTag: true,
 	}}
 	r := &Reconciler{Scheme: scheme, Registry: reg}
 
@@ -318,8 +314,6 @@ func TestAllOwnedPodsHibernatedIgnoresStaleTag(t *testing.T) {
 		t.Error("must complete once vk reports hibernated and the tag is present")
 	}
 
-	// A new spec round (e.g. re-suspend) outdates the lifecycle annotations:
-	// state=hibernated with a lower observed-generation is a prior round.
 	cs.Generation = 5
 	done, err = r.allOwnedPodsHibernated(t.Context(), cs, classified)
 	if err != nil {
@@ -330,8 +324,6 @@ func TestAllOwnedPodsHibernatedIgnoresStaleTag(t *testing.T) {
 	}
 }
 
-// A terminal sub-agent has no live VM to snapshot; it must not park the set
-// in Suspending forever.
 func TestAllOwnedPodsHibernatedSkipsTerminalPod(t *testing.T) {
 	scheme := testScheme(t)
 	cs := newCocoonSet("demo", func(cs *cocoonv1.CocoonSet) {
@@ -392,8 +384,6 @@ func TestEnsureSubAgentsReplacesTerminalPod(t *testing.T) {
 	}
 }
 
-// Dead-letter must yield to a spec edit: fixing the spec is the operator's
-// remedy, and the corrected spec gets a fresh rebuild budget.
 func TestEnsureSubAgentsDeadLetterYieldsToSpecDrift(t *testing.T) {
 	scheme := testScheme(t)
 	cs := newCocoonSet("demo", func(cs *cocoonv1.CocoonSet) {
@@ -416,7 +406,6 @@ func TestEnsureSubAgentsDeadLetterYieldsToSpecDrift(t *testing.T) {
 		allByName: map[string]*corev1.Pod{subPod.Name: subPod},
 	}
 
-	// Spec unchanged: dead-letter holds, pod untouched.
 	changed, _, err := r.ensureSubAgents(t.Context(), cs, classified, "vk-ns-demo-0", "", r.newRestoreIntent(t.Context(), cs.Namespace))
 	if err != nil {
 		t.Fatalf("ensureSubAgents: %v", err)
@@ -457,7 +446,6 @@ func TestMainPodFailedReason(t *testing.T) {
 		{"healthy", &corev1.Pod{}, ""},
 		{"lifecycle=failed annotation", &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Annotations: annot(meta.LifecycleStateFailed)}}, "PodLifecycleFailed"},
 		{"pod phase failed", &corev1.Pod{Status: corev1.PodStatus{Phase: corev1.PodFailed}}, "MainAgentFailed"},
-		// lifecycle annotation wins over phase — that's the vk-cocoon-driven path.
 		{"both annotation and phase", &corev1.Pod{
 			ObjectMeta: metav1.ObjectMeta{Annotations: annot(meta.LifecycleStateFailed)},
 			Status:     corev1.PodStatus{Phase: corev1.PodFailed},
@@ -472,8 +460,6 @@ func TestMainPodFailedReason(t *testing.T) {
 	}
 }
 
-// A main pod carrying lifecycle-state=Failed must flip the CocoonSet to
-// Failed even while Pod.Status.Phase is still Running (vk-driven path).
 func TestReconcileMainLifecycleFailedTransitionsToFailed(t *testing.T) {
 	scheme := testScheme(t)
 	cs := newCocoonSet("demo", func(cs *cocoonv1.CocoonSet) {
@@ -506,8 +492,6 @@ func TestReconcileMainLifecycleFailedTransitionsToFailed(t *testing.T) {
 	}
 }
 
-// A Failed main pod whose spec has drifted from the current CocoonSet spec
-// must be deleted for recreate, not parked in Failed forever.
 func TestReconcileMainLifecycleFailedWithDriftRecreatesPod(t *testing.T) {
 	scheme := testScheme(t)
 	cs := newCocoonSet("demo", func(cs *cocoonv1.CocoonSet) {
@@ -539,8 +523,6 @@ func TestReconcileMainLifecycleFailedWithDriftRecreatesPod(t *testing.T) {
 	}
 }
 
-// A sub-agent carrying lifecycle-state=Failed but still PodPhase=Running must
-// be rebuilt so the backoff / dead-letter logic runs.
 func TestEnsureSubAgentsTreatsLifecycleFailedAsTerminal(t *testing.T) {
 	scheme := testScheme(t)
 	cs := newCocoonSet("demo", func(cs *cocoonv1.CocoonSet) {
@@ -642,8 +624,6 @@ func TestReconcileDeleteSkipsUnownedPods(t *testing.T) {
 	}
 }
 
-// Teardown always GCs :hibernate; :latest only when snapshotPolicy says no
-// push happened for that slot (always/main-only-slot-0 keep it for retag).
 func TestReconcileDeleteSnapshotPolicyGC(t *testing.T) {
 	scheme := testScheme(t)
 	cases := []struct {
@@ -761,8 +741,6 @@ func TestReconcileDeleteSkipsAbsentSnapshotTags(t *testing.T) {
 	}
 }
 
-// Race window: pod exists but Status.Agents lacks VMName yet — pass 1 stashes
-// the pod's VMName onto the annotation so pass 2 still GCs :hibernate.
 func TestReconcileDeleteStashesPodVMNamesEvenWhenStatusIsEmpty(t *testing.T) {
 	scheme := testScheme(t)
 	cs := newCocoonSet("demo")
@@ -788,8 +766,6 @@ func TestReconcileDeleteStashesPodVMNamesEvenWhenStatusIsEmpty(t *testing.T) {
 	}
 }
 
-// Real clusters terminate pods asynchronously: by the time GC runs, the pod
-// list is already empty. VM names must come from Status, not from a re-list.
 func TestReconcileDeleteCleansTagsAfterPodsGone(t *testing.T) {
 	scheme := testScheme(t)
 	cs := newCocoonSet("demo")
@@ -814,7 +790,6 @@ func TestReconcileDeleteCleansTagsAfterPodsGone(t *testing.T) {
 		t.Fatalf("reconcileDelete: %v", err)
 	}
 
-	// Default policy is always, so :latest is preserved for every VM.
 	want := []string{
 		"vk-ns-demo-0:" + meta.HibernateSnapshotTag,
 		"vk-ns-demo-1:" + meta.HibernateSnapshotTag,
@@ -833,7 +808,6 @@ func TestApplyUnsuspendSkipsPodHibernatedByCR(t *testing.T) {
 	}
 	meta.HibernateState(true).Apply(hibernated)
 
-	// Also hibernated but not named in any CR -- proves skip is selective.
 	leftover := &corev1.Pod{
 		ObjectMeta: metav1.ObjectMeta{Name: "demo-1", Namespace: "ns"},
 	}
@@ -879,9 +853,6 @@ func TestApplyUnsuspendSkipsPodHibernatedByCR(t *testing.T) {
 	}
 }
 
-// A Wake desire mid-Hibernating transition (the hibernation reconciler's own
-// reverse-desire window) must still exclude the pod: the annotation is owned
-// by the in-flight hibernate, not by applyUnsuspend.
 func TestApplyUnsuspendSkipsPodMidHibernateOnReverseDesire(t *testing.T) {
 	scheme := testScheme(t)
 
@@ -926,7 +897,6 @@ func TestApplyUnsuspendSkipsPodMidHibernateOnReverseDesire(t *testing.T) {
 	}
 }
 
-// A nil manager suffices: the guard rejects before mgr is touched.
 func TestSetupWithManagerRejectsInvalidConcurrency(t *testing.T) {
 	for _, n := range []int{0, -1} {
 		if err := (&Reconciler{Concurrency: n}).SetupWithManager(t.Context(), nil); err == nil {
@@ -935,8 +905,6 @@ func TestSetupWithManagerRejectsInvalidConcurrency(t *testing.T) {
 	}
 }
 
-// lifecycleHibernated mirrors vk's atomic state+observed-generation write,
-// echoing the generation stamped on the pod at build time.
 func lifecycleHibernated(p *corev1.Pod) *corev1.Pod {
 	meta.LifecycleStatus{
 		State:              meta.LifecycleStateHibernated,
@@ -946,10 +914,8 @@ func lifecycleHibernated(p *corev1.Pod) *corev1.Pod {
 }
 
 type fakeRegistry struct {
-	present  map[string]bool
-	probeErr error
-	// delay models a remote round trip; block wedges the named VM's probe and
-	// entered reports that the probe is actually wedged.
+	present   map[string]bool
+	probeErr  error
 	delay     time.Duration
 	block     map[string]chan struct{}
 	entered   chan string

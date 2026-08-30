@@ -33,7 +33,7 @@ func TestMigrationNoopWithoutNodeName(t *testing.T) {
 func TestMigrationNoopWhenSettledOnTarget(t *testing.T) {
 	cs := migCocoonSet("node-b")
 	main := migMainPod(t, cs, "node-b", "vmid-1", true)
-	r := &Reconciler{Scheme: testScheme(t), Registry: &fakeRegistry{}} // fast-path: registry never consulted
+	r := &Reconciler{Scheme: testScheme(t), Registry: &fakeRegistry{}}
 	handled, _, err := r.reconcileMigration(t.Context(), cs, classifiedPods{main: main})
 	if err != nil {
 		t.Fatalf("reconcileMigration: %v", err)
@@ -66,7 +66,7 @@ func TestMigrationStartsHibernateOnWrongNode(t *testing.T) {
 func TestMigrationDeletesOldPodAfterSnapshotLands(t *testing.T) {
 	cs := migCocoonSet("node-b")
 	main := migMainPod(t, cs, "node-a", "vmid-1", true)
-	meta.HibernateState(true).Apply(main) // quiesced by the migration start pass
+	meta.HibernateState(true).Apply(main)
 	reg := &fakeRegistry{present: map[string]bool{migVMName + ":" + meta.HibernateSnapshotTag: true}}
 	cli := ctrlfake.NewClientBuilder().WithScheme(testScheme(t)).
 		WithObjects(cs, main).WithStatusSubresource(&cocoonv1.CocoonSet{}).Build()
@@ -80,7 +80,6 @@ func TestMigrationDeletesOldPodAfterSnapshotLands(t *testing.T) {
 	if err := cli.Get(t.Context(), types.NamespacedName{Namespace: "ns", Name: "demo-0"}, &got); !apierrors.IsNotFound(err) {
 		t.Errorf("old pod must be deleted, got err=%v", err)
 	}
-	// Ordering gate: snapshot must NOT be dropped while tearing down the old pod.
 	if len(reg.deleted) != 0 {
 		t.Errorf("snapshot dropped too early: %v", reg.deleted)
 	}
@@ -93,7 +92,7 @@ func TestMigrationRecreatesOnTargetWithRestoreAnnotation(t *testing.T) {
 		WithObjects(cs).WithStatusSubresource(&cocoonv1.CocoonSet{}).Build()
 	r := &Reconciler{Client: cli, Scheme: testScheme(t), Registry: reg}
 
-	handled, _, err := r.reconcileMigration(t.Context(), cs, classifiedPods{}) // main absent
+	handled, _, err := r.reconcileMigration(t.Context(), cs, classifiedPods{})
 	if err != nil || !handled {
 		t.Fatalf("handled=%v err=%v", handled, err)
 	}
@@ -113,8 +112,8 @@ func TestMigrationRecreatesOnTargetWithRestoreAnnotation(t *testing.T) {
 
 func TestMigrationWaitsWhileRestoring(t *testing.T) {
 	cs := migCocoonSet("node-b")
-	cs.Status.Phase = cocoonv1.CocoonSetPhaseMigrating // real migrations persist the phase up front
-	main := migMainPod(t, cs, "node-b", "", false)     // on target, no VMID yet
+	cs.Status.Phase = cocoonv1.CocoonSetPhaseMigrating
+	main := migMainPod(t, cs, "node-b", "", false)
 	reg := &fakeRegistry{present: map[string]bool{migVMName + ":" + meta.HibernateSnapshotTag: true}}
 	cli := ctrlfake.NewClientBuilder().WithScheme(testScheme(t)).
 		WithObjects(cs, main).WithStatusSubresource(&cocoonv1.CocoonSet{}).Build()
@@ -131,8 +130,8 @@ func TestMigrationWaitsWhileRestoring(t *testing.T) {
 
 func TestMigrationDropsSnapshotWhenRestored(t *testing.T) {
 	cs := migCocoonSet("node-b")
-	cs.Status.Phase = cocoonv1.CocoonSetPhaseMigrating    // the settled fast-path defers to the in-flight migration
-	main := migMainPod(t, cs, "node-b", "vmid-new", true) // restored on target
+	cs.Status.Phase = cocoonv1.CocoonSetPhaseMigrating
+	main := migMainPod(t, cs, "node-b", "vmid-new", true)
 	reg := &fakeRegistry{present: map[string]bool{migVMName + ":" + meta.HibernateSnapshotTag: true}}
 	cli := ctrlfake.NewClientBuilder().WithScheme(testScheme(t)).
 		WithObjects(cs, main).WithStatusSubresource(&cocoonv1.CocoonSet{}).Build()
@@ -150,7 +149,6 @@ func TestMigrationDropsSnapshotWhenRestored(t *testing.T) {
 func TestMigrationDoesNotDeleteRecreatedRestorePod(t *testing.T) {
 	cs := migCocoonSet("node-b")
 	cs.Status.Phase = cocoonv1.CocoonSetPhaseMigrating
-	// Freshly recreated restore pod: NodeName empty (awaiting scheduling), no VMID.
 	main := migMainPod(t, cs, "", "", false)
 	reg := &fakeRegistry{present: map[string]bool{migVMName + ":" + meta.HibernateSnapshotTag: true}}
 	cli := ctrlfake.NewClientBuilder().WithScheme(testScheme(t)).
@@ -161,8 +159,6 @@ func TestMigrationDoesNotDeleteRecreatedRestorePod(t *testing.T) {
 	if err != nil || !handled {
 		t.Fatalf("handled=%v err=%v", handled, err)
 	}
-	// An unscheduled restore pod must survive, else the snapshot branch loops
-	// delete/recreate forever.
 	var got corev1.Pod
 	if err := cli.Get(t.Context(), types.NamespacedName{Namespace: "ns", Name: "demo-0"}, &got); err != nil {
 		t.Errorf("recreated restore pod must not be deleted while NodeName is empty: %v", err)
@@ -181,7 +177,7 @@ func TestMigrationProbeErrorIsHandled(t *testing.T) {
 
 func TestMigrationDropsStaleTagInsteadOfDeletingLivePod(t *testing.T) {
 	cs := migCocoonSet("node-b")
-	main := migMainPod(t, cs, "node-a", "vmid-1", true) // live, never quiesced
+	main := migMainPod(t, cs, "node-a", "vmid-1", true)
 	reg := &fakeRegistry{present: map[string]bool{migVMName + ":" + meta.HibernateSnapshotTag: true}}
 	cli := ctrlfake.NewClientBuilder().WithScheme(testScheme(t)).
 		WithObjects(cs, main).WithStatusSubresource(&cocoonv1.CocoonSet{}).Build()
@@ -202,7 +198,7 @@ func TestMigrationDropsStaleTagInsteadOfDeletingLivePod(t *testing.T) {
 
 func TestMigrationWakesInPlaceOnRetargetBack(t *testing.T) {
 	cs := migCocoonSet("node-b")
-	main := migMainPod(t, cs, "node-b", "", false) // quiesced on the (re-)target
+	main := migMainPod(t, cs, "node-b", "", false)
 	meta.HibernateState(true).Apply(main)
 	reg := &fakeRegistry{present: map[string]bool{migVMName + ":" + meta.HibernateSnapshotTag: true}}
 	cli := ctrlfake.NewClientBuilder().WithScheme(testScheme(t)).
@@ -236,7 +232,6 @@ func TestMigrationLeavesCRHibernationAlone(t *testing.T) {
 			Desire: cocoonv1.HibernationDesireHibernate,
 		},
 	}
-	// probeErr proves CR-owned hibernation short-circuits before the registry probe.
 	reg := &fakeRegistry{probeErr: errors.New("boom")}
 	cli := ctrlfake.NewClientBuilder().WithScheme(testScheme(t)).
 		WithObjects(cs, main, hib).WithStatusSubresource(&cocoonv1.CocoonSet{}).Build()
@@ -259,14 +254,14 @@ func TestMigrationLeavesCRHibernationAlone(t *testing.T) {
 }
 
 func TestMigrationFinishesAbortedRestore(t *testing.T) {
-	cs := migCocoonSet("") // nodeName cleared mid-flight
+	cs := migCocoonSet("")
 	cs.Status.Phase = cocoonv1.CocoonSetPhaseMigrating
 	reg := &fakeRegistry{present: map[string]bool{migVMName + ":" + meta.HibernateSnapshotTag: true}}
 	cli := ctrlfake.NewClientBuilder().WithScheme(testScheme(t)).
 		WithObjects(cs).WithStatusSubresource(&cocoonv1.CocoonSet{}).Build()
 	r := &Reconciler{Client: cli, Scheme: testScheme(t), Registry: reg}
 
-	handled, _, err := r.reconcileMigration(t.Context(), cs, classifiedPods{}) // old pod already deleted
+	handled, _, err := r.reconcileMigration(t.Context(), cs, classifiedPods{})
 	if err != nil || !handled {
 		t.Fatalf("handled=%v err=%v", handled, err)
 	}
@@ -285,7 +280,6 @@ func TestMigrationFinishesAbortedRestore(t *testing.T) {
 func TestMigrationSkipsProbeWhenSettled(t *testing.T) {
 	cs := migCocoonSet("node-b")
 	main := migMainPod(t, cs, "node-b", "vmid-1", true)
-	// probeErr proves the registry is never consulted in steady state.
 	r := &Reconciler{Scheme: testScheme(t), Registry: &fakeRegistry{probeErr: errors.New("boom")}}
 	handled, _, err := r.reconcileMigration(t.Context(), cs, classifiedPods{main: main})
 	if handled || err != nil {
@@ -294,8 +288,6 @@ func TestMigrationSkipsProbeWhenSettled(t *testing.T) {
 }
 
 func TestMigrationDisengagesFromCRWakeWindow(t *testing.T) {
-	// CR wake mid-flight: annotation cleared, tag not yet dropped, VM not yet
-	// live, no Migrating phase — not a migration.
 	cs := migCocoonSet("node-b")
 	main := migMainPod(t, cs, "node-b", "", false)
 	reg := &fakeRegistry{present: map[string]bool{migVMName + ":" + meta.HibernateSnapshotTag: true}}
