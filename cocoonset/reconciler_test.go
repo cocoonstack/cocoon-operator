@@ -756,8 +756,11 @@ func TestReconcileDeleteStashesPodVMNamesEvenWhenStatusIsEmpty(t *testing.T) {
 	}}
 	r := &Reconciler{Client: cli, Scheme: scheme, Registry: reg}
 
+	if res, err := r.reconcileDelete(t.Context(), cs); err != nil || res.RequeueAfter == 0 {
+		t.Fatalf("pass 1 must delete the pod and requeue, got res=%v err=%v", res, err)
+	}
 	if _, err := r.reconcileDelete(t.Context(), cs); err != nil {
-		t.Fatalf("reconcileDelete: %v", err)
+		t.Fatalf("pass 2: %v", err)
 	}
 
 	want := []string{"vk-ns-demo-0:" + meta.HibernateSnapshotTag}

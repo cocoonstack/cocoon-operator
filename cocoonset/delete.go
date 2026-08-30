@@ -35,24 +35,18 @@ func (r *Reconciler) reconcileDelete(ctx context.Context, cs *cocoonv1.CocoonSet
 		return ctrl.Result{}, fmt.Errorf("stash vm names: %w", err)
 	}
 
-	// vk-cocoon completes the snapshot push during the grace period before GC
-	for i := range owned {
-		if ctxErr := ctx.Err(); ctxErr != nil {
-			return ctrl.Result{}, ctxErr
-		}
-		pod := &owned[i]
-		if err := client.IgnoreNotFound(r.Delete(ctx, pod)); err != nil {
-			return ctrl.Result{}, fmt.Errorf("delete pod %s/%s: %w", pod.Namespace, pod.Name, err)
-		}
-	}
-
 	// GC registry tags only once every pod is gone; vk-cocoon's DeletePod may still be pushing the snapshot
-	remainingOwned, listErr := r.listOwnedPods(ctx, cs)
-	if listErr != nil {
-		return ctrl.Result{}, fmt.Errorf("re-list pods after delete: %w", listErr)
-	}
-	if len(remainingOwned) > 0 {
-		logger.Infof(ctx, "waiting for %d pods to terminate before GC", len(remainingOwned))
+	if len(owned) > 0 {
+		for i := range owned {
+			if ctxErr := ctx.Err(); ctxErr != nil {
+				return ctrl.Result{}, ctxErr
+			}
+			pod := &owned[i]
+			if err := client.IgnoreNotFound(r.Delete(ctx, pod)); err != nil {
+				return ctrl.Result{}, fmt.Errorf("delete pod %s/%s: %w", pod.Namespace, pod.Name, err)
+			}
+		}
+		logger.Infof(ctx, "waiting for %d pods to terminate before GC", len(owned))
 		return ctrl.Result{RequeueAfter: requeueWaitForMain}, nil
 	}
 
