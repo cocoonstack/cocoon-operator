@@ -16,6 +16,7 @@ import (
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 	ctrl "sigs.k8s.io/controller-runtime"
 	ctrlfake "sigs.k8s.io/controller-runtime/pkg/client/fake"
+	"sigs.k8s.io/controller-runtime/pkg/event"
 
 	cocoonv1 "github.com/cocoonstack/cocoon-common/apis/v1"
 	commonk8s "github.com/cocoonstack/cocoon-common/k8s"
@@ -86,7 +87,6 @@ func TestFakeRegistryDeleteRecords(t *testing.T) {
 	}
 }
 
-// Finalizer add must end the cycle so the next reconcile reads the persisted object.
 func TestReconcileAddsFinalizerAndRequeues(t *testing.T) {
 	hib := &cocoonv1.CocoonHibernation{
 		ObjectMeta: metav1.ObjectMeta{Name: "hib", Namespace: "ns"},
@@ -142,7 +142,7 @@ func TestReconcileDeleteClearsHibernateTagAndFinalizer(t *testing.T) {
 		WithObjects(hib).
 		WithStatusSubresource(&cocoonv1.CocoonHibernation{}).
 		Build()
-	reg := &fakeRegistry{}
+	reg := &fakeRegistry{manifestPresent: true}
 	r := &Reconciler{Client: cli, Scheme: scheme, Registry: reg}
 
 	if err := r.reconcileDelete(t.Context(), hib); err != nil {
@@ -151,8 +151,6 @@ func TestReconcileDeleteClearsHibernateTagAndFinalizer(t *testing.T) {
 	if !reg.deleteCalled {
 		t.Errorf("DeleteManifest must be called on reconcileDelete")
 	}
-	// After RemoveFinalizer + Update, the fake client should let the object be gone
-	// since the test wrote a DeletionTimestamp and there are no other finalizers.
 	var got cocoonv1.CocoonHibernation
 	err := cli.Get(t.Context(), types.NamespacedName{Namespace: "ns", Name: "hib"}, &got)
 	if err == nil && len(got.Finalizers) != 0 {
@@ -178,10 +176,9 @@ func TestReconcileDeleteTagErrorStillRemovesFinalizer(t *testing.T) {
 		WithObjects(hib).
 		WithStatusSubresource(&cocoonv1.CocoonHibernation{}).
 		Build()
-	reg := &fakeRegistry{deleteErr: errors.New("registry unavailable")}
+	reg := &fakeRegistry{manifestPresent: true, deleteErr: errors.New("registry unavailable")}
 	r := &Reconciler{Client: cli, Scheme: scheme, Registry: reg}
 
-	// Tag deletion is best-effort: a registry outage must not wedge CR deletion.
 	if err := r.reconcileDelete(t.Context(), hib); err != nil {
 		t.Fatalf("reconcileDelete must tolerate DeleteManifest errors, got %v", err)
 	}
@@ -201,7 +198,6 @@ func TestReconcileDeleteSkipsTagWhenVMNameMissing(t *testing.T) {
 			DeletionTimestamp: &metav1.Time{Time: time.Now()},
 		},
 		Spec: cocoonv1.CocoonHibernationSpec{PodRef: cocoonv1.HibernationPodRef{Name: "demo-0"}},
-		// Status.VMName left empty — delete before vk-cocoon ever filled it.
 	}
 
 	scheme := testScheme(t)
@@ -221,9 +217,6 @@ func TestReconcileDeleteSkipsTagWhenVMNameMissing(t *testing.T) {
 	}
 }
 
-// TestReconcileHibernateProbeErrorAtDeadlineFails pins the starvation fix: a
-// registry outage must not bypass hibernateTimeout, or podsHibernatedByCR
-// keeps the annotation owned and a reverse-desire wake never proceeds.
 func TestReconcileHibernateProbeErrorAtDeadlineFails(t *testing.T) {
 	hib := &cocoonv1.CocoonHibernation{
 		ObjectMeta: metav1.ObjectMeta{Name: "hib", Namespace: "ns", Finalizers: []string{finalizerName}},
@@ -280,8 +273,6 @@ func TestPodVMNameRoundtrip(t *testing.T) {
 	}
 }
 
-// TestReconcileHibernateSurfacesProbeError verifies that transport/server errors
-// from HasManifest bubble out instead of being silently polled forever.
 func TestReconcileHibernateSurfacesProbeError(t *testing.T) {
 	hib := &cocoonv1.CocoonHibernation{
 		ObjectMeta: metav1.ObjectMeta{Name: "hib", Namespace: "ns", Finalizers: []string{finalizerName}},
@@ -292,9 +283,7 @@ func TestReconcileHibernateSurfacesProbeError(t *testing.T) {
 	}
 	pod := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "demo-0", Namespace: "ns"}}
 	(&meta.VMSpec{VMName: "vk-ns-demo-0", Managed: true}).Apply(pod)
-	// Pre-set so PatchHibernateState short-circuits before the interesting HasManifest call.
 	meta.HibernateState(true).Apply(pod)
-	// The probe only runs once vk reports this round's hibernate as done.
 	pod.Annotations[meta.AnnotationLifecycleState] = string(meta.LifecycleStateHibernated)
 
 	scheme := testScheme(t)
@@ -346,7 +335,7 @@ func TestReconcileHibernateFoldsAbsenceToRequeue(t *testing.T) {
 	r := &Reconciler{
 		Client:   cli,
 		Scheme:   scheme,
-		Registry: &fakeRegistry{}, // absent, no error
+		Registry: &fakeRegistry{},
 	}
 	res, err := r.Reconcile(t.Context(), ctrl.Request{
 		NamespacedName: types.NamespacedName{Namespace: "ns", Name: "hib"},
@@ -455,8 +444,6 @@ func TestReconcileWakeFailsOnTimeout(t *testing.T) {
 	}
 }
 
-// TestReconcileWakeRecoversFromFailed verifies that Failed->Waking re-entry
-// refreshes LastTransitionTime so the wake deadline does not trip immediately.
 func TestReconcileWakeRecoversFromFailed(t *testing.T) {
 	staleTime := metav1.NewTime(time.Now().Add(-2 * wakeTimeout))
 	hib := &cocoonv1.CocoonHibernation{
@@ -506,7 +493,6 @@ func TestReconcileWakeRecoversFromFailed(t *testing.T) {
 	if !ready.LastTransitionTime.Time.After(staleTime.Time) {
 		t.Errorf("LastTransitionTime = %v (stale = %v), want refreshed", ready.LastTransitionTime.Time, staleTime.Time)
 	}
-	// Second reconcile must not re-fail with the fresh timestamp.
 	if _, err := r.Reconcile(t.Context(), ctrl.Request{
 		NamespacedName: types.NamespacedName{Namespace: "ns", Name: "hib"},
 	}); err != nil {
@@ -658,8 +644,6 @@ func TestReconcileHibernateFailsOnTimeout(t *testing.T) {
 	}
 }
 
-// Failed→Hibernating re-entry must refresh LastTransitionTime so the new
-// hibernate deadline starts from zero.
 func TestReconcileHibernateRecoversFromFailed(t *testing.T) {
 	staleTime := metav1.NewTime(time.Now().Add(-2 * hibernateTimeout))
 	hib := &cocoonv1.CocoonHibernation{
@@ -716,7 +700,7 @@ func TestSetPhasePatchesObservedGenerationOnSamePhase(t *testing.T) {
 		Status: cocoonv1.CocoonHibernationStatus{
 			Phase:              cocoonv1.CocoonHibernationPhaseHibernated,
 			VMName:             "vk-ns-demo-0",
-			ObservedGeneration: 6, // lags by one rev
+			ObservedGeneration: 6,
 		},
 	}
 	scheme := testScheme(t)
@@ -746,7 +730,7 @@ func TestMarkPendingPatchesObservedGenerationOnSameMessage(t *testing.T) {
 		ObjectMeta: metav1.ObjectMeta{Name: "hib", Namespace: "ns", Generation: 4},
 		Status: cocoonv1.CocoonHibernationStatus{
 			Phase:              cocoonv1.CocoonHibernationPhasePending,
-			ObservedGeneration: 3, // lags by one rev
+			ObservedGeneration: 3,
 			Conditions: []metav1.Condition{{
 				Type:    commonk8s.ConditionTypeReady,
 				Status:  metav1.ConditionFalse,
@@ -776,10 +760,6 @@ func TestMarkPendingPatchesObservedGenerationOnSameMessage(t *testing.T) {
 	}
 }
 
-// A missing pod — or a recreated pod not yet annotated with a VMName — is
-// consistent with Hibernated/Waking. Demoting to Pending would drop the phase
-// cocoonset's restore intent keys on, letting a recreate fresh-boot and a
-// later re-hibernate persist over the real snapshot.
 func TestReconcileKeepsHibernatedPhaseThroughPodGaps(t *testing.T) {
 	cases := []struct {
 		name string
@@ -835,8 +815,6 @@ func TestReconcileKeepsHibernatedPhaseThroughPodGaps(t *testing.T) {
 	}
 }
 
-// A stale :hibernate tag from a prior suspend cycle must not flip the CR to
-// Hibernated before vk reports lifecycle-state=hibernated for this round.
 func TestReconcileHibernateIgnoresStaleTagUntilLifecycleHibernated(t *testing.T) {
 	hib := &cocoonv1.CocoonHibernation{
 		ObjectMeta: metav1.ObjectMeta{Name: "hib", Namespace: "ns", Finalizers: []string{finalizerName}},
@@ -888,8 +866,6 @@ func TestReconcileHibernateIgnoresStaleTagUntilLifecycleHibernated(t *testing.T)
 	}
 }
 
-// A fresh duplicate that never reconciled has no Status.VMName yet but still
-// holds the VM via its immutable podRef.
 func TestReconcileDeleteKeepsTagForFreshDuplicate(t *testing.T) {
 	deleting := &cocoonv1.CocoonHibernation{
 		ObjectMeta: metav1.ObjectMeta{
@@ -921,10 +897,6 @@ func TestReconcileDeleteKeepsTagForFreshDuplicate(t *testing.T) {
 	}
 }
 
-// Lifecycle annotations from a prior CocoonSet round (lower observed
-// generation) must not complete a CR hibernate: vk writes state and
-// observed-generation atomically, so a stale pair predating the pod's
-// current generation stamp is a leftover, not this round's completion.
 func TestReconcileHibernateRejectsStaleLifecycleRound(t *testing.T) {
 	hib := &cocoonv1.CocoonHibernation{
 		ObjectMeta: metav1.ObjectMeta{Name: "hib", Namespace: "ns", Finalizers: []string{finalizerName}},
@@ -978,20 +950,15 @@ func TestReconcileHibernateRejectsStaleLifecycleRound(t *testing.T) {
 	}
 }
 
-// A desire flipped back to Hibernate mid-wake must finish the wake first:
-// the stale tag and lifecycle pair from the previous round still read as
-// "complete" until vk finishes the wake and the tag is dropped.
 func TestHibernateDesireFinishesInFlightWakeFirst(t *testing.T) {
 	hib := &cocoonv1.CocoonHibernation{
 		ObjectMeta: metav1.ObjectMeta{Name: "hib", Namespace: "ns", Finalizers: []string{finalizerName}},
 		Spec: cocoonv1.CocoonHibernationSpec{
-			Desire: cocoonv1.HibernationDesireHibernate, // flipped back mid-wake
+			Desire: cocoonv1.HibernationDesireHibernate,
 			PodRef: cocoonv1.HibernationPodRef{Name: "demo-0"},
 		},
 		Status: cocoonv1.CocoonHibernationStatus{Phase: cocoonv1.CocoonHibernationPhaseWaking, VMName: "vk-ns-demo-0"},
 	}
-	// Pod as the informer would show it mid-wake: previous round's lifecycle
-	// pair still present, VM not yet running.
 	pod := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "demo-0", Namespace: "ns"}}
 	(&meta.VMSpec{VMName: "vk-ns-demo-0", Managed: true}).Apply(pod)
 	meta.LifecycleStatus{State: meta.LifecycleStateHibernated}.Apply(pod)
@@ -1022,19 +989,15 @@ func TestHibernateDesireFinishesInFlightWakeFirst(t *testing.T) {
 	}
 }
 
-// A desire flipped to Wake mid-hibernate must finish the hibernate first: a
-// lagging informer can still show the pre-quiesce Running+VMID status, which
-// would otherwise complete the wake instantly and GC the only snapshot.
 func TestWakeDesireFinishesInFlightHibernateFirst(t *testing.T) {
 	hib := &cocoonv1.CocoonHibernation{
 		ObjectMeta: metav1.ObjectMeta{Name: "hib", Namespace: "ns", Finalizers: []string{finalizerName}},
 		Spec: cocoonv1.CocoonHibernationSpec{
-			Desire: cocoonv1.HibernationDesireWake, // flipped mid-hibernate
+			Desire: cocoonv1.HibernationDesireWake,
 			PodRef: cocoonv1.HibernationPodRef{Name: "demo-0"},
 		},
 		Status: cocoonv1.CocoonHibernationStatus{Phase: cocoonv1.CocoonHibernationPhaseHibernating, VMName: "vk-ns-demo-0"},
 	}
-	// Stale pre-quiesce snapshot of the pod: still Running with a VMID.
 	pod := &corev1.Pod{
 		ObjectMeta: metav1.ObjectMeta{Name: "demo-0", Namespace: "ns"},
 		Status: corev1.PodStatus{ContainerStatuses: []corev1.ContainerStatus{
@@ -1071,8 +1034,6 @@ func TestWakeDesireFinishesInFlightHibernateFirst(t *testing.T) {
 	}
 }
 
-// The shared :hibernate tag outlives any single CR while another live CR
-// still tracks the VM; only the last holder GCs it.
 func TestReconcileDeleteKeepsTagWhileAnotherCRHoldsVM(t *testing.T) {
 	deleting := &cocoonv1.CocoonHibernation{
 		ObjectMeta: metav1.ObjectMeta{
@@ -1094,7 +1055,7 @@ func TestReconcileDeleteKeepsTagWhileAnotherCRHoldsVM(t *testing.T) {
 		WithObjects(deleting, holder).
 		WithStatusSubresource(&cocoonv1.CocoonHibernation{}).
 		Build()
-	reg := &fakeRegistry{}
+	reg := &fakeRegistry{manifestPresent: true}
 	r := &Reconciler{Client: cli, Scheme: scheme, Registry: reg}
 
 	if err := r.reconcileDelete(t.Context(), deleting); err != nil {
@@ -1108,8 +1069,6 @@ func TestReconcileDeleteKeepsTagWhileAnotherCRHoldsVM(t *testing.T) {
 		t.Errorf("finalizer must still be removed, got %v", got.Finalizers)
 	}
 
-	// Last holder: delete b for real (the finalizer parks it with a deletion
-	// timestamp); its own reconcileDelete must then GC the tag.
 	if err := cli.Delete(t.Context(), holder); err != nil {
 		t.Fatalf("delete holder: %v", err)
 	}
@@ -1168,7 +1127,6 @@ func TestReconcilePendingWhenPodMissingVMName(t *testing.T) {
 			PodRef: cocoonv1.HibernationPodRef{Name: "demo-0"},
 		},
 	}
-	// Pod exists but vk-cocoon has not yet set the VMName annotation.
 	pod := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "demo-0", Namespace: "ns"}}
 	scheme := testScheme(t)
 	cli := ctrlfake.NewClientBuilder().
@@ -1197,9 +1155,6 @@ func TestReconcilePendingWhenPodMissingVMName(t *testing.T) {
 	}
 }
 
-// TestReconcileSerializesCRsTargetingOnePod pins the pod lock: nothing stops two
-// CRs from naming one pod with opposing desires, and above one worker they would
-// otherwise interleave the shared hibernate annotation and :hibernate tag.
 func TestReconcileSerializesCRsTargetingOnePod(t *testing.T) {
 	hib := func(name string, desire cocoonv1.HibernationDesire) *cocoonv1.CocoonHibernation {
 		return &cocoonv1.CocoonHibernation{
@@ -1210,8 +1165,6 @@ func TestReconcileSerializesCRsTargetingOnePod(t *testing.T) {
 			},
 		}
 	}
-	// Running + a VMID is what drives the wake path all the way to DeleteManifest,
-	// so both desires actually reach the registry and can be observed racing.
 	pod := &corev1.Pod{
 		ObjectMeta: metav1.ObjectMeta{
 			Name: "demo-0", Namespace: "ns",
@@ -1247,9 +1200,6 @@ func TestReconcileSerializesCRsTargetingOnePod(t *testing.T) {
 	}
 }
 
-// TestReconcileSerializesDeletingCRAgainstLiveCR covers the delete fast path:
-// reconcileDelete drops the same :hibernate tag a live CR on that pod probes, so
-// it must take the pod lock too rather than return ahead of it.
 func TestReconcileSerializesDeletingCRAgainstLiveCR(t *testing.T) {
 	deleting := &cocoonv1.CocoonHibernation{
 		ObjectMeta: metav1.ObjectMeta{
@@ -1297,11 +1247,6 @@ func TestReconcileSerializesDeletingCRAgainstLiveCR(t *testing.T) {
 	}
 }
 
-// TestReconcileSerializesRetargetedCRAgainstItsStaleVM covers the podRef/status
-// split: spec.podRef is mutable and markPending never rewrites Status.VMName, so
-// a CR retargeted to demo-1 still deletes demo-0's tag on the way out. Keying the
-// lock on spec.podRef would lock demo-1 while touching demo-0's tag, leaving a
-// live CR on demo-0 free to probe the tag being deleted.
 func TestReconcileSerializesRetargetedCRAgainstItsStaleVM(t *testing.T) {
 	retargeted := &cocoonv1.CocoonHibernation{
 		ObjectMeta: metav1.ObjectMeta{
@@ -1313,7 +1258,6 @@ func TestReconcileSerializesRetargetedCRAgainstItsStaleVM(t *testing.T) {
 			Desire: cocoonv1.HibernationDesireHibernate,
 			PodRef: cocoonv1.HibernationPodRef{Name: "demo-1"},
 		},
-		// Status still names demo-0's VM: the tag this CR will delete.
 		Status: cocoonv1.CocoonHibernationStatus{VMName: "vk-ns-demo-0"},
 	}
 	live := &cocoonv1.CocoonHibernation{
@@ -1350,7 +1294,6 @@ func TestReconcileSerializesRetargetedCRAgainstItsStaleVM(t *testing.T) {
 	}
 }
 
-// A nil manager suffices: the guard rejects before mgr is touched.
 func TestSetupWithManagerRejectsInvalidConcurrency(t *testing.T) {
 	for _, n := range []int{0, -1} {
 		if err := (&Reconciler{Concurrency: n}).SetupWithManager(t.Context(), nil); err == nil {
@@ -1359,7 +1302,71 @@ func TestSetupWithManagerRejectsInvalidConcurrency(t *testing.T) {
 	}
 }
 
-// concurrencyProbe records the peak number of registry calls in flight.
+func TestReconcileWakeLeavesSettledCRInert(t *testing.T) {
+	hib := &cocoonv1.CocoonHibernation{
+		ObjectMeta: metav1.ObjectMeta{Name: "hib", Namespace: "ns", Finalizers: []string{finalizerName}},
+		Spec: cocoonv1.CocoonHibernationSpec{
+			Desire: cocoonv1.HibernationDesireWake,
+			PodRef: cocoonv1.HibernationPodRef{Name: "demo-0"},
+		},
+		Status: cocoonv1.CocoonHibernationStatus{Phase: cocoonv1.CocoonHibernationPhaseActive, VMName: "vk-ns-demo-0"},
+	}
+	pod := &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{Name: "demo-0", Namespace: "ns"},
+		Status: corev1.PodStatus{
+			ContainerStatuses: []corev1.ContainerStatus{{
+				State: corev1.ContainerState{Running: &corev1.ContainerStateRunning{}},
+			}},
+		},
+	}
+	(&meta.VMSpec{VMName: "vk-ns-demo-0", Managed: true}).Apply(pod)
+	(&meta.VMRuntime{VMID: "vmid-live"}).Apply(pod)
+	meta.HibernateState(true).Apply(pod)
+
+	scheme := testScheme(t)
+	cli := ctrlfake.NewClientBuilder().
+		WithScheme(scheme).
+		WithObjects(hib, pod).
+		WithStatusSubresource(&cocoonv1.CocoonHibernation{}).
+		Build()
+	reg := &fakeRegistry{manifestPresent: true}
+	r := &Reconciler{Client: cli, Scheme: scheme, Registry: reg}
+
+	if _, err := r.Reconcile(t.Context(), ctrl.Request{
+		NamespacedName: types.NamespacedName{Namespace: "ns", Name: "hib"},
+	}); err != nil {
+		t.Fatalf("Reconcile: %v", err)
+	}
+
+	var outPod corev1.Pod
+	if err := cli.Get(t.Context(), types.NamespacedName{Namespace: "ns", Name: "demo-0"}, &outPod); err != nil {
+		t.Fatalf("get pod: %v", err)
+	}
+	if !meta.ReadHibernateState(&outPod) {
+		t.Error("a settled wake CR must not clear a hibernate annotation set by the CocoonSet suspend")
+	}
+	if reg.deleteCalled {
+		t.Error("a settled wake CR must not delete the snapshot")
+	}
+}
+
+func TestPodWatchPredicateIgnoresStatusOnlyUpdates(t *testing.T) {
+	old := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "demo-0", Namespace: "ns", Annotations: map[string]string{"a": "1"}}}
+	updated := old.DeepCopy()
+	updated.Status.Phase = corev1.PodRunning
+	p := podWatchPredicate()
+	if p.Update(event.UpdateEvent{ObjectOld: old, ObjectNew: updated}) {
+		t.Error("status-only update must not enqueue")
+	}
+	updated.Annotations["a"] = "2"
+	if !p.Update(event.UpdateEvent{ObjectOld: old, ObjectNew: updated}) {
+		t.Error("annotation change must enqueue")
+	}
+	if !p.Create(event.CreateEvent{Object: old}) || !p.Delete(event.DeleteEvent{Object: old}) {
+		t.Error("create and delete must enqueue")
+	}
+}
+
 type concurrencyProbe struct {
 	inFlight    atomic.Int32
 	maxInFlight atomic.Int32
@@ -1379,8 +1386,6 @@ func (c *concurrencyProbe) DeleteManifest(context.Context, string, string) error
 	return nil
 }
 
-// enter raises the peak by CAS: a plain load-then-store lets a later, smaller
-// caller overwrite a peak of 2 with 1 and pass the test falsely.
 func (c *concurrencyProbe) enter() {
 	n := c.inFlight.Add(1)
 	for {

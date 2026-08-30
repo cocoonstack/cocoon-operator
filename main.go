@@ -1,5 +1,4 @@
-// Package main is the cocoon-operator entry point. It runs the CocoonSet
-// and CocoonHibernation reconcilers under controller-runtime.
+// Package main runs the CocoonSet and CocoonHibernation reconcilers under controller-runtime.
 package main
 
 import (
@@ -9,7 +8,6 @@ import (
 	"fmt"
 	"os"
 	"os/signal"
-	"strconv"
 	"syscall"
 
 	"github.com/google/go-containerregistry/pkg/authn"
@@ -61,8 +59,8 @@ func main() {
 	flag.StringVar(&metricsAddr, "metrics-bind-address", commonk8s.EnvOrDefault("METRICS_ADDR", defaultMetricsAddr), "The address the metric endpoint binds to.")
 	flag.StringVar(&probeAddr, "health-probe-bind-address", commonk8s.EnvOrDefault("PROBE_ADDR", defaultProbeAddr), "The address the probe endpoint binds to.")
 	flag.BoolVar(&enableLeaderElection, "leader-elect", leaderDefault, "Enable leader election so only one operator instance reconciles at a time.")
-	flag.IntVar(&cocoonSetConcurrency, "cocoonset-concurrency", envInt("COCOONSET_CONCURRENCY", defaultConcurrency), "Maximum concurrent CocoonSet reconciles.")
-	flag.IntVar(&hibernationConcurrency, "hibernation-concurrency", envInt("HIBERNATION_CONCURRENCY", defaultConcurrency), "Maximum concurrent CocoonHibernation reconciles.")
+	flag.IntVar(&cocoonSetConcurrency, "cocoonset-concurrency", commonk8s.EnvInt("COCOONSET_CONCURRENCY", defaultConcurrency), "Maximum concurrent CocoonSet reconciles.")
+	flag.IntVar(&hibernationConcurrency, "hibernation-concurrency", commonk8s.EnvInt("HIBERNATION_CONCURRENCY", defaultConcurrency), "Maximum concurrent CocoonHibernation reconciles.")
 	flag.Parse()
 
 	ctx := context.Background()
@@ -83,9 +81,10 @@ func main() {
 		Metrics: metricsserver.Options{
 			BindAddress: metricsAddr,
 		},
-		HealthProbeBindAddress: probeAddr,
-		LeaderElection:         enableLeaderElection,
-		LeaderElectionID:       leaderElectionID,
+		HealthProbeBindAddress:        probeAddr,
+		LeaderElection:                enableLeaderElection,
+		LeaderElectionID:              leaderElectionID,
+		LeaderElectionReleaseOnCancel: true,
 	})
 	if err != nil {
 		logger.Fatalf(ctx, err, "create manager")
@@ -158,12 +157,4 @@ func buildScheme() *runtime.Scheme {
 	utilruntime.Must(clientgoscheme.AddToScheme(scheme))
 	utilruntime.Must(cocoonv1.AddToScheme(scheme))
 	return scheme
-}
-
-func envInt(key string, fallback int) int {
-	n, err := strconv.Atoi(os.Getenv(key))
-	if err != nil {
-		return fallback
-	}
-	return n
 }

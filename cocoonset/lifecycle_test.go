@@ -63,8 +63,6 @@ func TestSyncCocoonSetGenerationNoOpWhenAlreadyCurrent(t *testing.T) {
 		allByName: map[string]*corev1.Pod{"demo-0": pod},
 	}
 
-	// PatchCocoonSetGeneration must short-circuit on equal — the fake
-	// client would error on a Patch with empty body otherwise.
 	if err := r.syncCocoonSetGeneration(t.Context(), cs, classified); err != nil {
 		t.Fatalf("syncCocoonSetGeneration: %v", err)
 	}

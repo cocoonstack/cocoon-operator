@@ -1,6 +1,7 @@
 package cocoonset
 
 import (
+	"strconv"
 	"testing"
 	"time"
 
@@ -29,7 +30,7 @@ func TestRebuildHistoryGarbageCollectsStaleSlots(t *testing.T) {
 	in := map[int32]rebuildEntry{
 		1: {Count: 1},
 		2: {Count: 2},
-		7: {Count: 3}, // slot beyond Replicas, must be pruned
+		7: {Count: 3},
 	}
 	enc, err := encodeRebuildHistory(2, in)
 	if err != nil {
@@ -58,9 +59,11 @@ func TestBackoffDelaySchedule(t *testing.T) {
 		{10, 30 * time.Second},
 	}
 	for _, tc := range cases {
-		if got := backoffDelay(tc.count); got != tc.want {
-			t.Errorf("backoffDelay(%d) = %s, want %s", tc.count, got, tc.want)
-		}
+		t.Run(strconv.Itoa(tc.count), func(t *testing.T) {
+			if got := backoffDelay(tc.count); got != tc.want {
+				t.Errorf("backoffDelay(%d) = %s, want %s", tc.count, got, tc.want)
+			}
+		})
 	}
 }
 
@@ -79,7 +82,6 @@ func TestReadRebuildHistoryHandlesNullPayload(t *testing.T) {
 	if got == nil {
 		t.Fatal("null payload must yield non-nil map so downstream writes don't panic")
 	}
-	// Round-trip via encodeRebuildHistory must not panic on the returned map.
 	got[1] = rebuildEntry{Count: 1}
 	if _, err := encodeRebuildHistory(2, got); err != nil {
 		t.Fatalf("encodeRebuildHistory on normalized null payload: %v", err)

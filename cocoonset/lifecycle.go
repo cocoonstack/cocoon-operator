@@ -10,9 +10,7 @@ import (
 	commonk8s "github.com/cocoonstack/cocoon-common/k8s"
 )
 
-// syncCocoonSetGeneration writes cs.Generation to each owned pod so
-// vk-cocoon can echo it back as lifecycle-observed-generation, giving
-// clients a counter-based completion signal immune to wallclock skew.
+// syncCocoonSetGeneration lets vk-cocoon echo the generation back as a skew-free completion signal.
 func (r *Reconciler) syncCocoonSetGeneration(ctx context.Context, cs *cocoonv1.CocoonSet, classified classifiedPods) error {
 	return classified.forEachSorted(ctx, func(pod *corev1.Pod) error {
 		if err := commonk8s.PatchCocoonSetGeneration(ctx, r.Client, pod, cs.Generation); err != nil {

@@ -49,7 +49,7 @@ func TestMarkRestoreIfHibernatedNoRegistry(t *testing.T) {
 	pod := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{
 		Annotations: map[string]string{meta.AnnotationVMName: "vm"},
 	}}
-	r := &Reconciler{} // Registry nil (OCI_REGISTRY unset deployment)
+	r := &Reconciler{}
 	if err := r.markRestoreIfHibernated(t.Context(), pod, true); err != nil {
 		t.Fatalf("nil registry should be a no-op, got %v", err)
 	}
@@ -93,10 +93,6 @@ func TestPodsRestorableByCR(t *testing.T) {
 	}
 }
 
-// TestEnsureToolboxesRestoresHibernated guards the toolbox recreate path: a
-// managed toolbox hibernated via CR must be stamped restore-from-hibernate when
-// ensureToolboxes rebuilds it, so it restores rather than cold-boots (a fresh
-// boot would let a later hibernate overwrite the real snapshot).
 func TestEnsureToolboxesRestoresHibernated(t *testing.T) {
 	scheme := testScheme(t)
 	cs := &cocoonv1.CocoonSet{

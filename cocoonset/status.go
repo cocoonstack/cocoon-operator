@@ -49,7 +49,7 @@ func mergeConditions(next *cocoonv1.CocoonSetStatus, prev []metav1.Condition) {
 	next.Conditions = merged
 }
 
-// buildStatus rebuilds CocoonSetStatus from classified pods. Empty phase is auto-derived.
+// buildStatus derives the phase when the phase argument is empty.
 func buildStatus(cs *cocoonv1.CocoonSet, classified classifiedPods, phase cocoonv1.CocoonSetPhase) cocoonv1.CocoonSetStatus {
 	desired := int32(1) + cs.Spec.Agent.Replicas
 	ready := int32(0)
@@ -139,8 +139,7 @@ func toolboxStatusFromPod(pod *corev1.Pod, name string) cocoonv1.ToolboxStatus {
 	}
 }
 
-// buildConditions returns Ready and Progressing conditions.
-// Timestamps are left zero so mergeConditions preserves existing LastTransitionTime.
+// buildConditions leaves timestamps zero so mergeConditions preserves LastTransitionTime.
 func buildConditions(cs *cocoonv1.CocoonSet, ready, desired, tbReady, tbDesired int32, phase cocoonv1.CocoonSetPhase) []metav1.Condition {
 	readyStatus := metav1.ConditionFalse
 	readyReason := conditionReasonNotReady

@@ -41,21 +41,14 @@ func (r *Reconciler) ensureToolboxes(ctx context.Context, cs *cocoonv1.CocoonSet
 			if err != nil {
 				return changed, err
 			}
-			if deleted {
-				changed = true
-			}
+			changed = changed || deleted
 			continue
 		}
 		tbPod, err := buildToolboxPod(cs, tb, r.Scheme)
 		if err != nil {
 			return changed, fmt.Errorf("build toolbox %s: %w", tb.Name, err)
 		}
-		restorable, err := intent()
-		if err != nil {
-			return changed, err
-		}
-		_, wantRestore := restorable[tbPod.Name]
-		if err := r.markRestoreIfHibernated(ctx, tbPod, wantRestore); err != nil {
+		if err := r.markRestoreFromIntent(ctx, tbPod, intent); err != nil {
 			return changed, fmt.Errorf("mark restore toolbox %s: %w", tb.Name, err)
 		}
 		if err := r.Create(ctx, tbPod); err != nil {
@@ -75,6 +68,9 @@ func (r *Reconciler) ensureToolboxes(ctx context.Context, cs *cocoonv1.CocoonSet
 			continue
 		}
 		pod := classified.toolbox[name]
+		if err := r.stashDeleteVMNames(ctx, cs, []corev1.Pod{*pod}); err != nil {
+			return changed, fmt.Errorf("stash vm name of toolbox %s: %w", name, err)
+		}
 		if err := r.Delete(ctx, pod); err != nil {
 			if apierrors.IsNotFound(err) {
 				continue

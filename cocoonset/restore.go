@@ -17,16 +17,13 @@ import (
 // restoreIntent returns the namespace's restore-intent set, loaded at most once.
 type restoreIntent func() (map[string]struct{}, error)
 
-// newRestoreIntent defers the List until a pod actually has to be built: it is
-// O(CocoonHibernations in the namespace) and the steady path must not pay it.
+// newRestoreIntent defers the O(CocoonHibernations) List until a pod is actually built.
 func (r *Reconciler) newRestoreIntent(ctx context.Context, namespace string) restoreIntent {
 	return sync.OnceValues(func() (map[string]struct{}, error) {
 		return r.podsRestorableByCR(ctx, namespace)
 	})
 }
 
-// hibernationPodNames lists the namespace's CocoonHibernations and returns the
-// set of PodRef names whose CR satisfies accept.
 func (r *Reconciler) hibernationPodNames(ctx context.Context, namespace string, accept func(*cocoonv1.CocoonHibernation) bool) (map[string]struct{}, error) {
 	var hibList cocoonv1.CocoonHibernationList
 	if err := r.List(ctx, &hibList, client.InNamespace(namespace)); err != nil {
@@ -42,10 +39,7 @@ func (r *Reconciler) hibernationPodNames(ctx context.Context, namespace string, 
 	return out, nil
 }
 
-// podsRestorableByCR returns pod names whose CocoonHibernation phase (Hibernated,
-// or Waking with the tag still present) requires a (re)created pod to restore
-// rather than boot fresh. Phase gates this, not Desire: Phase only reaches
-// Hibernated once the push is confirmed, so a leaked tag on an Active agent is excluded.
+// podsRestorableByCR gates on Phase, not Desire; Phase flips only once the push is confirmed.
 func (r *Reconciler) podsRestorableByCR(ctx context.Context, namespace string) (map[string]struct{}, error) {
 	return r.hibernationPodNames(ctx, namespace, func(h *cocoonv1.CocoonHibernation) bool {
 		return h.Status.Phase == cocoonv1.CocoonHibernationPhaseHibernated ||
@@ -53,10 +47,16 @@ func (r *Reconciler) podsRestorableByCR(ctx context.Context, namespace string) (
 	})
 }
 
-// markRestoreIfHibernated flags a freshly-built pod to restore from :hibernate
-// when intent holds and the snapshot exists in the registry. Fails closed: a
-// probe error must not fall back to a fresh boot that a later re-hibernate
-// would persist over the real snapshot.
+func (r *Reconciler) markRestoreFromIntent(ctx context.Context, pod *corev1.Pod, intent restoreIntent) error {
+	restorable, err := intent()
+	if err != nil {
+		return err
+	}
+	_, want := restorable[pod.Name]
+	return r.markRestoreIfHibernated(ctx, pod, want)
+}
+
+// markRestoreIfHibernated fails closed; a fresh boot on probe error would let a re-hibernate overwrite the snapshot.
 func (r *Reconciler) markRestoreIfHibernated(ctx context.Context, pod *corev1.Pod, intent bool) error {
 	logger := log.WithFunc("cocoonset.Reconciler.markRestoreIfHibernated")
 	if !intent || r.Registry == nil {

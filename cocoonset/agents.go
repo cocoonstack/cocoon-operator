@@ -21,14 +21,10 @@ import (
 	"github.com/cocoonstack/cocoon-operator/metrics"
 )
 
-// subAgentCreateConcurrency caps parallel pod creates during a batch scale-up
-// so it does not burst the apiserver.
+// subAgentCreateConcurrency caps parallel creates so a scale-up does not burst the apiserver.
 const subAgentCreateConcurrency = 8
 
-// ensureSubAgents creates/deletes sub-agent pods to match [1..Replicas].
-// Returns changed (true when cluster state was mutated) and requeueAfter
-// (non-zero when a sub-agent is in rebuild backoff and the caller should
-// re-reconcile when backoff elapses).
+// ensureSubAgents reports changed on any mutation and the shortest rebuild backoff still pending.
 func (r *Reconciler) ensureSubAgents(ctx context.Context, cs *cocoonv1.CocoonSet, classified classifiedPods, mainVMName, mainNodeName string, intent restoreIntent) (bool, time.Duration, error) {
 	logger := log.WithFunc("cocoonset.Reconciler.ensureSubAgents")
 	changed := false
@@ -45,18 +41,14 @@ func (r *Reconciler) ensureSubAgents(ctx context.Context, cs *cocoonv1.CocoonSet
 		if err != nil {
 			return changed, requeueAfter, err
 		}
-		if deleted {
-			changed = true
-		}
+		changed = changed || deleted
 		if wait > 0 && (requeueAfter == 0 || wait < requeueAfter) {
 			requeueAfter = wait
 		}
 	}
 
 	created, err := r.createSubAgents(ctx, logger, cs, missing, mainVMName, mainNodeName, intent)
-	if created {
-		changed = true
-	}
+	changed = changed || created
 	if err != nil {
 		return changed, requeueAfter, err
 	}
@@ -66,6 +58,9 @@ func (r *Reconciler) ensureSubAgents(ctx context.Context, cs *cocoonv1.CocoonSet
 			continue
 		}
 		pod := classified.sub[slot]
+		if err := r.stashDeleteVMNames(ctx, cs, []corev1.Pod{*pod}); err != nil {
+			return changed, requeueAfter, fmt.Errorf("stash vm name of sub-agent slot %d: %w", slot, err)
+		}
 		if err := r.Delete(ctx, pod); err != nil {
 			if apierrors.IsNotFound(err) {
 				continue
@@ -78,16 +73,9 @@ func (r *Reconciler) ensureSubAgents(ctx context.Context, cs *cocoonv1.CocoonSet
 	return changed, requeueAfter, nil
 }
 
-// createSubAgents builds the missing slots concurrently so a batch scale-up does
-// not serialize N apiserver round trips.
 func (r *Reconciler) createSubAgents(ctx context.Context, logger *log.Fields, cs *cocoonv1.CocoonSet, missing []int32, mainVMName, mainNodeName string, intent restoreIntent) (bool, error) {
 	if len(missing) == 0 {
 		return false, nil
-	}
-	// Resolved before the fan-out so the goroutines only ever read it.
-	restorable, err := intent()
-	if err != nil {
-		return false, err
 	}
 	g, gctx := errgroup.WithContext(ctx)
 	g.SetLimit(subAgentCreateConcurrency)
@@ -98,8 +86,7 @@ func (r *Reconciler) createSubAgents(ctx context.Context, logger *log.Fields, cs
 			if err != nil {
 				return fmt.Errorf("build sub-agent slot %d: %w", slot, err)
 			}
-			_, wantRestore := restorable[subPod.Name]
-			if err := r.markRestoreIfHibernated(gctx, subPod, wantRestore); err != nil {
+			if err := r.markRestoreFromIntent(gctx, subPod, intent); err != nil {
 				return fmt.Errorf("mark restore sub-agent slot %d: %w", slot, err)
 			}
 			if err := r.Create(gctx, subPod); err != nil {
@@ -117,10 +104,7 @@ func (r *Reconciler) createSubAgents(ctx context.Context, logger *log.Fields, cs
 	return created.Load(), waitErr
 }
 
-// triageSubAgent deletes pod when it is terminal or has drifted from spec.
-// requeueAfter > 0 means the slot is in rebuild backoff and the caller should
-// re-reconcile when the window elapses; deleted=false with requeueAfter=0
-// means the pod still matches or is in dead-letter.
+// triageSubAgent returns a non-zero requeueAfter while the slot waits out rebuild backoff.
 func (r *Reconciler) triageSubAgent(ctx context.Context, logger *log.Fields, pod *corev1.Pod, cs *cocoonv1.CocoonSet, slot int32) (bool, time.Duration, error) {
 	if pod.Annotations[annotationDeadLetter] == "true" {
 		return r.rebuildDeadLetteredOnDrift(ctx, logger, pod, cs, slot)
@@ -139,18 +123,15 @@ func (r *Reconciler) triageSubAgent(ctx context.Context, logger *log.Fields, pod
 	}
 }
 
-// rebuildDeadLetteredOnDrift leaves a dead-lettered pod alone until a spec
-// edit: the fix is the operator's remedy, so the new spec earns the slot a
-// fresh rebuild budget.
+// rebuildDeadLetteredOnDrift leaves a dead-lettered pod alone until a spec edit, which earns a fresh rebuild budget.
 func (r *Reconciler) rebuildDeadLetteredOnDrift(ctx context.Context, logger *log.Fields, pod *corev1.Pod, cs *cocoonv1.CocoonSet, slot int32) (bool, time.Duration, error) {
 	if podSpecMatchesAgent(pod, cs, slot) {
 		return false, 0, nil
 	}
 	history := readRebuildHistory(cs)
 	if _, ok := history[slot]; ok {
-		next := maps.Clone(history)
-		delete(next, slot)
-		if err := r.patchRebuildHistory(ctx, cs, next); err != nil {
+		delete(history, slot)
+		if err := r.patchRebuildHistory(ctx, cs, history); err != nil {
 			return false, 0, fmt.Errorf("reset rebuild history for slot %d: %w", slot, err)
 		}
 	}
@@ -161,10 +142,7 @@ func (r *Reconciler) rebuildDeadLetteredOnDrift(ctx context.Context, logger *log
 	return true, 0, nil
 }
 
-// rebuildSubAgent deletes pod with exponential backoff, dead-lettering past
-// maxRebuildAttempts so failures stay visible. History persists before the
-// delete so a failed delete cannot bypass the gate; the patch DeepCopies so
-// concurrent ensureSubAgents goroutines observe a stable cs pointer.
+// rebuildSubAgent persists history before the delete so a failed delete cannot bypass the gate.
 func (r *Reconciler) rebuildSubAgent(ctx context.Context, logger *log.Fields, pod *corev1.Pod, cs *cocoonv1.CocoonSet, slot int32) (bool, time.Duration, error) {
 	history := readRebuildHistory(cs)
 	entry := history[slot]
@@ -173,7 +151,7 @@ func (r *Reconciler) rebuildSubAgent(ctx context.Context, logger *log.Fields, po
 			return false, 0, err
 		}
 		metrics.SubAgentDeadLetterTotal.WithLabelValues(cs.Namespace, cs.Name).Inc()
-		r.emitEventf(cs, corev1.EventTypeWarning, "SubAgentDeadLetter",
+		commonk8s.Eventf(r.Recorder, cs, corev1.EventTypeWarning, "SubAgentDeadLetter",
 			"slot %d exhausted %d rebuilds; pod %s left in dead-letter", slot, maxRebuildAttempts, pod.Name)
 		return false, 0, nil
 	}
@@ -183,19 +161,20 @@ func (r *Reconciler) rebuildSubAgent(ctx context.Context, logger *log.Fields, po
 			return false, remaining, nil
 		}
 	}
-	next := maps.Clone(history)
-	next[slot] = rebuildEntry{Count: entry.Count + 1, LastDeleted: time.Now()}
-	if err := r.patchRebuildHistory(ctx, cs, next); err != nil {
+	entry.Count++
+	entry.LastDeleted = time.Now()
+	history[slot] = entry
+	if err := r.patchRebuildHistory(ctx, cs, history); err != nil {
 		return false, 0, fmt.Errorf("persist rebuild history: %w", err)
 	}
 	logger.Infof(ctx, "sub-agent %s/%s slot %d terminal (phase=%s lifecycle=%s), rebuild attempt %d/%d",
-		pod.Namespace, pod.Name, slot, pod.Status.Phase, meta.ReadLifecycleState(pod), next[slot].Count, maxRebuildAttempts)
+		pod.Namespace, pod.Name, slot, pod.Status.Phase, meta.ReadLifecycleState(pod), entry.Count, maxRebuildAttempts)
 	if err := r.Delete(ctx, pod); err != nil && !apierrors.IsNotFound(err) {
 		return false, 0, fmt.Errorf("delete terminal sub-agent slot %d: %w", slot, err)
 	}
 	metrics.SubAgentRebuildTotal.WithLabelValues(cs.Namespace, cs.Name).Inc()
-	r.emitEventf(cs, corev1.EventTypeNormal, "SubAgentRebuilding",
-		"slot %d attempt %d/%d", slot, next[slot].Count, maxRebuildAttempts)
+	commonk8s.Eventf(r.Recorder, cs, corev1.EventTypeNormal, "SubAgentRebuilding",
+		"slot %d attempt %d/%d", slot, entry.Count, maxRebuildAttempts)
 	return true, 0, nil
 }
 
@@ -215,9 +194,7 @@ func (r *Reconciler) patchAnnotation(ctx context.Context, obj client.Object, key
 	return nil
 }
 
-// patchRebuildHistory patches the annotation via a DeepCopy, then mirrors it
-// locally so later slot iterations in this reconcile see fresh history;
-// concurrent create goroutines read only Spec, never Annotations.
+// patchRebuildHistory mirrors the annotation onto cs so later slots in this reconcile see fresh history.
 func (r *Reconciler) patchRebuildHistory(ctx context.Context, cs *cocoonv1.CocoonSet, history map[int32]rebuildEntry) error {
 	enc, err := encodeRebuildHistory(cs.Spec.Agent.Replicas, history)
 	if err != nil {

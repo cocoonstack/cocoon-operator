@@ -16,10 +16,10 @@ import (
 	cocoonv1 "github.com/cocoonstack/cocoon-common/apis/v1"
 	commonk8s "github.com/cocoonstack/cocoon-common/k8s"
 	"github.com/cocoonstack/cocoon-common/meta"
+	"github.com/cocoonstack/cocoon-operator/snapshot"
 )
 
-// annotationDeleteVMNames records VM names for the post-pod GC step, so a
-// CocoonSet deleted before Status.Agents was patched still gets every tag cleaned.
+// annotationDeleteVMNames survives a CocoonSet deleted before Status.Agents was ever patched.
 const annotationDeleteVMNames = "cocoonset.cocoonstack.io/delete-vm-names"
 
 func (r *Reconciler) reconcileDelete(ctx context.Context, cs *cocoonv1.CocoonSet) (ctrl.Result, error) {
@@ -31,48 +31,36 @@ func (r *Reconciler) reconcileDelete(ctx context.Context, cs *cocoonv1.CocoonSet
 		return ctrl.Result{}, fmt.Errorf("list owned pods for delete: %w", listErr)
 	}
 
-	// Stash VM names from live pods + Status before pods disappear.
 	if err := r.stashDeleteVMNames(ctx, cs, owned); err != nil {
 		return ctrl.Result{}, fmt.Errorf("stash vm names: %w", err)
 	}
 
-	// vk-cocoon completes the snapshot push during the grace period before GC.
-	for i := range owned {
-		if ctxErr := ctx.Err(); ctxErr != nil {
-			return ctrl.Result{}, ctxErr
+	// GC registry tags only once every pod is gone; vk-cocoon's DeletePod may still be pushing the snapshot
+	if len(owned) > 0 {
+		for i := range owned {
+			if ctxErr := ctx.Err(); ctxErr != nil {
+				return ctrl.Result{}, ctxErr
+			}
+			pod := &owned[i]
+			if err := client.IgnoreNotFound(r.Delete(ctx, pod)); err != nil {
+				return ctrl.Result{}, fmt.Errorf("delete pod %s/%s: %w", pod.Namespace, pod.Name, err)
+			}
 		}
-		pod := &owned[i]
-		if err := client.IgnoreNotFound(r.Delete(ctx, pod)); err != nil {
-			return ctrl.Result{}, fmt.Errorf("delete pod %s/%s: %w", pod.Namespace, pod.Name, err)
-		}
-	}
-
-	// Requeue if any pods still exist — vk-cocoon's DeletePod may still be running
-	// snapshot save/push. We only GC registry tags once every pod is fully gone.
-	remainingOwned, listErr := r.listOwnedPods(ctx, cs)
-	if listErr != nil {
-		return ctrl.Result{}, fmt.Errorf("re-list pods after delete: %w", listErr)
-	}
-	if len(remainingOwned) > 0 {
-		logger.Infof(ctx, "waiting for %d pods to terminate before GC", len(remainingOwned))
+		logger.Infof(ctx, "waiting for %d pods to terminate before GC", len(owned))
 		return ctrl.Result{RequeueAfter: requeueWaitForMain}, nil
 	}
 
-	// :hibernate is always orphaned at teardown. :latest is kept when
-	// shouldKeepLatestTag says vk-cocoon pushed it for retag. Probe before each
-	// delete because some registries materialize an empty repository while
-	// authorizing DELETE for a tag that never existed.
+	// :hibernate is always orphaned at teardown; :latest is kept when vk-cocoon pushed it for retag
 	if r.Registry != nil {
 		for _, name := range parseVMNamesAnnotation(cs.Annotations[annotationDeleteVMNames]) {
-			// Non-fatal, but log at error: a persistent delete failure (e.g. the
-			// registry SA lacking delete permission) silently leaks snapshots.
-			if err := r.deleteManifestIfPresent(ctx, name, meta.HibernateSnapshotTag); err != nil {
+			// non-fatal but logged at error: a persistent delete failure silently leaks snapshots
+			if err := snapshot.DeleteManifestIfPresent(ctx, r.Registry, name, meta.HibernateSnapshotTag); err != nil {
 				logger.Errorf(ctx, err, "delete snapshot %s:%s", name, meta.HibernateSnapshotTag)
 			}
 			if shouldKeepLatestTag(cs, name) {
 				continue
 			}
-			if err := r.deleteManifestIfPresent(ctx, name, meta.DefaultSnapshotTag); err != nil {
+			if err := snapshot.DeleteManifestIfPresent(ctx, r.Registry, name, meta.DefaultSnapshotTag); err != nil {
 				logger.Errorf(ctx, err, "delete snapshot %s:%s", name, meta.DefaultSnapshotTag)
 			}
 		}
@@ -88,25 +76,9 @@ func (r *Reconciler) reconcileDelete(ctx context.Context, cs *cocoonv1.CocoonSet
 	return ctrl.Result{}, nil
 }
 
-func (r *Reconciler) deleteManifestIfPresent(ctx context.Context, name, reference string) error {
-	present, err := r.Registry.HasManifest(ctx, name, reference)
-	if err != nil {
-		return fmt.Errorf("probe snapshot %s:%s: %w", name, reference, err)
-	}
-	if !present {
-		return nil
-	}
-	return r.Registry.DeleteManifest(ctx, name, reference)
-}
-
-// stashDeleteVMNames merges VM names from Status, the previously stashed
-// annotation, and live pods, then re-writes the annotation if anything changed.
 func (r *Reconciler) stashDeleteVMNames(ctx context.Context, cs *cocoonv1.CocoonSet, owned []corev1.Pod) error {
 	have := make(map[string]struct{})
-	for _, n := range statusVMNames(cs) {
-		have[n] = struct{}{}
-	}
-	for _, n := range parseVMNamesAnnotation(cs.Annotations[annotationDeleteVMNames]) {
+	for _, n := range slices.Concat(statusVMNames(cs), parseVMNamesAnnotation(cs.Annotations[annotationDeleteVMNames])) {
 		have[n] = struct{}{}
 	}
 	for i := range owned {
@@ -130,8 +102,6 @@ func (r *Reconciler) stashDeleteVMNames(ctx context.Context, cs *cocoonv1.Cocoon
 	})
 }
 
-// statusVMNames collects the non-empty VM names recorded in the CocoonSet
-// status, agents first then toolboxes, preserving insertion order.
 func statusVMNames(cs *cocoonv1.CocoonSet) []string {
 	names := make([]string, 0, len(cs.Status.Agents)+len(cs.Status.Toolboxes))
 	for _, a := range cs.Status.Agents {
@@ -147,8 +117,7 @@ func statusVMNames(cs *cocoonv1.CocoonSet) []string {
 	return names
 }
 
-// shouldKeepLatestTag has only (CocoonSet, vmName) — no Pod/VMSpec — so it
-// derives the role via meta.ExtractAgentSlot directly instead of meta.ShouldSnapshotVM.
+// shouldKeepLatestTag has no Pod to hand meta.ShouldSnapshotVM, so it derives the role via meta.ExtractAgentSlot.
 func shouldKeepLatestTag(cs *cocoonv1.CocoonSet, vmName string) bool {
 	switch cs.Spec.SnapshotPolicy.Default() {
 	case cocoonv1.SnapshotPolicyNever:
@@ -161,12 +130,8 @@ func shouldKeepLatestTag(cs *cocoonv1.CocoonSet, vmName string) bool {
 }
 
 func parseVMNamesAnnotation(raw string) []string {
-	if raw == "" {
-		return nil
-	}
-	parts := strings.Split(raw, ",")
-	out := make([]string, 0, len(parts))
-	for _, p := range parts {
+	var out []string
+	for p := range strings.SplitSeq(raw, ",") {
 		if p = strings.TrimSpace(p); p != "" {
 			out = append(out, p)
 		}

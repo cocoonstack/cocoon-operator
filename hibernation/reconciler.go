@@ -40,15 +40,13 @@ const (
 	// wakeTimeout bounds how long Waking can last before marking Failed.
 	wakeTimeout = 5 * time.Minute
 
-	// indexPodRefName keys CocoonHibernation objects by spec.podRef.name so the
-	// pod watcher can resolve a pod event back to the CRs that target it.
+	// indexPodRefName lets the pod watcher resolve a pod event back to the CRs targeting it.
 	indexPodRefName = "spec.podRef.name"
 
 	// finalizerName keeps the CR alive long enough to clear its :hibernate tag from the registry.
 	finalizerName = "cocoonhibernation.cocoonset.cocoonstack.io/finalizer"
 
-	// vmLockStripes bounds the per-VM lock table; 64 keeps collisions rare
-	// against realistic per-namespace VM counts.
+	// vmLockStripes bounds the lock table; 64 keeps collisions rare at realistic per-namespace VM counts.
 	vmLockStripes = 64
 
 	conditionReasonPending = "Pending"
@@ -58,30 +56,23 @@ const (
 
 var vmLockSeed = maphash.MakeSeed()
 
-// Reconciler watches CocoonHibernation resources and drives hibernate/wake
-// transitions by toggling pod annotations and polling the snapshot registry.
+// Reconciler drives hibernate/wake transitions for CocoonHibernation CRs.
 type Reconciler struct {
 	client.Client
 	Scheme   *runtime.Scheme
 	Registry snapshot.Registry
 	Recorder record.EventRecorder
-	// Concurrency caps in-flight reconciles; at 1 one slow registry request
-	// stalls every other CR.
+	// Concurrency caps in-flight reconciles; at 1, one slow registry request stalls every other CR.
 	Concurrency int
 
-	// observed[UID] = last recorded Ready.LastTransitionTime, dedups
-	// phase-exit observations against controller-runtime cache lag.
+	// observed dedups phase-exit observations against controller-runtime cache lag, keyed by UID.
 	observed sync.Map
 
-	// vmLocks serializes the distinct CRs that may reach one VM: above one worker
-	// their opposing desires would race that VM's :hibernate tag and its pod's
-	// hibernate annotation.
+	// vmLocks serializes CRs that reach one VM; above one worker their opposing desires would race the tag and annotation.
 	vmLocks [vmLockStripes]sync.Mutex
 }
 
-// SetupWithManager registers the reconciler with the controller manager.
-// An index on spec.podRef.name lets the pod watcher fan out events to every
-// CR targeting a given pod, so late-arriving pods self-heal without user edits.
+// SetupWithManager indexes spec.podRef.name so pod events fan out to every CR targeting that pod.
 func (r *Reconciler) SetupWithManager(ctx context.Context, mgr ctrl.Manager) error {
 	if r.Concurrency < 1 {
 		return fmt.Errorf("hibernation concurrency must be at least 1, got %d", r.Concurrency)
@@ -99,15 +90,7 @@ func (r *Reconciler) SetupWithManager(ctx context.Context, mgr ctrl.Manager) err
 		Watches(
 			&corev1.Pod{},
 			handler.EnqueueRequestsFromMapFunc(r.hibernationsTargetingPod),
-			// Ignore status-only churn; we only care about creation, deletion,
-			// and annotation changes (VMName arriving, hibernate flag toggling).
-			builder.WithPredicates(predicate.Or(
-				predicate.AnnotationChangedPredicate{},
-				predicate.Funcs{
-					CreateFunc: func(event.CreateEvent) bool { return true },
-					DeleteFunc: func(event.DeleteEvent) bool { return true },
-				},
-			)),
+			builder.WithPredicates(podWatchPredicate()),
 		).
 		WithOptions(controller.Options{MaxConcurrentReconciles: r.Concurrency}).
 		Complete(r)
@@ -143,8 +126,7 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 	err := r.Get(ctx, types.NamespacedName{Namespace: hib.Namespace, Name: hib.Spec.PodRef.Name}, &pod)
 	if err != nil {
 		if apierrors.IsNotFound(err) {
-			// Pod may arrive after the CR; a pod Create event will reconcile us
-			// via Watches, but still requeue as a safety net.
+			// a pod may arrive after the CR; the pod watcher reconciles us, the requeue is a safety net
 			return ctrl.Result{RequeueAfter: requeueInterval}, r.markPending(ctx, &hib, fmt.Sprintf("pod %s/%s not yet present", hib.Namespace, hib.Spec.PodRef.Name))
 		}
 		return ctrl.Result{}, fmt.Errorf("get target pod: %w", err)
@@ -152,17 +134,14 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 
 	vmName := meta.ParseVMSpec(&pod).VMName
 	if vmName == "" {
-		// VMName is filled by vk-cocoon once the VM is provisioned; wait.
+		// vk-cocoon fills VMName once the VM is provisioned; wait
 		return ctrl.Result{RequeueAfter: requeueInterval}, r.markPending(ctx, &hib, fmt.Sprintf("pod %s/%s has no %s annotation yet", pod.Namespace, pod.Name, meta.AnnotationVMName))
 	}
 	defer r.lockVM(vmName)()
 
 	logger.Debugf(ctx, "reconcile hibernation %s/%s desire=%s vm=%s", hib.Namespace, hib.Name, hib.Spec.Desire, vmName)
 
-	// Reverse desires serialize through the in-flight transition's terminal
-	// phase: a mid-wake flip back to Hibernate (or mid-hibernate flip to Wake)
-	// would otherwise read the previous round's tag and lifecycle annotations
-	// as this round's completion — vk flips neither until the transition ends.
+	// reverse desires serialize through the in-flight terminal phase; vk flips neither the tag nor the annotations until the transition ends
 	switch hib.Spec.Desire {
 	case cocoonv1.HibernationDesireHibernate:
 		if hib.Status.Phase == cocoonv1.CocoonHibernationPhaseWaking {
@@ -179,10 +158,7 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 	}
 }
 
-// lockVM locks the VM whose :hibernate tag and pod annotation are about to be
-// touched, and returns its release. Striping bounds the table because VM names
-// come and go with CocoonSets; a collision only costs two unrelated VMs an
-// occasional serialization.
+// lockVM stripes the table because VM names come and go; a collision only costs two VMs an occasional serialization.
 func (r *Reconciler) lockVM(vmName string) func() {
 	mu := &r.vmLocks[maphash.String(vmLockSeed, vmName)%vmLockStripes]
 	mu.Lock()
@@ -192,8 +168,7 @@ func (r *Reconciler) lockVM(vmName string) func() {
 // reconcileDelete clears the :hibernate tag (if Status.VMName is set) and removes the finalizer.
 func (r *Reconciler) reconcileDelete(ctx context.Context, hib *cocoonv1.CocoonHibernation) error {
 	logger := log.WithFunc("hibernation.Reconciler.reconcileDelete")
-	// Lock Status.VMName — the VM this CR actually owns. Defense in depth for
-	// CRs retargeted before spec.podRef became CEL-immutable.
+	// lock Status.VMName, the VM this CR actually owns; defense in depth for CRs retargeted before podRef became immutable
 	if hib.Status.VMName != "" {
 		defer r.lockVM(hib.Status.VMName)()
 	}
@@ -204,7 +179,7 @@ func (r *Reconciler) reconcileDelete(ctx context.Context, hib *cocoonv1.CocoonHi
 		}
 		if held {
 			logger.Infof(ctx, "keeping hibernate snapshot %s: another live CocoonHibernation still tracks it", hib.Status.VMName)
-		} else if err := r.Registry.DeleteManifest(ctx, hib.Status.VMName, meta.HibernateSnapshotTag); err != nil {
+		} else if err := snapshot.DeleteManifestIfPresent(ctx, r.Registry, hib.Status.VMName, meta.HibernateSnapshotTag); err != nil {
 			logger.Errorf(ctx, err, "delete hibernate snapshot %s", hib.Status.VMName)
 		}
 	}
@@ -217,10 +192,7 @@ func (r *Reconciler) reconcileDelete(ctx context.Context, hib *cocoonv1.CocoonHi
 	return nil
 }
 
-// vmHeldByAnotherCR reports whether another live CocoonHibernation still
-// tracks this CR's VM. The last holder GCs the shared :hibernate tag —
-// deleting it earlier would strand the survivors on a tag-less Hibernated
-// with no event to ever re-probe it.
+// vmHeldByAnotherCR lets the last holder GC the shared tag; deleting earlier would strand survivors on a tag-less Hibernated.
 func (r *Reconciler) vmHeldByAnotherCR(ctx context.Context, hib *cocoonv1.CocoonHibernation) (bool, error) {
 	var list cocoonv1.CocoonHibernationList
 	if err := r.List(ctx, &list, client.InNamespace(hib.Namespace)); err != nil {
@@ -230,14 +202,11 @@ func (r *Reconciler) vmHeldByAnotherCR(ctx context.Context, hib *cocoonv1.Cocoon
 		if o.UID == hib.UID || !o.DeletionTimestamp.IsZero() {
 			return false
 		}
-		// PodRef also matches: a fresh duplicate holds the VM before its
-		// first reconcile ever writes Status.VMName.
+		// PodRef also matches: a fresh duplicate holds the VM before its first reconcile writes Status.VMName
 		return o.Status.VMName == hib.Status.VMName || o.Spec.PodRef.Name == hib.Spec.PodRef.Name
 	}), nil
 }
 
-// hibernationsTargetingPod returns reconcile requests for every CocoonHibernation
-// whose PodRef points at the given pod. Called from the Pod watcher.
 func (r *Reconciler) hibernationsTargetingPod(ctx context.Context, obj client.Object) []ctrl.Request {
 	var list cocoonv1.CocoonHibernationList
 	if err := r.List(
@@ -249,17 +218,14 @@ func (r *Reconciler) hibernationsTargetingPod(ctx context.Context, obj client.Ob
 			Warnf(ctx, "list hibernations targeting %s/%s: %v", obj.GetNamespace(), obj.GetName(), err)
 		return nil
 	}
-	out := make([]ctrl.Request, 0, len(list.Items))
+	out := make([]ctrl.Request, len(list.Items))
 	for i := range list.Items {
-		h := &list.Items[i]
-		out = append(out, ctrl.Request{NamespacedName: types.NamespacedName{Namespace: h.Namespace, Name: h.Name}})
+		out[i] = ctrl.Request{NamespacedName: client.ObjectKeyFromObject(&list.Items[i])}
 	}
 	return out
 }
 
-// setPhase patches status when phase, vmName, or generation moved. On
-// Failed->Waking re-entry it also refreshes Ready.LastTransitionTime so the
-// wake deadline doesn't carry over from the previous failure.
+// setPhase refreshes Ready.LastTransitionTime on phase entry so a deadline never carries over from a prior failure.
 func (r *Reconciler) setPhase(ctx context.Context, hib *cocoonv1.CocoonHibernation, phase cocoonv1.CocoonHibernationPhase, vmName string) error {
 	if hib.Status.Phase == phase && hib.Status.VMName == vmName && hib.Status.ObservedGeneration == hib.Generation {
 		return nil
@@ -281,8 +247,7 @@ func (r *Reconciler) setPhase(ctx context.Context, hib *cocoonv1.CocoonHibernati
 	return nil
 }
 
-// firstTransitionAt reports whether Ready.LastTransitionTime has advanced
-// since the last observation for this CR.
+// firstTransitionAt reports whether Ready.LastTransitionTime advanced since the last observation.
 func (r *Reconciler) firstTransitionAt(hib *cocoonv1.CocoonHibernation) bool {
 	ready := apimeta.FindStatusCondition(hib.Status.Conditions, commonk8s.ConditionTypeReady)
 	if ready == nil || ready.LastTransitionTime.IsZero() {
@@ -300,49 +265,28 @@ func (r *Reconciler) firstTransitionAt(hib *cocoonv1.CocoonHibernation) bool {
 	return false
 }
 
-func (r *Reconciler) emitEventf(hib *cocoonv1.CocoonHibernation, eventType, reason, format string, args ...any) {
-	if r.Recorder != nil {
-		r.Recorder.Eventf(hib, eventType, reason, format, args...)
-	}
-}
-
 // announcePhaseExitf observes the phase-duration exit and emits its event, once per Ready transition.
 func (r *Reconciler) announcePhaseExitf(hib *cocoonv1.CocoonHibernation, result, eventType, reason, format string, args ...any) {
 	if !r.firstTransitionAt(hib) {
 		return
 	}
 	observePhaseExit(hib, result)
-	r.emitEventf(hib, eventType, reason, format, args...)
+	commonk8s.Eventf(r.Recorder, hib, eventType, reason, format, args...)
 }
 
-// announceRetryFromFailed emits a Normal event when a reconcile re-enters
-// hibernate/wake after a prior Failed phase.
 func (r *Reconciler) announceRetryFromFailed(hib *cocoonv1.CocoonHibernation, desire cocoonv1.HibernationDesire) {
 	if hib.Status.Phase != cocoonv1.CocoonHibernationPhaseFailed {
 		return
 	}
-	r.emitEventf(hib, corev1.EventTypeNormal, "RetryRequested", "retrying %s after prior failure", desire)
+	commonk8s.Eventf(r.Recorder, hib, corev1.EventTypeNormal, "RetryRequested", "retrying %s after prior failure", desire)
 }
 
 // markFailed sets the Failed phase. A subsequent reconcile can recover by overwriting it.
 func (r *Reconciler) markFailed(ctx context.Context, hib *cocoonv1.CocoonHibernation, msg string) error {
-	if err := commonk8s.PatchStatus(ctx, r.Client, hib, func(h *cocoonv1.CocoonHibernation) {
-		h.Status.ObservedGeneration = h.Generation
-		h.Status.Phase = cocoonv1.CocoonHibernationPhaseFailed
-		apimeta.SetStatusCondition(&h.Status.Conditions, commonk8s.NewReadyCondition(
-			h.Generation, metav1.ConditionFalse, conditionReasonFailed, msg,
-		))
-	}); err != nil {
-		return fmt.Errorf("patch failed status: %w", err)
-	}
-	return nil
+	return r.patchNotReady(ctx, hib, cocoonv1.CocoonHibernationPhaseFailed, conditionReasonFailed, msg)
 }
 
-// markPending parks the CR on Pending without pinning Failed; self-heals on
-// re-enqueue. Short-circuits when phase, generation, and Ready message all
-// match so the pod watcher doesn't PATCH on every event. Hibernated/Waking
-// never demote: they carry cocoonset's restore intent, and losing it would
-// fresh-boot a recreate and re-hibernate over the real snapshot.
+// markPending never demotes Hibernated or Waking: they carry cocoonset's restore intent, and losing it would fresh-boot a recreate.
 func (r *Reconciler) markPending(ctx context.Context, hib *cocoonv1.CocoonHibernation, msg string) error {
 	if hib.Status.Phase == cocoonv1.CocoonHibernationPhaseHibernated || hib.Status.Phase == cocoonv1.CocoonHibernationPhaseWaking {
 		return nil
@@ -352,26 +296,37 @@ func (r *Reconciler) markPending(ctx context.Context, hib *cocoonv1.CocoonHibern
 			return nil
 		}
 	}
+	return r.patchNotReady(ctx, hib, cocoonv1.CocoonHibernationPhasePending, conditionReasonPending, msg)
+}
+
+func (r *Reconciler) patchNotReady(ctx context.Context, hib *cocoonv1.CocoonHibernation, phase cocoonv1.CocoonHibernationPhase, reason, msg string) error {
 	if err := commonk8s.PatchStatus(ctx, r.Client, hib, func(h *cocoonv1.CocoonHibernation) {
 		h.Status.ObservedGeneration = h.Generation
-		h.Status.Phase = cocoonv1.CocoonHibernationPhasePending
-		apimeta.SetStatusCondition(&h.Status.Conditions, commonk8s.NewReadyCondition(
-			h.Generation, metav1.ConditionFalse, conditionReasonPending, msg,
-		))
+		h.Status.Phase = phase
+		apimeta.SetStatusCondition(&h.Status.Conditions, commonk8s.NewReadyCondition(h.Generation, metav1.ConditionFalse, reason, msg))
 	}); err != nil {
-		return fmt.Errorf("patch pending status: %w", err)
+		return fmt.Errorf("patch %s status: %w", phase, err)
 	}
 	return nil
 }
 
-// hasPhaseDeadline reports whether a phase carries a deadline that must reset
-// on re-entry (so a Failed→Hibernating retry doesn't inherit the old clock).
+// hasPhaseDeadline marks phases whose deadline resets on re-entry so a retry does not inherit the old clock.
+// podWatchPredicate admits creation, deletion, and annotation changes; status churn is left to the requeue poll.
+func podWatchPredicate() predicate.Predicate {
+	return predicate.Or(
+		predicate.AnnotationChangedPredicate{},
+		predicate.Funcs{
+			CreateFunc: func(event.CreateEvent) bool { return true },
+			DeleteFunc: func(event.DeleteEvent) bool { return true },
+			UpdateFunc: func(event.UpdateEvent) bool { return false },
+		},
+	)
+}
+
 func hasPhaseDeadline(p cocoonv1.CocoonHibernationPhase) bool {
 	return p == cocoonv1.CocoonHibernationPhaseHibernating || p == cocoonv1.CocoonHibernationPhaseWaking
 }
 
-// phaseDeadlineExceeded reports whether hib has been in phase longer than timeout,
-// measured from Ready.LastTransitionTime.
 func phaseDeadlineExceeded(hib *cocoonv1.CocoonHibernation, phase cocoonv1.CocoonHibernationPhase, timeout time.Duration) bool {
 	if hib.Status.Phase != phase {
 		return false
@@ -383,8 +338,6 @@ func phaseDeadlineExceeded(hib *cocoonv1.CocoonHibernation, phase cocoonv1.Cocoo
 	return time.Since(ready.LastTransitionTime.Time) > timeout
 }
 
-// observePhaseExit records the duration spent in the current phase. Call
-// before transitioning away from Hibernating or Waking.
 func observePhaseExit(hib *cocoonv1.CocoonHibernation, result string) {
 	ready := apimeta.FindStatusCondition(hib.Status.Conditions, commonk8s.ConditionTypeReady)
 	if ready == nil || ready.LastTransitionTime.IsZero() {

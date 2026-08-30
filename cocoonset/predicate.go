@@ -9,8 +9,7 @@ import (
 	"github.com/cocoonstack/cocoon-common/meta"
 )
 
-// podRelevantChange ignores pure status churn (VK notify loops, condition
-// timestamp updates) that would otherwise storm reconciles.
+// podRelevantChange drops pure status churn that would otherwise storm reconciles.
 type podRelevantChange struct{}
 
 func (podRelevantChange) Create(_ event.CreateEvent) bool   { return true }
@@ -23,20 +22,9 @@ func (podRelevantChange) Update(e event.UpdateEvent) bool {
 	if !ok1 || !ok2 {
 		return true
 	}
-	if oldPod.DeletionTimestamp.IsZero() && !newPod.DeletionTimestamp.IsZero() {
-		return true
-	}
-	if oldPod.Status.Phase != newPod.Status.Phase {
-		return true
-	}
-	if meta.IsPodReady(oldPod) != meta.IsPodReady(newPod) {
-		return true
-	}
-	if !maps.Equal(oldPod.Labels, newPod.Labels) {
-		return true
-	}
-	if !maps.Equal(oldPod.Annotations, newPod.Annotations) {
-		return true
-	}
-	return false
+	return (oldPod.DeletionTimestamp.IsZero() && !newPod.DeletionTimestamp.IsZero()) ||
+		oldPod.Status.Phase != newPod.Status.Phase ||
+		meta.IsPodReady(oldPod) != meta.IsPodReady(newPod) ||
+		!maps.Equal(oldPod.Labels, newPod.Labels) ||
+		!maps.Equal(oldPod.Annotations, newPod.Annotations)
 }
