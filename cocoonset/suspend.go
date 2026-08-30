@@ -9,6 +9,7 @@ import (
 
 	"github.com/projecteru2/core/log"
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	ctrl "sigs.k8s.io/controller-runtime"
 
 	cocoonv1 "github.com/cocoonstack/cocoon-common/apis/v1"
@@ -30,6 +31,9 @@ func (r *Reconciler) reconcileSuspend(ctx context.Context, cs *cocoonv1.CocoonSe
 			return ctrl.Result{}, err
 		}
 		if err := r.Create(ctx, mainPod); err != nil {
+			if apierrors.IsAlreadyExists(err) {
+				return ctrl.Result{RequeueAfter: requeueWaitForMain}, nil
+			}
 			return ctrl.Result{}, fmt.Errorf("create main agent before suspend: %w", err)
 		}
 		logger.Infof(ctx, "created main agent %s/%s ahead of suspend", mainPod.Namespace, mainPod.Name)
