@@ -15,6 +15,9 @@ import (
 
 func (r *Reconciler) reconcileWake(ctx context.Context, hib *cocoonv1.CocoonHibernation, pod *corev1.Pod, vmName string) (ctrl.Result, error) {
 	logger := log.WithFunc("hibernation.Reconciler.reconcileWake")
+	if hib.Status.Phase == cocoonv1.CocoonHibernationPhaseActive && hib.Status.ObservedGeneration == hib.Generation {
+		return ctrl.Result{}, nil
+	}
 	r.announceRetryFromFailed(hib, cocoonv1.HibernationDesireWake)
 
 	if meta.ReadHibernateState(pod) {

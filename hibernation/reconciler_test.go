@@ -1302,6 +1302,54 @@ func TestSetupWithManagerRejectsInvalidConcurrency(t *testing.T) {
 	}
 }
 
+func TestReconcileWakeLeavesSettledCRInert(t *testing.T) {
+	hib := &cocoonv1.CocoonHibernation{
+		ObjectMeta: metav1.ObjectMeta{Name: "hib", Namespace: "ns", Finalizers: []string{finalizerName}},
+		Spec: cocoonv1.CocoonHibernationSpec{
+			Desire: cocoonv1.HibernationDesireWake,
+			PodRef: cocoonv1.HibernationPodRef{Name: "demo-0"},
+		},
+		Status: cocoonv1.CocoonHibernationStatus{Phase: cocoonv1.CocoonHibernationPhaseActive, VMName: "vk-ns-demo-0"},
+	}
+	pod := &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{Name: "demo-0", Namespace: "ns"},
+		Status: corev1.PodStatus{
+			ContainerStatuses: []corev1.ContainerStatus{{
+				State: corev1.ContainerState{Running: &corev1.ContainerStateRunning{}},
+			}},
+		},
+	}
+	(&meta.VMSpec{VMName: "vk-ns-demo-0", Managed: true}).Apply(pod)
+	(&meta.VMRuntime{VMID: "vmid-live"}).Apply(pod)
+	meta.HibernateState(true).Apply(pod)
+
+	scheme := testScheme(t)
+	cli := ctrlfake.NewClientBuilder().
+		WithScheme(scheme).
+		WithObjects(hib, pod).
+		WithStatusSubresource(&cocoonv1.CocoonHibernation{}).
+		Build()
+	reg := &fakeRegistry{manifestPresent: true}
+	r := &Reconciler{Client: cli, Scheme: scheme, Registry: reg}
+
+	if _, err := r.Reconcile(t.Context(), ctrl.Request{
+		NamespacedName: types.NamespacedName{Namespace: "ns", Name: "hib"},
+	}); err != nil {
+		t.Fatalf("Reconcile: %v", err)
+	}
+
+	var outPod corev1.Pod
+	if err := cli.Get(t.Context(), types.NamespacedName{Namespace: "ns", Name: "demo-0"}, &outPod); err != nil {
+		t.Fatalf("get pod: %v", err)
+	}
+	if !meta.ReadHibernateState(&outPod) {
+		t.Error("a settled wake CR must not clear a hibernate annotation set by the CocoonSet suspend")
+	}
+	if reg.deleteCalled {
+		t.Error("a settled wake CR must not delete the snapshot")
+	}
+}
+
 func TestPodWatchPredicateIgnoresStatusOnlyUpdates(t *testing.T) {
 	old := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "demo-0", Namespace: "ns", Annotations: map[string]string{"a": "1"}}}
 	updated := old.DeepCopy()
