@@ -142,7 +142,7 @@ func TestReconcileDeleteClearsHibernateTagAndFinalizer(t *testing.T) {
 		WithObjects(hib).
 		WithStatusSubresource(&cocoonv1.CocoonHibernation{}).
 		Build()
-	reg := &fakeRegistry{}
+	reg := &fakeRegistry{manifestPresent: true}
 	r := &Reconciler{Client: cli, Scheme: scheme, Registry: reg}
 
 	if err := r.reconcileDelete(t.Context(), hib); err != nil {
@@ -176,7 +176,7 @@ func TestReconcileDeleteTagErrorStillRemovesFinalizer(t *testing.T) {
 		WithObjects(hib).
 		WithStatusSubresource(&cocoonv1.CocoonHibernation{}).
 		Build()
-	reg := &fakeRegistry{deleteErr: errors.New("registry unavailable")}
+	reg := &fakeRegistry{manifestPresent: true, deleteErr: errors.New("registry unavailable")}
 	r := &Reconciler{Client: cli, Scheme: scheme, Registry: reg}
 
 	if err := r.reconcileDelete(t.Context(), hib); err != nil {
@@ -1055,7 +1055,7 @@ func TestReconcileDeleteKeepsTagWhileAnotherCRHoldsVM(t *testing.T) {
 		WithObjects(deleting, holder).
 		WithStatusSubresource(&cocoonv1.CocoonHibernation{}).
 		Build()
-	reg := &fakeRegistry{}
+	reg := &fakeRegistry{manifestPresent: true}
 	r := &Reconciler{Client: cli, Scheme: scheme, Registry: reg}
 
 	if err := r.reconcileDelete(t.Context(), deleting); err != nil {

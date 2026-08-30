@@ -14,6 +14,18 @@ type Registry interface {
 	DeleteManifest(ctx context.Context, name, reference string) error
 }
 
+// DeleteManifestIfPresent probes first: some registries materialize an empty repository while authorizing a DELETE for a missing tag.
+func DeleteManifestIfPresent(ctx context.Context, reg Registry, name, reference string) error {
+	present, err := reg.HasManifest(ctx, name, reference)
+	if err != nil {
+		return fmt.Errorf("probe snapshot %s:%s: %w", name, reference, err)
+	}
+	if !present {
+		return nil
+	}
+	return reg.DeleteManifest(ctx, name, reference)
+}
+
 // HasHibernateSnapshot performs the same :hibernate lookup vk-cocoon performs at wake.
 func HasHibernateSnapshot(ctx context.Context, reg Registry, vmName string) (bool, error) {
 	present, err := reg.HasManifest(ctx, vmName, meta.HibernateSnapshotTag)

@@ -179,7 +179,7 @@ func (r *Reconciler) reconcileDelete(ctx context.Context, hib *cocoonv1.CocoonHi
 		}
 		if held {
 			logger.Infof(ctx, "keeping hibernate snapshot %s: another live CocoonHibernation still tracks it", hib.Status.VMName)
-		} else if err := r.Registry.DeleteManifest(ctx, hib.Status.VMName, meta.HibernateSnapshotTag); err != nil {
+		} else if err := snapshot.DeleteManifestIfPresent(ctx, r.Registry, hib.Status.VMName, meta.HibernateSnapshotTag); err != nil {
 			logger.Errorf(ctx, err, "delete hibernate snapshot %s", hib.Status.VMName)
 		}
 	}

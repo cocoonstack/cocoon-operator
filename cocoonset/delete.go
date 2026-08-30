@@ -16,6 +16,7 @@ import (
 	cocoonv1 "github.com/cocoonstack/cocoon-common/apis/v1"
 	commonk8s "github.com/cocoonstack/cocoon-common/k8s"
 	"github.com/cocoonstack/cocoon-common/meta"
+	"github.com/cocoonstack/cocoon-operator/snapshot"
 )
 
 // annotationDeleteVMNames survives a CocoonSet deleted before Status.Agents was ever patched.
@@ -59,13 +60,13 @@ func (r *Reconciler) reconcileDelete(ctx context.Context, cs *cocoonv1.CocoonSet
 	if r.Registry != nil {
 		for _, name := range parseVMNamesAnnotation(cs.Annotations[annotationDeleteVMNames]) {
 			// non-fatal but logged at error: a persistent delete failure silently leaks snapshots
-			if err := r.deleteManifestIfPresent(ctx, name, meta.HibernateSnapshotTag); err != nil {
+			if err := snapshot.DeleteManifestIfPresent(ctx, r.Registry, name, meta.HibernateSnapshotTag); err != nil {
 				logger.Errorf(ctx, err, "delete snapshot %s:%s", name, meta.HibernateSnapshotTag)
 			}
 			if shouldKeepLatestTag(cs, name) {
 				continue
 			}
-			if err := r.deleteManifestIfPresent(ctx, name, meta.DefaultSnapshotTag); err != nil {
+			if err := snapshot.DeleteManifestIfPresent(ctx, r.Registry, name, meta.DefaultSnapshotTag); err != nil {
 				logger.Errorf(ctx, err, "delete snapshot %s:%s", name, meta.DefaultSnapshotTag)
 			}
 		}
@@ -79,18 +80,6 @@ func (r *Reconciler) reconcileDelete(ctx context.Context, cs *cocoonv1.CocoonSet
 		}
 	}
 	return ctrl.Result{}, nil
-}
-
-// deleteManifestIfPresent probes first: some registries materialize an empty repository while authorizing a DELETE for a missing tag.
-func (r *Reconciler) deleteManifestIfPresent(ctx context.Context, name, reference string) error {
-	present, err := r.Registry.HasManifest(ctx, name, reference)
-	if err != nil {
-		return fmt.Errorf("probe snapshot %s:%s: %w", name, reference, err)
-	}
-	if !present {
-		return nil
-	}
-	return r.Registry.DeleteManifest(ctx, name, reference)
 }
 
 func (r *Reconciler) stashDeleteVMNames(ctx context.Context, cs *cocoonv1.CocoonSet, owned []corev1.Pod) error {
