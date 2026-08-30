@@ -5,6 +5,7 @@ import (
 
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/equality"
+	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	cocoonv1 "github.com/cocoonstack/cocoon-common/apis/v1"
@@ -129,12 +130,7 @@ func TestAgentStatusFromPod(t *testing.T) {
 func TestBuildConditionsAllReady(t *testing.T) {
 	cs := newCocoonSet("demo")
 	conds := buildConditions(cs, 1, 1, 0, 0, cocoonv1.CocoonSetPhaseRunning)
-	var ready *metav1.Condition
-	for i := range conds {
-		if conds[i].Type == commonk8s.ConditionTypeReady {
-			ready = &conds[i]
-		}
-	}
+	ready := apimeta.FindStatusCondition(conds, commonk8s.ConditionTypeReady)
 	if ready == nil || ready.Status != metav1.ConditionTrue {
 		t.Errorf("Ready condition should be True when all agents ready, got %+v", ready)
 	}
@@ -143,12 +139,7 @@ func TestBuildConditionsAllReady(t *testing.T) {
 func TestBuildConditionsNotReadyWhenToolboxesPending(t *testing.T) {
 	cs := newCocoonSet("demo")
 	conds := buildConditions(cs, 1, 1, 0, 1, cocoonv1.CocoonSetPhaseScaling)
-	var ready *metav1.Condition
-	for i := range conds {
-		if conds[i].Type == commonk8s.ConditionTypeReady {
-			ready = &conds[i]
-		}
-	}
+	ready := apimeta.FindStatusCondition(conds, commonk8s.ConditionTypeReady)
 	if ready == nil || ready.Status != metav1.ConditionFalse {
 		t.Errorf("Ready condition must be False while toolboxes pending, got %+v", ready)
 	}

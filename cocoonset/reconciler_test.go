@@ -12,7 +12,6 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
-	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	ctrlfake "sigs.k8s.io/controller-runtime/pkg/client/fake"
 
@@ -481,7 +480,7 @@ func TestReconcileMainLifecycleFailedTransitionsToFailed(t *testing.T) {
 		Build()
 	r := &Reconciler{Client: cli, Scheme: scheme, Registry: &fakeRegistry{}}
 
-	if _, err := r.Reconcile(t.Context(), ctrl.Request{NamespacedName: types.NamespacedName{Namespace: cs.Namespace, Name: cs.Name}}); err != nil {
+	if _, err := r.Reconcile(t.Context(), reqFor(cs)); err != nil {
 		t.Fatalf("Reconcile: %v", err)
 	}
 	var out cocoonv1.CocoonSet
@@ -514,7 +513,7 @@ func TestReconcileMainLifecycleFailedWithDriftRecreatesPod(t *testing.T) {
 		Build()
 	r := &Reconciler{Client: cli, Scheme: scheme, Registry: &fakeRegistry{}}
 
-	if _, err := r.Reconcile(t.Context(), ctrl.Request{NamespacedName: types.NamespacedName{Namespace: cs.Namespace, Name: cs.Name}}); err != nil {
+	if _, err := r.Reconcile(t.Context(), reqFor(cs)); err != nil {
 		t.Fatalf("Reconcile: %v", err)
 	}
 	if err := cli.Get(t.Context(), types.NamespacedName{Namespace: mainPod.Namespace, Name: mainPod.Name}, &corev1.Pod{}); err == nil {

@@ -30,7 +30,6 @@ func (r *Reconciler) reconcileDelete(ctx context.Context, cs *cocoonv1.CocoonSet
 		return ctrl.Result{}, fmt.Errorf("list owned pods for delete: %w", listErr)
 	}
 
-	// stash VM names from live pods and Status before the pods disappear
 	if err := r.stashDeleteVMNames(ctx, cs, owned); err != nil {
 		return ctrl.Result{}, fmt.Errorf("stash vm names: %w", err)
 	}

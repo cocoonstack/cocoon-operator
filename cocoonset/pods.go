@@ -73,7 +73,6 @@ func classifyPods(pods []corev1.Pod) classifiedPods {
 	return out
 }
 
-// buildAgentPod builds slot 0 as main; slots >= 1 fork from the main VM.
 func buildAgentPod(cs *cocoonv1.CocoonSet, slot int32, mainVMName, bindNodeName string, scheme *runtime.Scheme) (*corev1.Pod, error) {
 	role := meta.RoleMain
 	forkFrom := ""
@@ -164,7 +163,6 @@ func toolboxPodName(csName, tbName string) string {
 }
 
 func newManagedPod(cs *cocoonv1.CocoonSet, podName, role, slotLabel string, scheme *runtime.Scheme) (*corev1.Pod, error) {
-	one := int64(1)
 	pool := cmp.Or(cs.Spec.NodePool, meta.DefaultNodePool)
 	nodeSelector := map[string]string{meta.LabelNodePool: pool}
 	if class := cs.Spec.SnapshotCompatibilityClass; class != "" {
@@ -185,7 +183,7 @@ func newManagedPod(cs *cocoonv1.CocoonSet, podName, role, slotLabel string, sche
 			},
 		},
 		Spec: corev1.PodSpec{
-			TerminationGracePeriodSeconds: &one,
+			TerminationGracePeriodSeconds: new(int64(1)),
 			Tolerations: []corev1.Toleration{
 				{Key: meta.TolerationKey, Operator: corev1.TolerationOpExists},
 				{Key: corev1.TaintNodeNotReady, Operator: corev1.TolerationOpExists, Effect: corev1.TaintEffectNoExecute},

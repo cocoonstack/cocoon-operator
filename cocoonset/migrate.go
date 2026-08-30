@@ -110,7 +110,7 @@ func (r *Reconciler) advanceMigration(ctx context.Context, cs *cocoonv1.CocoonSe
 		return r.markMigrating(ctx, cs, classified)
 
 	case bool(meta.ReadHibernateState(main)) && (desired == "" || main.Spec.NodeName == desired):
-		// quiesced on the target: a re-target back or an unsuspend racing the tag; wake it in place
+		// quiesced on the target: a re-target back or an unsuspend racing the tag
 		logger.Infof(ctx, "migrate %s/%s: waking %s in place", cs.Namespace, cs.Name, main.Name)
 		if err := commonk8s.PatchHibernateState(ctx, r.Client, main, false); err != nil {
 			return true, ctrl.Result{}, fmt.Errorf("migrate: clear hibernate on %s/%s: %w", main.Namespace, main.Name, err)
