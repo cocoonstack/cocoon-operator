@@ -12,7 +12,6 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/equality"
 	"k8s.io/apimachinery/pkg/api/resource"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 
@@ -169,18 +168,16 @@ func newManagedPod(cs *cocoonv1.CocoonSet, podName, role, slotLabel string, sche
 		nodeSelector[meta.LabelSnapshotCompatibilityClass] = class
 	}
 	pod := &corev1.Pod{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      podName,
-			Namespace: cs.Namespace,
-			Labels: map[string]string{
-				meta.LabelCocoonSet:      cs.Name,
-				meta.LabelRole:           role,
-				meta.LabelSlot:           slotLabel,
-				"app.kubernetes.io/name": cs.Name,
-			},
-			Annotations: map[string]string{
-				meta.AnnotationCocoonSetGeneration: strconv.FormatInt(cs.Generation, 10),
-			},
+		Name:      podName,
+		Namespace: cs.Namespace,
+		Labels: map[string]string{
+			meta.LabelCocoonSet:      cs.Name,
+			meta.LabelRole:           role,
+			meta.LabelSlot:           slotLabel,
+			"app.kubernetes.io/name": cs.Name,
+		},
+		Annotations: map[string]string{
+			meta.AnnotationCocoonSetGeneration: strconv.FormatInt(cs.Generation, 10),
 		},
 		Spec: corev1.PodSpec{
 			TerminationGracePeriodSeconds: new(int64(1)),

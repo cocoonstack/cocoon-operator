@@ -55,7 +55,7 @@ func (r *Reconciler) createMainAheadOfSuspend(ctx context.Context, cs *cocoonv1.
 		return ctrl.Result{}, fmt.Errorf("create main agent before suspend: %w", err)
 	}
 	logger.Infof(ctx, "created main agent %s/%s ahead of suspend", mainPod.Namespace, mainPod.Name)
-	return ctrl.Result{Requeue: true}, nil
+	return ctrl.Result{RequeueAfter: requeueAfterWrite}, nil
 }
 
 // allOwnedPodsHibernated returns (false, nil), not an error, while the expected state is not yet observed.

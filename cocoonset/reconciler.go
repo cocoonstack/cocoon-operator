@@ -30,6 +30,7 @@ const (
 	requeueWaitForMain = 5 * time.Second
 	requeueSuspendPoll = 5 * time.Second
 	requeueMigratePoll = 5 * time.Second
+	requeueAfterWrite  = time.Second
 )
 
 // Reconciler drives agent and toolbox pods to match each CocoonSet spec.
@@ -75,7 +76,7 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 		if err := r.Update(ctx, &cs); err != nil {
 			return ctrl.Result{}, fmt.Errorf("add finalizer: %w", err)
 		}
-		return ctrl.Result{Requeue: true}, nil
+		return ctrl.Result{RequeueAfter: requeueAfterWrite}, nil
 	}
 
 	owned, listErr := r.listOwnedPods(ctx, &cs)
@@ -126,7 +127,7 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 		if err := r.Delete(ctx, classified.main); err != nil && !apierrors.IsNotFound(err) {
 			return ctrl.Result{}, fmt.Errorf("delete drifted main agent: %w", err)
 		}
-		return ctrl.Result{Requeue: true}, nil
+		return ctrl.Result{RequeueAfter: requeueAfterWrite}, nil
 	}
 	intent := r.newRestoreIntent(ctx, cs.Namespace)
 	if classified.main == nil {
@@ -152,7 +153,7 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 	}
 
 	if subChanged || tbChanged {
-		return ctrl.Result{Requeue: true}, nil
+		return ctrl.Result{RequeueAfter: requeueAfterWrite}, nil
 	}
 	if err := r.patchStatus(ctx, &cs, buildStatus(&cs, classified, "")); err != nil {
 		return ctrl.Result{}, err
@@ -166,7 +167,7 @@ func (r *Reconciler) handleFailedMainAgent(ctx context.Context, cs *cocoonv1.Coc
 		if err := r.Delete(ctx, classified.main); err != nil && !apierrors.IsNotFound(err) {
 			return ctrl.Result{}, fmt.Errorf("delete terminal drifted main agent: %w", err)
 		}
-		return ctrl.Result{Requeue: true}, nil
+		return ctrl.Result{RequeueAfter: requeueAfterWrite}, nil
 	}
 	r.observeMainPodFailed(cs, classified.main, reason)
 	return ctrl.Result{}, r.patchStatus(ctx, cs, buildStatus(cs, classified, cocoonv1.CocoonSetPhaseFailed))
@@ -190,7 +191,7 @@ func (r *Reconciler) createMainAgent(ctx context.Context, cs *cocoonv1.CocoonSet
 		return ctrl.Result{}, fmt.Errorf("create main agent: %w", err)
 	}
 	logger.Infof(ctx, "created main agent %s/%s", mainPod.Namespace, mainPod.Name)
-	return ctrl.Result{Requeue: true}, nil
+	return ctrl.Result{RequeueAfter: requeueAfterWrite}, nil
 }
 
 // observeMainPodFailed bumps the lifecycle counter only on the annotation path so Pod-Phase failures do not dilute it.

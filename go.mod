@@ -1,6 +1,6 @@
 module github.com/cocoonstack/cocoon-operator
 
-go 1.26.5
+go 1.27.0
 
 require (
 	github.com/cocoonstack/cocoon-common v0.3.1-0.20260830112605-f978f9fee5af

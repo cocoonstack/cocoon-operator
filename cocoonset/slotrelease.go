@@ -126,7 +126,7 @@ func (r *Reconciler) reconcileWake(ctx context.Context, cs *cocoonv1.CocoonSet, 
 			}
 		}
 		// auto-derived phase; the requeued pass settles Running/Scaling
-		return true, ctrl.Result{Requeue: true}, r.patchStatus(ctx, cs, buildStatus(cs, classified, ""))
+		return true, ctrl.Result{RequeueAfter: requeueAfterWrite}, r.patchStatus(ctx, cs, buildStatus(cs, classified, ""))
 
 	case (suspended || suspending) && hint != "" && !podIsTerminal(main):
 		// a stale view of the deleted main or a delete that never ran; only an uncached read tells them apart

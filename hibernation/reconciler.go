@@ -34,7 +34,8 @@ import (
 )
 
 const (
-	requeueInterval = 5 * time.Second
+	requeueInterval   = 5 * time.Second
+	requeueAfterWrite = time.Second
 	// hibernateTimeout bounds how long Hibernating can last before marking Failed.
 	hibernateTimeout = 3 * time.Minute
 	// wakeTimeout bounds how long Waking can last before marking Failed.
@@ -115,7 +116,7 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 		if err := r.Update(ctx, &hib); err != nil {
 			return ctrl.Result{}, fmt.Errorf("add finalizer: %w", err)
 		}
-		return ctrl.Result{Requeue: true}, nil
+		return ctrl.Result{RequeueAfter: requeueAfterWrite}, nil
 	}
 
 	if hib.Spec.PodRef.Name == "" {

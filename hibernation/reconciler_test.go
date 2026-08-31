@@ -109,8 +109,8 @@ func TestReconcileAddsFinalizerAndRequeues(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Reconcile: %v", err)
 	}
-	if !res.Requeue {
-		t.Errorf("Requeue = false, want true after finalizer add")
+	if res.RequeueAfter != requeueAfterWrite {
+		t.Errorf("RequeueAfter = %s, want %s after finalizer add", res.RequeueAfter, requeueAfterWrite)
 	}
 	var got cocoonv1.CocoonHibernation
 	if err := cli.Get(t.Context(), types.NamespacedName{Namespace: "ns", Name: "hib"}, &got); err != nil {
