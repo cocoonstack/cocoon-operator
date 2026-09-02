@@ -219,7 +219,3 @@ func mainPodFailedReason(pod *corev1.Pod) string {
 func podIsTerminal(pod *corev1.Pod) bool {
 	return mainPodFailedReason(pod) != ""
 }
-
-func podHasNoVM(pod *corev1.Pod) bool {
-	return meta.IsPodTerminal(pod)
-}
