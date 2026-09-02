@@ -39,6 +39,9 @@ func (r *Reconciler) ensureToolboxes(ctx context.Context, cs *cocoonv1.CocoonSet
 		if classified.allByName[podName] != nil && classified.toolbox[tb.Name] == nil {
 			return changed, requeueAfter, fmt.Errorf("create toolbox %s: name collision with existing pod %s", tb.Name, podName)
 		}
+		if budgetExhausted(cs, podName) {
+			continue
+		}
 		if pod, exists := classified.toolbox[tb.Name]; exists {
 			deleted, wait, err := r.triagePod(ctx, logger, cs, pod, podSpecMatchesToolbox(pod, cs, tb))
 			if err != nil {

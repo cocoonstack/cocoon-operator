@@ -27,10 +27,11 @@ const (
 	maxRebuildAttempts = 4
 )
 
-// rebuildEntry persists in a CocoonSet annotation, keyed by pod name, so the count survives the pod delete.
+// rebuildEntry persists in a CocoonSet annotation, keyed by pod name, so the count survives the pod delete; a newer generation resets it.
 type rebuildEntry struct {
 	Count       int       `json:"count"`
 	LastDeleted time.Time `json:"lastDeleted"`
+	Generation  int64     `json:"generation"`
 }
 
 // triagePod deletes a terminal or drifted pod for recreate within its rebuild budget; a dead-lettered pod waits for a spec edit.
@@ -69,6 +70,9 @@ func (r *Reconciler) triagePod(ctx context.Context, logger *log.Fields, cs *coco
 func (r *Reconciler) rebuildPod(ctx context.Context, logger *log.Fields, cs *cocoonv1.CocoonSet, pod *corev1.Pod, reason string) (bool, time.Duration, error) {
 	history := readRebuildHistory(cs)
 	entry := history[pod.Name]
+	if entry.Generation != cs.Generation {
+		entry = rebuildEntry{Generation: cs.Generation}
+	}
 	if entry.Count >= maxRebuildAttempts {
 		if err := r.patchAnnotation(ctx, pod, annotationDeadLetter, strconv.FormatInt(cs.Generation, 10)); err != nil {
 			return false, 0, err
@@ -157,6 +161,12 @@ func encodeRebuildHistory(cs *cocoonv1.CocoonSet, m map[string]rebuildEntry) (st
 		return "", err
 	}
 	return string(raw), nil
+}
+
+// budgetExhausted reports a pod name that dead-lettered at the current generation; a missing pod with that history stays absent.
+func budgetExhausted(cs *cocoonv1.CocoonSet, name string) bool {
+	entry := readRebuildHistory(cs)[name]
+	return entry.Generation == cs.Generation && entry.Count >= maxRebuildAttempts
 }
 
 func desiredPodNames(cs *cocoonv1.CocoonSet) map[string]bool {

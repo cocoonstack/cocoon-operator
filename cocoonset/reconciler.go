@@ -126,6 +126,9 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 	}
 	intent := r.newRestoreIntent(ctx, cs.Namespace)
 	if classified.main == nil {
+		if budgetExhausted(&cs, agentPodName(cs.Name, 0)) {
+			return ctrl.Result{RequeueAfter: requeueWaitForMain}, r.patchStatus(ctx, &cs, buildStatus(&cs, classified, cocoonv1.CocoonSetPhaseFailed))
+		}
 		return r.createMainAgent(ctx, &cs, intent)
 	}
 

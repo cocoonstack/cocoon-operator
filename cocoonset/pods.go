@@ -156,11 +156,11 @@ func buildToolboxPod(cs *cocoonv1.CocoonSet, tb cocoonv1.ToolboxSpec, scheme *ru
 	return pod, nil
 }
 
-// toolboxPodName is shared by the builder and the collision check so the two cannot diverge.
 func agentPodName(csName string, slot int32) string {
 	return fmt.Sprintf("%s-%d", csName, slot)
 }
 
+// toolboxPodName is shared by the builder and the collision check so the two cannot diverge.
 func toolboxPodName(csName, tbName string) string {
 	return fmt.Sprintf("%s-%s", csName, tbName)
 }

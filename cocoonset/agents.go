@@ -42,6 +42,7 @@ func (r *Reconciler) ensureSubAgents(ctx context.Context, cs *cocoonv1.CocoonSet
 		}
 	}
 
+	missing = slices.DeleteFunc(missing, func(slot int32) bool { return budgetExhausted(cs, agentPodName(cs.Name, slot)) })
 	created, err := r.createSubAgents(ctx, logger, cs, missing, mainVMName, mainNodeName, intent)
 	changed = changed || created
 	if err != nil {
