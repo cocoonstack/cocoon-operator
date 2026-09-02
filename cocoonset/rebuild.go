@@ -32,6 +32,7 @@ type rebuildEntry struct {
 	Count       int       `json:"count"`
 	LastDeleted time.Time `json:"lastDeleted"`
 	Generation  int64     `json:"generation"`
+	Parked      bool      `json:"parked,omitempty"`
 }
 
 // triagePod deletes a terminal or drifted pod for recreate within its rebuild budget; a dead-lettered pod waits for a spec edit.
@@ -74,6 +75,13 @@ func (r *Reconciler) rebuildPod(ctx context.Context, logger *log.Fields, cs *coc
 		entry = rebuildEntry{Generation: cs.Generation}
 	}
 	if entry.Count >= maxRebuildAttempts {
+		if !entry.Parked {
+			entry.Parked = true
+			history[pod.Name] = entry
+			if err := r.patchRebuildHistory(ctx, cs, history); err != nil {
+				return false, 0, fmt.Errorf("persist rebuild history: %w", err)
+			}
+		}
 		if err := r.patchAnnotation(ctx, pod, annotationDeadLetter, strconv.FormatInt(cs.Generation, 10)); err != nil {
 			return false, 0, err
 		}
@@ -163,10 +171,10 @@ func encodeRebuildHistory(cs *cocoonv1.CocoonSet, m map[string]rebuildEntry) (st
 	return string(raw), nil
 }
 
-// budgetExhausted reports a pod name that dead-lettered at the current generation; a missing pod with that history stays absent.
+// budgetExhausted reports a pod name parked at the current generation; a missing pod with that history stays absent.
 func budgetExhausted(cs *cocoonv1.CocoonSet, name string) bool {
 	entry := readRebuildHistory(cs)[name]
-	return entry.Generation == cs.Generation && entry.Count >= maxRebuildAttempts
+	return entry.Generation == cs.Generation && entry.Parked
 }
 
 func desiredPodNames(cs *cocoonv1.CocoonSet) map[string]bool {

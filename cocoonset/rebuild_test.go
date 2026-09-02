@@ -5,6 +5,13 @@ import (
 	"testing"
 	"time"
 
+	"github.com/projecteru2/core/log"
+	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/types"
+	ctrlfake "sigs.k8s.io/controller-runtime/pkg/client/fake"
+
 	cocoonv1 "github.com/cocoonstack/cocoon-common/apis/v1"
 )
 
@@ -94,4 +101,98 @@ func TestReadRebuildHistoryHandlesNullPayload(t *testing.T) {
 	if _, err := encodeRebuildHistory(cs, got); err != nil {
 		t.Fatalf("encodeRebuildHistory on normalized null payload: %v", err)
 	}
+}
+
+func TestBudgetExhaustedRequiresParkedEntry(t *testing.T) {
+	cs := &cocoonv1.CocoonSet{}
+	cs.Name = "demo"
+	cs.Generation = 3
+	cs.Spec.Agent.Replicas = 1
+	cases := []struct {
+		name  string
+		entry rebuildEntry
+		want  bool
+	}{
+		{"count at budget awaiting its replacement", rebuildEntry{Count: maxRebuildAttempts, Generation: 3}, false},
+		{"parked at this generation", rebuildEntry{Count: maxRebuildAttempts, Generation: 3, Parked: true}, true},
+		{"parked at an older generation", rebuildEntry{Count: maxRebuildAttempts, Generation: 2, Parked: true}, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			enc, err := encodeRebuildHistory(cs, map[string]rebuildEntry{"demo-0": tc.entry})
+			if err != nil {
+				t.Fatalf("encodeRebuildHistory: %v", err)
+			}
+			cs.Annotations = map[string]string{annotationRebuildHistory: enc}
+			if got := budgetExhausted(cs, "demo-0"); got != tc.want {
+				t.Fatalf("budgetExhausted = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestRebuildPodPastBudgetParksNameAndPod(t *testing.T) {
+	scheme := testScheme(t)
+	cs := newRebuildCS(t, rebuildEntry{Count: maxRebuildAttempts, Generation: 3})
+	pod := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "demo-tb", Namespace: "ns"}}
+	cli := ctrlfake.NewClientBuilder().WithScheme(scheme).WithObjects(cs, pod).Build()
+	r := &Reconciler{Client: cli, Scheme: scheme}
+
+	deleted, wait, err := r.rebuildPod(t.Context(), log.WithFunc("test"), cs, pod, "spec drifted")
+	if err != nil || deleted || wait != 0 {
+		t.Fatalf("rebuildPod = (%v, %v, %v), want (false, 0, nil)", deleted, wait, err)
+	}
+	if !budgetExhausted(cs, "demo-tb") {
+		t.Fatal("parked name not exhausted in the mirrored history")
+	}
+	var stored cocoonv1.CocoonSet
+	if err := cli.Get(t.Context(), types.NamespacedName{Namespace: "ns", Name: "demo"}, &stored); err != nil {
+		t.Fatalf("get CocoonSet: %v", err)
+	}
+	if entry := readRebuildHistory(&stored)["demo-tb"]; !entry.Parked || entry.Count != maxRebuildAttempts {
+		t.Fatalf("persisted entry = %+v, want parked at count %d", entry, maxRebuildAttempts)
+	}
+	var got corev1.Pod
+	if err := cli.Get(t.Context(), types.NamespacedName{Namespace: "ns", Name: "demo-tb"}, &got); err != nil {
+		t.Fatalf("get pod: %v", err)
+	}
+	if got.Annotations[annotationDeadLetter] != "3" {
+		t.Fatalf("dead-letter annotation = %q, want 3", got.Annotations[annotationDeadLetter])
+	}
+}
+
+func TestRebuildPodFourthDeleteKeepsNameRecreatable(t *testing.T) {
+	scheme := testScheme(t)
+	cs := newRebuildCS(t, rebuildEntry{Count: maxRebuildAttempts - 1, Generation: 3, LastDeleted: time.Now().Add(-time.Minute)})
+	pod := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "demo-tb", Namespace: "ns"}}
+	cli := ctrlfake.NewClientBuilder().WithScheme(scheme).WithObjects(cs, pod).Build()
+	r := &Reconciler{Client: cli, Scheme: scheme}
+
+	deleted, wait, err := r.rebuildPod(t.Context(), log.WithFunc("test"), cs, pod, "spec drifted")
+	if err != nil || !deleted || wait != 0 {
+		t.Fatalf("rebuildPod = (%v, %v, %v), want (true, 0, nil)", deleted, wait, err)
+	}
+	if budgetExhausted(cs, "demo-tb") {
+		t.Fatal("name exhausted before its final replacement was created")
+	}
+	if entry := readRebuildHistory(cs)["demo-tb"]; entry.Count != maxRebuildAttempts || entry.Parked {
+		t.Fatalf("entry after the fourth delete = %+v", entry)
+	}
+	var got corev1.Pod
+	if err := cli.Get(t.Context(), types.NamespacedName{Namespace: "ns", Name: "demo-tb"}, &got); !apierrors.IsNotFound(err) {
+		t.Fatalf("pod after the fourth delete: err=%v, want NotFound", err)
+	}
+}
+
+func newRebuildCS(t *testing.T, entry rebuildEntry) *cocoonv1.CocoonSet {
+	t.Helper()
+	cs := &cocoonv1.CocoonSet{}
+	cs.Name, cs.Namespace, cs.Generation = "demo", "ns", 3
+	cs.Spec.Toolboxes = []cocoonv1.ToolboxSpec{{Name: "tb"}}
+	enc, err := encodeRebuildHistory(cs, map[string]rebuildEntry{"demo-tb": entry})
+	if err != nil {
+		t.Fatalf("encodeRebuildHistory: %v", err)
+	}
+	cs.Annotations = map[string]string{annotationRebuildHistory: enc}
+	return cs
 }
