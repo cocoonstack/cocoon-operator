@@ -56,7 +56,6 @@ func (r *Reconciler) SetupWithManager(_ context.Context, mgr ctrl.Manager) error
 		Complete(r)
 }
 
-// Reconcile drives one CocoonSet toward its declared agent and toolbox pods.
 func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	logger := log.WithFunc("cocoonset.Reconciler.Reconcile")
 
@@ -122,15 +121,14 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 		return ctrl.Result{}, err
 	}
 
-	if classified.main != nil && !podSpecMatchesAgent(classified.main, &cs, 0) {
-		logger.Infof(ctx, "main agent %s/%s spec drifted, deleting for recreate", classified.main.Namespace, classified.main.Name)
-		if err := r.Delete(ctx, classified.main); err != nil && !apierrors.IsNotFound(err) {
-			return ctrl.Result{}, fmt.Errorf("delete drifted main agent: %w", err)
-		}
-		return ctrl.Result{RequeueAfter: requeueAfterWrite}, nil
+	if handled, res, err := r.rebuildDriftedMain(ctx, logger, &cs, classified); handled {
+		return res, err
 	}
 	intent := r.newRestoreIntent(ctx, cs.Namespace)
 	if classified.main == nil {
+		if budgetExhausted(&cs, agentPodName(cs.Name, 0)) {
+			return ctrl.Result{}, r.patchStatus(ctx, &cs, buildStatus(&cs, classified, cocoonv1.CocoonSetPhaseFailed))
+		}
 		return r.createMainAgent(ctx, &cs, intent)
 	}
 
@@ -147,7 +145,7 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 	if err != nil {
 		return ctrl.Result{}, err
 	}
-	tbChanged, err := r.ensureToolboxes(ctx, &cs, classified, intent)
+	tbChanged, tbRequeue, err := r.ensureToolboxes(ctx, &cs, classified, intent)
 	if err != nil {
 		return ctrl.Result{}, err
 	}
@@ -158,16 +156,31 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 	if err := r.patchStatus(ctx, &cs, buildStatus(&cs, classified, "")); err != nil {
 		return ctrl.Result{}, err
 	}
+	if subRequeue == 0 || (tbRequeue > 0 && tbRequeue < subRequeue) {
+		subRequeue = tbRequeue
+	}
 	return ctrl.Result{RequeueAfter: subRequeue}, nil
+}
+
+// rebuildDriftedMain deletes a main that no longer matches the spec, within its rebuild budget; handled reports a delete or a pending backoff.
+func (r *Reconciler) rebuildDriftedMain(ctx context.Context, logger *log.Fields, cs *cocoonv1.CocoonSet, classified classifiedPods) (bool, ctrl.Result, error) {
+	if classified.main == nil || podSpecMatchesAgent(classified.main, cs, 0) {
+		return false, ctrl.Result{}, nil
+	}
+	deleted, wait, err := r.triagePod(ctx, logger, cs, classified.main, false)
+	if err != nil {
+		return true, ctrl.Result{}, err
+	}
+	if deleted || wait > 0 {
+		return true, ctrl.Result{RequeueAfter: cmp.Or(wait, requeueAfterWrite)}, nil
+	}
+	return false, ctrl.Result{}, nil
 }
 
 // handleFailedMainAgent recreates a drifted terminal main; parked in Failed it would wait for a Ready it can never reach.
 func (r *Reconciler) handleFailedMainAgent(ctx context.Context, cs *cocoonv1.CocoonSet, classified classifiedPods, reason string) (ctrl.Result, error) {
-	if !podSpecMatchesAgent(classified.main, cs, 0) {
-		if err := r.Delete(ctx, classified.main); err != nil && !apierrors.IsNotFound(err) {
-			return ctrl.Result{}, fmt.Errorf("delete terminal drifted main agent: %w", err)
-		}
-		return ctrl.Result{RequeueAfter: requeueAfterWrite}, nil
+	if handled, res, err := r.rebuildDriftedMain(ctx, log.WithFunc("cocoonset.Reconciler.handleFailedMainAgent"), cs, classified); handled {
+		return res, err
 	}
 	r.observeMainPodFailed(cs, classified.main, reason)
 	return ctrl.Result{}, r.patchStatus(ctx, cs, buildStatus(cs, classified, cocoonv1.CocoonSetPhaseFailed))

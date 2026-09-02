@@ -81,7 +81,7 @@ func buildAgentPod(cs *cocoonv1.CocoonSet, slot int32, mainVMName, bindNodeName 
 	}
 
 	vmName := meta.VMNameForDeployment(cs.Namespace, cs.Name, int(slot))
-	podName := fmt.Sprintf("%s-%d", cs.Name, slot)
+	podName := agentPodName(cs.Name, slot)
 
 	pod, err := newManagedPod(cs, podName, role, strconv.FormatInt(int64(slot), 10), scheme)
 	if err != nil {
@@ -154,6 +154,10 @@ func buildToolboxPod(cs *cocoonv1.CocoonSet, tb cocoonv1.ToolboxSpec, scheme *ru
 	pod.Spec.Containers[0].Resources = *tb.Resources.DeepCopy()
 	applyStorageRequest(pod, tb.Storage)
 	return pod, nil
+}
+
+func agentPodName(csName string, slot int32) string {
+	return fmt.Sprintf("%s-%d", csName, slot)
 }
 
 // toolboxPodName is shared by the builder and the collision check so the two cannot diverge.

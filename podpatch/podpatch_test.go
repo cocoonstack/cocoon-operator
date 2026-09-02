@@ -21,7 +21,7 @@ func TestHibernateStateShortCircuitsNoOp(t *testing.T) {
 	cli := newFakeClient(t, pod.DeepCopy())
 
 	if err := HibernateState(t.Context(), cli, pod, true); err != nil {
-		t.Fatalf("no-op PatchHibernateState must not reach the client: %v", err)
+		t.Fatalf("no-op HibernateState must not reach the client: %v", err)
 	}
 }
 
@@ -30,7 +30,7 @@ func TestHibernateStateSetsAnnotation(t *testing.T) {
 	cli := newFakeClient(t, pod.DeepCopy())
 
 	if err := HibernateState(t.Context(), cli, pod, true); err != nil {
-		t.Fatalf("PatchHibernateState: %v", err)
+		t.Fatalf("HibernateState: %v", err)
 	}
 
 	var got corev1.Pod

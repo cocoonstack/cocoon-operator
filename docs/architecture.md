@@ -16,6 +16,7 @@ cocoon-operator/
 ├── cocoonset/           # CocoonSet reconciler, pod builders, slot release, status diff
 ├── hibernation/         # CocoonHibernation reconciler
 ├── metrics/             # Prometheus collectors both reconcilers write to
+├── podpatch/            # pod annotation patchers shared by both reconcilers
 ├── snapshot/            # snapshot.Registry interface consumed by both reconcilers
 └── version/             # ldflags-injected build identity
 ```

@@ -17,7 +17,7 @@ var (
 			Namespace: metricNamespace,
 			Subsystem: metricSubsystem,
 			Name:      "subagent_rebuild_total",
-			Help:      "Number of sub-agent rebuilds triggered by triageSubAgent.",
+			Help:      "Number of owned pods deleted for recreate within their rebuild budget.",
 		},
 		[]string{labelNamespace, labelCocoonSet},
 	)
@@ -27,7 +27,7 @@ var (
 			Namespace: metricNamespace,
 			Subsystem: metricSubsystem,
 			Name:      "subagent_dead_letter_total",
-			Help:      "Number of sub-agents marked dead-letter after exhausting rebuild attempts.",
+			Help:      "Number of owned pods parked in dead-letter after exhausting rebuild attempts.",
 		},
 		[]string{labelNamespace, labelCocoonSet},
 	)
