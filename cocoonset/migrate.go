@@ -5,13 +5,14 @@ import (
 	"context"
 	"fmt"
 
+	"github.com/cocoonstack/cocoon-operator/podpatch"
+
 	"github.com/projecteru2/core/log"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	ctrl "sigs.k8s.io/controller-runtime"
 
 	cocoonv1 "github.com/cocoonstack/cocoon-common/apis/v1"
-	commonk8s "github.com/cocoonstack/cocoon-common/k8s"
 	"github.com/cocoonstack/cocoon-common/meta"
 	"github.com/cocoonstack/cocoon-operator/snapshot"
 )
@@ -65,7 +66,7 @@ func (r *Reconciler) startMigration(ctx context.Context, cs *cocoonv1.CocoonSet,
 	if err := r.patchStatus(ctx, cs, buildStatus(cs, classified, cocoonv1.CocoonSetPhaseMigrating)); err != nil {
 		return true, ctrl.Result{}, fmt.Errorf("migrate: patch migrating status %s/%s: %w", cs.Namespace, cs.Name, err)
 	}
-	if err := commonk8s.PatchHibernateState(ctx, r.Client, main, true); err != nil {
+	if err := podpatch.HibernateState(ctx, r.Client, main, true); err != nil {
 		return true, ctrl.Result{}, fmt.Errorf("migrate: patch hibernate on %s/%s: %w", main.Namespace, main.Name, err)
 	}
 	return true, ctrl.Result{RequeueAfter: requeueMigratePoll}, nil
@@ -112,7 +113,7 @@ func (r *Reconciler) advanceMigration(ctx context.Context, cs *cocoonv1.CocoonSe
 	case bool(meta.ReadHibernateState(main)) && (desired == "" || main.Spec.NodeName == desired):
 		// quiesced on the target: a re-target back or an unsuspend racing the tag
 		logger.Infof(ctx, "migrate %s/%s: waking %s in place", cs.Namespace, cs.Name, main.Name)
-		if err := commonk8s.PatchHibernateState(ctx, r.Client, main, false); err != nil {
+		if err := podpatch.HibernateState(ctx, r.Client, main, false); err != nil {
 			return true, ctrl.Result{}, fmt.Errorf("migrate: clear hibernate on %s/%s: %w", main.Namespace, main.Name, err)
 		}
 		return r.markMigrating(ctx, cs, classified)
