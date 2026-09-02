@@ -492,6 +492,38 @@ func TestReconcileMainLifecycleFailedTransitionsToFailed(t *testing.T) {
 	}
 }
 
+func TestReconcileMainLifecycleFailedHonorsSuspend(t *testing.T) {
+	scheme := testScheme(t)
+	cs := newCocoonSet("demo", func(cs *cocoonv1.CocoonSet) {
+		cs.Finalizers = []string{finalizerName}
+		cs.Spec.Suspend = true
+	})
+	mainPod := mustBuildAgentPod(t, cs, 0, "", "", scheme)
+	mainPod.Status.Phase = corev1.PodRunning
+	if mainPod.Annotations == nil {
+		mainPod.Annotations = map[string]string{}
+	}
+	mainPod.Annotations[meta.AnnotationLifecycleState] = string(meta.LifecycleStateFailed)
+
+	cli := ctrlfake.NewClientBuilder().
+		WithScheme(scheme).
+		WithObjects(cs, mainPod).
+		WithStatusSubresource(&cocoonv1.CocoonSet{}).
+		Build()
+	r := &Reconciler{Client: cli, Scheme: scheme, Registry: &fakeRegistry{}}
+
+	if _, err := r.Reconcile(t.Context(), reqFor(cs)); err != nil {
+		t.Fatalf("Reconcile: %v", err)
+	}
+	var out cocoonv1.CocoonSet
+	if err := cli.Get(t.Context(), types.NamespacedName{Namespace: cs.Namespace, Name: cs.Name}, &out); err != nil {
+		t.Fatalf("get CocoonSet: %v", err)
+	}
+	if out.Status.Phase != cocoonv1.CocoonSetPhaseSuspended {
+		t.Errorf("CocoonSet phase = %q, want Suspended", out.Status.Phase)
+	}
+}
+
 func TestReconcileMainLifecycleFailedWithDriftRecreatesPod(t *testing.T) {
 	scheme := testScheme(t)
 	cs := newCocoonSet("demo", func(cs *cocoonv1.CocoonSet) {
