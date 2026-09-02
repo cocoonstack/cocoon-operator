@@ -69,8 +69,8 @@ func (r *Reconciler) allOwnedPodsHibernated(ctx context.Context, cs *cocoonv1.Co
 		if !spec.Managed {
 			continue
 		}
-		// a terminal pod has no VM to snapshot; waiting on it would park the set in Suspending forever
-		if podIsTerminal(pod) {
+		// a kubelet-terminal pod has no VM to snapshot; waiting on it would park the set in Suspending forever
+		if podHasNoVM(pod) {
 			continue
 		}
 		if spec.VMName == "" {

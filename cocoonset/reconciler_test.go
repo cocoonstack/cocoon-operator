@@ -519,8 +519,15 @@ func TestReconcileMainLifecycleFailedHonorsSuspend(t *testing.T) {
 	if err := cli.Get(t.Context(), types.NamespacedName{Namespace: cs.Namespace, Name: cs.Name}, &out); err != nil {
 		t.Fatalf("get CocoonSet: %v", err)
 	}
-	if out.Status.Phase != cocoonv1.CocoonSetPhaseSuspended {
-		t.Errorf("CocoonSet phase = %q, want Suspended", out.Status.Phase)
+	if out.Status.Phase != cocoonv1.CocoonSetPhaseSuspending {
+		t.Errorf("CocoonSet phase = %q, want Suspending until the failed main's VM is hibernated", out.Status.Phase)
+	}
+	var pod corev1.Pod
+	if err := cli.Get(t.Context(), types.NamespacedName{Namespace: mainPod.Namespace, Name: mainPod.Name}, &pod); err != nil {
+		t.Fatalf("get main pod: %v", err)
+	}
+	if !meta.ReadHibernateState(&pod) {
+		t.Error("failed main must receive the hibernate intent; its VM may still be live")
 	}
 }
 
