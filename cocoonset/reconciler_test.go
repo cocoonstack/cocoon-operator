@@ -461,24 +461,7 @@ func TestMainPodFailedReason(t *testing.T) {
 }
 
 func TestReconcileMainLifecycleFailedTransitionsToFailed(t *testing.T) {
-	scheme := testScheme(t)
-	cs := newCocoonSet("demo", func(cs *cocoonv1.CocoonSet) {
-		cs.Finalizers = []string{finalizerName}
-	})
-	mainPod := mustBuildAgentPod(t, cs, 0, "", "", scheme)
-	mainPod.Status.Phase = corev1.PodRunning
-	if mainPod.Annotations == nil {
-		mainPod.Annotations = map[string]string{}
-	}
-	mainPod.Annotations[meta.AnnotationLifecycleState] = string(meta.LifecycleStateFailed)
-	mainPod.Annotations[meta.AnnotationLifecycleStateMessage] = "hibernate push failed"
-
-	cli := ctrlfake.NewClientBuilder().
-		WithScheme(scheme).
-		WithObjects(cs, mainPod).
-		WithStatusSubresource(&cocoonv1.CocoonSet{}).
-		Build()
-	r := &Reconciler{Client: cli, Scheme: scheme, Registry: &fakeRegistry{}}
+	cli, cs, _, r := newFailedMainSet(t, false)
 
 	if _, err := r.Reconcile(t.Context(), reqFor(cs)); err != nil {
 		t.Fatalf("Reconcile: %v", err)
@@ -489,6 +472,28 @@ func TestReconcileMainLifecycleFailedTransitionsToFailed(t *testing.T) {
 	}
 	if out.Status.Phase != cocoonv1.CocoonSetPhaseFailed {
 		t.Errorf("CocoonSet phase = %q, want Failed", out.Status.Phase)
+	}
+}
+
+func TestReconcileMainLifecycleFailedHonorsSuspend(t *testing.T) {
+	cli, cs, mainPod, r := newFailedMainSet(t, true)
+
+	if _, err := r.Reconcile(t.Context(), reqFor(cs)); err != nil {
+		t.Fatalf("Reconcile: %v", err)
+	}
+	var out cocoonv1.CocoonSet
+	if err := cli.Get(t.Context(), types.NamespacedName{Namespace: cs.Namespace, Name: cs.Name}, &out); err != nil {
+		t.Fatalf("get CocoonSet: %v", err)
+	}
+	if out.Status.Phase != cocoonv1.CocoonSetPhaseSuspending {
+		t.Errorf("CocoonSet phase = %q, want Suspending until the failed main's VM is hibernated", out.Status.Phase)
+	}
+	var pod corev1.Pod
+	if err := cli.Get(t.Context(), types.NamespacedName{Namespace: mainPod.Namespace, Name: mainPod.Name}, &pod); err != nil {
+		t.Fatalf("get main pod: %v", err)
+	}
+	if !meta.ReadHibernateState(&pod) {
+		t.Error("failed main must receive the hibernate intent; its VM may still be live")
 	}
 }
 
@@ -960,6 +965,24 @@ func stashedVMNames(t *testing.T, cli client.Client) []string {
 		t.Fatalf("get cocoonset: %v", err)
 	}
 	return parseVMNamesAnnotation(cs.Annotations[annotationDeleteVMNames])
+}
+
+func newFailedMainSet(t *testing.T, suspend bool) (client.Client, *cocoonv1.CocoonSet, *corev1.Pod, *Reconciler) {
+	t.Helper()
+	scheme := testScheme(t)
+	cs := newCocoonSet("demo", func(cs *cocoonv1.CocoonSet) {
+		cs.Finalizers = []string{finalizerName}
+		cs.Spec.Suspend = suspend
+	})
+	mainPod := mustBuildAgentPod(t, cs, 0, "", "", scheme)
+	mainPod.Status.Phase = corev1.PodRunning
+	mainPod.Annotations[meta.AnnotationLifecycleState] = string(meta.LifecycleStateFailed)
+	cli := ctrlfake.NewClientBuilder().
+		WithScheme(scheme).
+		WithObjects(cs, mainPod).
+		WithStatusSubresource(&cocoonv1.CocoonSet{}).
+		Build()
+	return cli, cs, mainPod, &Reconciler{Client: cli, Scheme: scheme, Registry: &fakeRegistry{}}
 }
 
 func lifecycleHibernated(p *corev1.Pod) *corev1.Pod {

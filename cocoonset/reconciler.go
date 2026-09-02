@@ -90,6 +90,13 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 		return ctrl.Result{}, err
 	}
 
+	if cs.Spec.Suspend {
+		if cs.Spec.HibernatePolicy.Default() == cocoonv1.HibernatePolicyRelease {
+			return r.reconcileSuspendRelease(ctx, &cs, classified)
+		}
+		return r.reconcileSuspend(ctx, &cs, classified)
+	}
+
 	// lifecycle-state=Failed is the vk-cocoon terminal path and fires before Pod Phase flips; IsPodTerminal is the kubelet path
 	if classified.main != nil {
 		if reason := mainPodFailedReason(classified.main); reason != "" {
@@ -99,13 +106,6 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 			commonk8s.Eventf(r.Recorder, &cs, corev1.EventTypeNormal, "RecoveredFromFailure",
 				"main pod %s/%s is Ready again", classified.main.Namespace, classified.main.Name)
 		}
-	}
-
-	if cs.Spec.Suspend {
-		if cs.Spec.HibernatePolicy.Default() == cocoonv1.HibernatePolicyRelease {
-			return r.reconcileSuspendRelease(ctx, &cs, classified)
-		}
-		return r.reconcileSuspend(ctx, &cs, classified)
 	}
 
 	// migration runs before applyUnsuspend, which would otherwise clear its hibernate annotation

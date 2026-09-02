@@ -95,7 +95,7 @@ func TestSuspendReleaseKeepsTerminalPod(t *testing.T) {
 	cs := relCocoonSet()
 	pod := mustBuildAgentPod(t, cs, 0, "", "", testScheme(t))
 	pod.Spec.NodeName = "node-a"
-	meta.LifecycleStatus{State: meta.LifecycleStateFailed, ObservedGeneration: cs.Generation}.Apply(pod)
+	pod.Status.Phase = corev1.PodFailed
 	cli := relClient(t, cs, pod)
 	r := &Reconciler{Client: cli, Scheme: testScheme(t), Registry: &fakeRegistry{}}
 
