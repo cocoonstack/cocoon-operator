@@ -121,7 +121,7 @@ func TestEnsureToolboxesCollisionReturnsError(t *testing.T) {
 		allByName: map[string]*corev1.Pod{agentPod.Name: agentPod},
 	}
 
-	_, err := r.ensureToolboxes(t.Context(), cs, classified, r.newRestoreIntent(t.Context(), cs.Namespace))
+	_, _, err := r.ensureToolboxes(t.Context(), cs, classified, r.newRestoreIntent(t.Context(), cs.Namespace))
 	if err == nil {
 		t.Fatal("ensureToolboxes should return error on name collision with agent pod")
 	}
@@ -143,7 +143,7 @@ func TestEnsureToolboxesRejectsIntegerName(t *testing.T) {
 		allByName: map[string]*corev1.Pod{},
 	}
 
-	_, err := r.ensureToolboxes(t.Context(), cs, classified, r.newRestoreIntent(t.Context(), cs.Namespace))
+	_, _, err := r.ensureToolboxes(t.Context(), cs, classified, r.newRestoreIntent(t.Context(), cs.Namespace))
 	if err == nil {
 		t.Fatal("ensureToolboxes must reject a toolbox name that collides with agent slot pod naming")
 	}
@@ -166,7 +166,7 @@ func TestEnsureToolboxesRejectsDuplicateNames(t *testing.T) {
 		allByName: map[string]*corev1.Pod{},
 	}
 
-	_, err := r.ensureToolboxes(t.Context(), cs, classified, r.newRestoreIntent(t.Context(), cs.Namespace))
+	_, _, err := r.ensureToolboxes(t.Context(), cs, classified, r.newRestoreIntent(t.Context(), cs.Namespace))
 	if err == nil {
 		t.Fatal("ensureToolboxes must reject a spec with duplicate toolbox names")
 	}
@@ -192,7 +192,7 @@ func TestEnsureToolboxesIdempotentOnExistingToolbox(t *testing.T) {
 		allByName: map[string]*corev1.Pod{},
 	}
 
-	changed, err := r.ensureToolboxes(t.Context(), cs, classified, r.newRestoreIntent(t.Context(), cs.Namespace))
+	changed, _, err := r.ensureToolboxes(t.Context(), cs, classified, r.newRestoreIntent(t.Context(), cs.Namespace))
 	if err != nil {
 		t.Fatalf("ensureToolboxes: %v", err)
 	}
@@ -384,15 +384,15 @@ func TestEnsureSubAgentsReplacesTerminalPod(t *testing.T) {
 	}
 }
 
-func TestEnsureSubAgentsDeadLetterYieldsToSpecDrift(t *testing.T) {
+func TestEnsureSubAgentsDeadLetterStaysUntilSpecEdit(t *testing.T) {
 	scheme := testScheme(t)
 	cs := newCocoonSet("demo", func(cs *cocoonv1.CocoonSet) {
 		cs.Spec.Agent.Replicas = 1
 	})
 	subPod := mustBuildAgentPod(t, cs, 1, "vk-ns-demo-0", "", scheme)
-	subPod.Annotations[annotationDeadLetter] = "true"
+	subPod.Annotations[annotationDeadLetter] = "0"
 
-	enc, err := encodeRebuildHistory(1, map[int32]rebuildEntry{1: {Count: maxRebuildAttempts}})
+	enc, err := encodeRebuildHistory(cs, map[string]rebuildEntry{subPod.Name: {Count: maxRebuildAttempts}})
 	if err != nil {
 		t.Fatalf("encodeRebuildHistory: %v", err)
 	}
@@ -415,12 +415,13 @@ func TestEnsureSubAgentsDeadLetterYieldsToSpecDrift(t *testing.T) {
 	}
 
 	cs.Spec.Agent.Image = "ghcr.io/cocoonstack/cocoon/ubuntu:26.04"
+	cs.Generation = 1
 	changed, _, err = r.ensureSubAgents(t.Context(), cs, classified, "vk-ns-demo-0", "", r.newRestoreIntent(t.Context(), cs.Namespace))
 	if err != nil {
 		t.Fatalf("ensureSubAgents after spec fix: %v", err)
 	}
 	if !changed {
-		t.Fatal("spec drift must rebuild a dead-lettered pod")
+		t.Fatal("a spec edit must rebuild a dead-lettered pod")
 	}
 	if err := cli.Get(t.Context(), types.NamespacedName{Namespace: subPod.Namespace, Name: subPod.Name}, &corev1.Pod{}); err == nil {
 		t.Error("dead-lettered drifted pod should have been deleted")
@@ -429,7 +430,7 @@ func TestEnsureSubAgentsDeadLetterYieldsToSpecDrift(t *testing.T) {
 	if err := cli.Get(t.Context(), types.NamespacedName{Namespace: cs.Namespace, Name: cs.Name}, &out); err != nil {
 		t.Fatalf("get CocoonSet: %v", err)
 	}
-	if _, ok := readRebuildHistory(&out)[1]; ok {
+	if _, ok := readRebuildHistory(&out)[subPod.Name]; ok {
 		t.Error("rebuild history for the slot must be reset so the new spec gets a fresh budget")
 	}
 }
@@ -576,7 +577,7 @@ func TestEnsureToolboxesReplacesTerminalPod(t *testing.T) {
 
 	cli := ctrlfake.NewClientBuilder().
 		WithScheme(scheme).
-		WithObjects(tbPod).
+		WithObjects(cs, tbPod).
 		Build()
 	r := &Reconciler{Client: cli, Scheme: scheme}
 	classified := classifiedPods{
@@ -585,7 +586,7 @@ func TestEnsureToolboxesReplacesTerminalPod(t *testing.T) {
 		allByName: map[string]*corev1.Pod{tbPod.Name: tbPod},
 	}
 
-	changed, err := r.ensureToolboxes(t.Context(), cs, classified, r.newRestoreIntent(t.Context(), cs.Namespace))
+	changed, _, err := r.ensureToolboxes(t.Context(), cs, classified, r.newRestoreIntent(t.Context(), cs.Namespace))
 	if err != nil {
 		t.Fatalf("ensureToolboxes: %v", err)
 	}
@@ -950,7 +951,7 @@ func TestEnsureToolboxesStashesRemovedToolboxVMName(t *testing.T) {
 	pod := mustBuildToolboxPod(t, cs, tb, scheme)
 	cli := ctrlfake.NewClientBuilder().WithScheme(scheme).WithObjects(cs, pod).Build()
 	r := &Reconciler{Client: cli, Scheme: scheme}
-	if _, err := r.ensureToolboxes(t.Context(), cs, classifyPods([]corev1.Pod{*pod}), r.newRestoreIntent(t.Context(), cs.Namespace)); err != nil {
+	if _, _, err := r.ensureToolboxes(t.Context(), cs, classifyPods([]corev1.Pod{*pod}), r.newRestoreIntent(t.Context(), cs.Namespace)); err != nil {
 		t.Fatalf("ensureToolboxes: %v", err)
 	}
 	if names := stashedVMNames(t, cli); !slices.Contains(names, "vk-ns-demo-tb") {

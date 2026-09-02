@@ -10,40 +10,48 @@ import (
 
 func TestRebuildHistoryRoundTrip(t *testing.T) {
 	cs := &cocoonv1.CocoonSet{}
+	cs.Name = "demo"
 	cs.Spec.Agent.Replicas = 3
-	in := map[int32]rebuildEntry{
-		1: {Count: 2, LastDeleted: time.Date(2026, 5, 14, 1, 0, 0, 0, time.UTC)},
-		2: {Count: 1, LastDeleted: time.Date(2026, 5, 14, 1, 0, 30, 0, time.UTC)},
+	in := map[string]rebuildEntry{
+		"demo-1": {Count: 2, LastDeleted: time.Date(2026, 5, 14, 1, 0, 0, 0, time.UTC)},
+		"demo-2": {Count: 1, LastDeleted: time.Date(2026, 5, 14, 1, 0, 30, 0, time.UTC)},
 	}
-	enc, err := encodeRebuildHistory(cs.Spec.Agent.Replicas, in)
+	enc, err := encodeRebuildHistory(cs, in)
 	if err != nil {
 		t.Fatalf("encodeRebuildHistory: %v", err)
 	}
 	cs.Annotations = map[string]string{annotationRebuildHistory: enc}
 	got := readRebuildHistory(cs)
-	if got[1].Count != 2 || got[2].Count != 1 {
+	if got["demo-1"].Count != 2 || got["demo-2"].Count != 1 {
 		t.Fatalf("round-trip lost counts: %+v", got)
 	}
 }
 
-func TestRebuildHistoryGarbageCollectsStaleSlots(t *testing.T) {
-	in := map[int32]rebuildEntry{
-		1: {Count: 1},
-		2: {Count: 2},
-		7: {Count: 3},
+func TestRebuildHistoryGarbageCollectsStalePods(t *testing.T) {
+	cs := &cocoonv1.CocoonSet{}
+	cs.Name = "demo"
+	cs.Spec.Agent.Replicas = 2
+	cs.Spec.Toolboxes = []cocoonv1.ToolboxSpec{{Name: "tb"}}
+	in := map[string]rebuildEntry{
+		"demo-0":    {Count: 1},
+		"demo-2":    {Count: 2},
+		"demo-7":    {Count: 3},
+		"demo-tb":   {Count: 1},
+		"demo-gone": {Count: 1},
 	}
-	enc, err := encodeRebuildHistory(2, in)
+	enc, err := encodeRebuildHistory(cs, in)
 	if err != nil {
 		t.Fatalf("encodeRebuildHistory: %v", err)
 	}
-	cs := &cocoonv1.CocoonSet{}
 	cs.Annotations = map[string]string{annotationRebuildHistory: enc}
 	got := readRebuildHistory(cs)
-	if _, ok := got[7]; ok {
-		t.Fatalf("expected slot 7 pruned, got %+v", got)
+	for _, name := range []string{"demo-7", "demo-gone"} {
+		if _, ok := got[name]; ok {
+			t.Fatalf("expected %s pruned, got %+v", name, got)
+		}
 	}
-	if len(got) != 2 {
-		t.Fatalf("expected 2 surviving slots, got %d: %+v", len(got), got)
+	if len(got) != 3 || len(in) != 5 {
+		t.Fatalf("expected 3 surviving pods and an untouched input, got %d / %d: %+v", len(got), len(in), got)
 	}
 }
 
@@ -82,8 +90,8 @@ func TestReadRebuildHistoryHandlesNullPayload(t *testing.T) {
 	if got == nil {
 		t.Fatal("null payload must yield non-nil map so downstream writes don't panic")
 	}
-	got[1] = rebuildEntry{Count: 1}
-	if _, err := encodeRebuildHistory(2, got); err != nil {
+	got["demo-1"] = rebuildEntry{Count: 1}
+	if _, err := encodeRebuildHistory(cs, got); err != nil {
 		t.Fatalf("encodeRebuildHistory on normalized null payload: %v", err)
 	}
 }
