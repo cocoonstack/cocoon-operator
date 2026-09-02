@@ -6,13 +6,14 @@ import (
 	"maps"
 	"slices"
 
+	"github.com/cocoonstack/cocoon-operator/podpatch"
+
 	"github.com/projecteru2/core/log"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	ctrl "sigs.k8s.io/controller-runtime"
 
 	cocoonv1 "github.com/cocoonstack/cocoon-common/apis/v1"
-	commonk8s "github.com/cocoonstack/cocoon-common/k8s"
 	"github.com/cocoonstack/cocoon-common/meta"
 	"github.com/cocoonstack/cocoon-operator/snapshot"
 )
@@ -94,7 +95,7 @@ func (r *Reconciler) allOwnedPodsHibernated(ctx context.Context, cs *cocoonv1.Co
 
 func (r *Reconciler) applySuspend(ctx context.Context, classified classifiedPods) error {
 	return classified.forEachSorted(ctx, func(pod *corev1.Pod) error {
-		if err := commonk8s.PatchHibernateState(ctx, r.Client, pod, true); err != nil {
+		if err := podpatch.HibernateState(ctx, r.Client, pod, true); err != nil {
 			return fmt.Errorf("patch hibernate annotation on %s/%s: %w", pod.Namespace, pod.Name, err)
 		}
 		return nil
@@ -124,7 +125,7 @@ func (r *Reconciler) applyUnsuspend(ctx context.Context, namespace string, class
 		if _, ownedByCR := hibernatedByCR[pod.Name]; ownedByCR {
 			continue
 		}
-		if err := commonk8s.PatchHibernateState(ctx, r.Client, pod, false); err != nil {
+		if err := podpatch.HibernateState(ctx, r.Client, pod, false); err != nil {
 			return fmt.Errorf("clear hibernate annotation on %s/%s: %w", pod.Namespace, pod.Name, err)
 		}
 	}

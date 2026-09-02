@@ -4,11 +4,12 @@ import (
 	"context"
 	"fmt"
 
+	"github.com/cocoonstack/cocoon-operator/podpatch"
+
 	corev1 "k8s.io/api/core/v1"
 	ctrl "sigs.k8s.io/controller-runtime"
 
 	cocoonv1 "github.com/cocoonstack/cocoon-common/apis/v1"
-	commonk8s "github.com/cocoonstack/cocoon-common/k8s"
 	"github.com/cocoonstack/cocoon-common/meta"
 	"github.com/cocoonstack/cocoon-operator/snapshot"
 )
@@ -16,7 +17,7 @@ import (
 func (r *Reconciler) reconcileHibernate(ctx context.Context, hib *cocoonv1.CocoonHibernation, pod *corev1.Pod, vmName string) (ctrl.Result, error) {
 	r.announceRetryFromFailed(hib, cocoonv1.HibernationDesireHibernate)
 
-	if err := commonk8s.PatchHibernateState(ctx, r.Client, pod, true); err != nil {
+	if err := podpatch.HibernateState(ctx, r.Client, pod, true); err != nil {
 		return ctrl.Result{}, fmt.Errorf("patch hibernate annotation: %w", err)
 	}
 

@@ -4,12 +4,13 @@ import (
 	"context"
 	"fmt"
 
+	"github.com/cocoonstack/cocoon-operator/podpatch"
+
 	"github.com/projecteru2/core/log"
 	corev1 "k8s.io/api/core/v1"
 	ctrl "sigs.k8s.io/controller-runtime"
 
 	cocoonv1 "github.com/cocoonstack/cocoon-common/apis/v1"
-	commonk8s "github.com/cocoonstack/cocoon-common/k8s"
 	"github.com/cocoonstack/cocoon-common/meta"
 )
 
@@ -21,7 +22,7 @@ func (r *Reconciler) reconcileWake(ctx context.Context, hib *cocoonv1.CocoonHibe
 	r.announceRetryFromFailed(hib, cocoonv1.HibernationDesireWake)
 
 	if meta.ReadHibernateState(pod) {
-		if err := commonk8s.PatchHibernateState(ctx, r.Client, pod, false); err != nil {
+		if err := podpatch.HibernateState(ctx, r.Client, pod, false); err != nil {
 			return ctrl.Result{}, fmt.Errorf("clear hibernate annotation: %w", err)
 		}
 	}

@@ -6,6 +6,8 @@ import (
 	"maps"
 	"slices"
 
+	"github.com/cocoonstack/cocoon-operator/podpatch"
+
 	"github.com/projecteru2/core/log"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -61,7 +63,7 @@ func (r *Reconciler) reconcileSuspendRelease(ctx context.Context, cs *cocoonv1.C
 		}
 		logger.Infof(ctx, "slot release: deleting hibernated pod %s/%s (node=%s)", pod.Namespace, pod.Name, pod.Spec.NodeName)
 		// best-effort: a lost flag costs the wake a registry pull; failing here would forfeit the seat
-		if err := commonk8s.PatchKeepSnapshotOnDelete(ctx, r.Client, pod); err != nil {
+		if err := podpatch.KeepSnapshotOnDelete(ctx, r.Client, pod); err != nil {
 			logger.Errorf(ctx, err, "slot release: flag keep-snapshot on %s/%s; wake will cold-pull", pod.Namespace, pod.Name)
 		}
 		if err := r.Delete(ctx, pod); err != nil && !apierrors.IsNotFound(err) {
