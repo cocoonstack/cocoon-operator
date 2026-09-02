@@ -97,7 +97,6 @@ func (r *Reconciler) SetupWithManager(ctx context.Context, mgr ctrl.Manager) err
 		Complete(r)
 }
 
-// Reconcile drives a single hibernate or wake transition. Failed phases are recoverable.
 func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	logger := log.WithFunc("hibernation.Reconciler.Reconcile")
 

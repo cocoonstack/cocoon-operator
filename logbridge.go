@@ -20,7 +20,6 @@ type crSink struct {
 
 func (s *crSink) Init(logr.RuntimeInfo) {}
 
-// Errors bypass this gate entirely (logr contract).
 func (s *crSink) Enabled(level int) bool { return level == 0 }
 
 func (s *crSink) Info(_ int, msg string, kvs ...any) {

@@ -4,11 +4,10 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/cocoonstack/cocoon-operator/podpatch"
-
 	corev1 "k8s.io/api/core/v1"
 
 	cocoonv1 "github.com/cocoonstack/cocoon-common/apis/v1"
+	"github.com/cocoonstack/cocoon-operator/podpatch"
 )
 
 // syncCocoonSetGeneration lets vk-cocoon echo the generation back as a skew-free completion signal.

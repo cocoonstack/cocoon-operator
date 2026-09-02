@@ -6,8 +6,6 @@ import (
 	"maps"
 	"slices"
 
-	"github.com/cocoonstack/cocoon-operator/podpatch"
-
 	"github.com/projecteru2/core/log"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -18,6 +16,7 @@ import (
 	commonk8s "github.com/cocoonstack/cocoon-common/k8s"
 	"github.com/cocoonstack/cocoon-common/meta"
 	"github.com/cocoonstack/cocoon-operator/metrics"
+	"github.com/cocoonstack/cocoon-operator/podpatch"
 	"github.com/cocoonstack/cocoon-operator/snapshot"
 )
 

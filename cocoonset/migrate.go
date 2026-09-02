@@ -5,8 +5,6 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/cocoonstack/cocoon-operator/podpatch"
-
 	"github.com/projecteru2/core/log"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -14,6 +12,7 @@ import (
 
 	cocoonv1 "github.com/cocoonstack/cocoon-common/apis/v1"
 	"github.com/cocoonstack/cocoon-common/meta"
+	"github.com/cocoonstack/cocoon-operator/podpatch"
 	"github.com/cocoonstack/cocoon-operator/snapshot"
 )
 

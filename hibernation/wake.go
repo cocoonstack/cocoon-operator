@@ -4,14 +4,13 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/cocoonstack/cocoon-operator/podpatch"
-
 	"github.com/projecteru2/core/log"
 	corev1 "k8s.io/api/core/v1"
 	ctrl "sigs.k8s.io/controller-runtime"
 
 	cocoonv1 "github.com/cocoonstack/cocoon-common/apis/v1"
 	"github.com/cocoonstack/cocoon-common/meta"
+	"github.com/cocoonstack/cocoon-operator/podpatch"
 )
 
 func (r *Reconciler) reconcileWake(ctx context.Context, hib *cocoonv1.CocoonHibernation, pod *corev1.Pod, vmName string) (ctrl.Result, error) {
