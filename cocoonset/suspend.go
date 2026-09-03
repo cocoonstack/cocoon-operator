@@ -6,9 +6,7 @@ import (
 	"maps"
 	"slices"
 
-	"github.com/projecteru2/core/log"
 	corev1 "k8s.io/api/core/v1"
-	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	ctrl "sigs.k8s.io/controller-runtime"
 
 	cocoonv1 "github.com/cocoonstack/cocoon-common/apis/v1"
@@ -20,7 +18,10 @@ import (
 // reconcileSuspend polls the registry and stays Suspending until every managed VM's snapshot lands.
 func (r *Reconciler) reconcileSuspend(ctx context.Context, cs *cocoonv1.CocoonSet, classified classifiedPods) (ctrl.Result, error) {
 	if classified.main == nil {
-		return r.createMainAheadOfSuspend(ctx, cs)
+		// reconcileSuspend only runs under Spec.Suspend, so restore intent is unconditional.
+		return r.createMainAgent(ctx, cs, func() (map[string]struct{}, error) {
+			return map[string]struct{}{agentPodName(cs.Name, 0): {}}, nil
+		})
 	}
 	if err := r.applySuspend(ctx, classified); err != nil {
 		return ctrl.Result{}, err
@@ -36,26 +37,6 @@ func (r *Reconciler) reconcileSuspend(ctx context.Context, cs *cocoonv1.CocoonSe
 		result = ctrl.Result{}
 	}
 	return result, r.patchStatus(ctx, cs, buildStatus(cs, classified, phase))
-}
-
-func (r *Reconciler) createMainAheadOfSuspend(ctx context.Context, cs *cocoonv1.CocoonSet) (ctrl.Result, error) {
-	logger := log.WithFunc("cocoonset.Reconciler.createMainAheadOfSuspend")
-	mainPod, err := buildAgentPod(cs, 0, "", "", r.Scheme)
-	if err != nil {
-		return ctrl.Result{}, fmt.Errorf("build main agent before suspend: %w", err)
-	}
-	// reconcileSuspend only runs under Spec.Suspend, so restore intent is unconditional.
-	if err := r.markRestoreIfHibernated(ctx, mainPod, true); err != nil {
-		return ctrl.Result{}, err
-	}
-	if err := r.Create(ctx, mainPod); err != nil {
-		if apierrors.IsAlreadyExists(err) {
-			return ctrl.Result{RequeueAfter: requeueWaitForMain}, nil
-		}
-		return ctrl.Result{}, fmt.Errorf("create main agent before suspend: %w", err)
-	}
-	logger.Infof(ctx, "created main agent %s/%s ahead of suspend", mainPod.Namespace, mainPod.Name)
-	return ctrl.Result{RequeueAfter: requeueAfterWrite}, nil
 }
 
 // allOwnedPodsHibernated returns (false, nil), not an error, while the expected state is not yet observed.

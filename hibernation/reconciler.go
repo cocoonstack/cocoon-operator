@@ -118,10 +118,6 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 		return ctrl.Result{RequeueAfter: requeueAfterWrite}, nil
 	}
 
-	if hib.Spec.PodRef.Name == "" {
-		return ctrl.Result{}, r.markFailed(ctx, &hib, "spec.podRef.name is required")
-	}
-
 	var pod corev1.Pod
 	err := r.Get(ctx, types.NamespacedName{Namespace: hib.Namespace, Name: hib.Spec.PodRef.Name}, &pod)
 	if err != nil {
