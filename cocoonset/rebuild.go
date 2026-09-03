@@ -188,7 +188,6 @@ func desiredPodNames(cs *cocoonv1.CocoonSet) map[string]bool {
 	return names
 }
 
-// backoffDelay returns the wait before the next rebuild attempt: 0, 1s, 5s, 30s.
 func backoffDelay(priorCount int) time.Duration {
 	switch priorCount {
 	case 0:

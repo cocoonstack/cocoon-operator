@@ -161,7 +161,6 @@ func (r *Reconciler) lockVM(vmName string) func() {
 	return mu.Unlock
 }
 
-// reconcileDelete clears the :hibernate tag (if Status.VMName is set) and removes the finalizer.
 func (r *Reconciler) reconcileDelete(ctx context.Context, hib *cocoonv1.CocoonHibernation) error {
 	logger := log.WithFunc("hibernation.Reconciler.reconcileDelete")
 	// lock Status.VMName, the VM this CR actually owns; defense in depth for CRs retargeted before podRef became immutable
@@ -243,7 +242,6 @@ func (r *Reconciler) setPhase(ctx context.Context, hib *cocoonv1.CocoonHibernati
 	return nil
 }
 
-// firstTransitionAt reports whether Ready.LastTransitionTime advanced since the last observation.
 func (r *Reconciler) firstTransitionAt(hib *cocoonv1.CocoonHibernation) bool {
 	ready := apimeta.FindStatusCondition(hib.Status.Conditions, commonk8s.ConditionTypeReady)
 	if ready == nil || ready.LastTransitionTime.IsZero() {
@@ -277,7 +275,7 @@ func (r *Reconciler) announceRetryFromFailed(hib *cocoonv1.CocoonHibernation, de
 	commonk8s.Eventf(r.Recorder, hib, corev1.EventTypeNormal, "RetryRequested", "retrying %s after prior failure", desire)
 }
 
-// markFailed sets the Failed phase. A subsequent reconcile can recover by overwriting it.
+// A subsequent reconcile can recover by overwriting it.
 func (r *Reconciler) markFailed(ctx context.Context, hib *cocoonv1.CocoonHibernation, msg string) error {
 	return r.patchNotReady(ctx, hib, cocoonv1.CocoonHibernationPhaseFailed, conditionReasonFailed, msg)
 }

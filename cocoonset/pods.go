@@ -205,7 +205,6 @@ func newManagedPod(cs *cocoonv1.CocoonSet, podName, role, slotLabel string, sche
 	return pod, nil
 }
 
-// podSpecMatchesAgent reports whether a running agent pod still matches the current spec.
 func podSpecMatchesAgent(pod *corev1.Pod, cs *cocoonv1.CocoonSet, slot int32) bool {
 	current := meta.ParseVMSpec(pod)
 	// sub-agents inherit ForkFrom; main agents leave it empty so a manual edit drifts
@@ -225,7 +224,6 @@ func podSpecMatchesAgent(pod *corev1.Pod, cs *cocoonv1.CocoonSet, slot int32) bo
 		schedulingMatches(pod, cs)
 }
 
-// podSpecMatchesToolbox reports whether a running toolbox pod still matches the current spec.
 func podSpecMatchesToolbox(pod *corev1.Pod, cs *cocoonv1.CocoonSet, tb cocoonv1.ToolboxSpec) bool {
 	current := meta.ParseVMSpec(pod)
 	want := meta.FromToolboxSpec(tb, current.VMName, cs.Spec.SnapshotPolicy)

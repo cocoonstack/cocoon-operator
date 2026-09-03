@@ -50,7 +50,6 @@ func (s *crSink) WithName(name string) logr.LogSink {
 	return &next
 }
 
-// funcName labels unnamed root output so its origin stays identifiable.
 func (s *crSink) funcName() string {
 	return cmp.Or(s.name, "controller-runtime")
 }
