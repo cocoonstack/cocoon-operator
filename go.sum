@@ -12,8 +12,8 @@ github.com/cockroachdb/logtags v0.0.0-20241215232642-bb51bb14a506 h1:ASDL+UJcILM
 github.com/cockroachdb/logtags v0.0.0-20241215232642-bb51bb14a506/go.mod h1:Mw7HqKr2kdtu6aYGn3tPmAftiP3QPX63LdK/zcariIo=
 github.com/cockroachdb/redact v1.1.8 h1:8eVLLj6juKxiKrAEw2b8cJvNqWq++U8WOfQFuL7KTaA=
 github.com/cockroachdb/redact v1.1.8/go.mod h1:GceHHpJ0rMDpYARL5In88Alq/xMBUtVlz7Qxix6ZVkw=
-github.com/cocoonstack/cocoon-common v0.3.3-0.20260902191115-242eab53f0b6 h1:JcjiYJjjJ+Kwbg/8NrL7EMV6c6fGH1rS3ICmMdQumrc=
-github.com/cocoonstack/cocoon-common v0.3.3-0.20260902191115-242eab53f0b6/go.mod h1:0REoXSn92vmgCFmWjQ7T/cDCX0nVqMcEDWEeRCbIKEc=
+github.com/cocoonstack/cocoon-common v0.3.3 h1:gRdYWJCuHlmCrsW4FCZy7C+29DNBDd3JsJQR1V0oDkk=
+github.com/cocoonstack/cocoon-common v0.3.3/go.mod h1:0REoXSn92vmgCFmWjQ7T/cDCX0nVqMcEDWEeRCbIKEc=
 github.com/creack/pty v1.1.9/go.mod h1:oKZEueFk5CKHvIhNR5MUki03XCEU+Q6VDXinZuGJ33E=
 github.com/davecgh/go-spew v1.1.0/go.mod h1:J7Y8YcW2NihsgmVo/mv3lAwl/skON4iLHjSsI+c5H38=
 github.com/davecgh/go-spew v1.1.1/go.mod h1:J7Y8YcW2NihsgmVo/mv3lAwl/skON4iLHjSsI+c5H38=
