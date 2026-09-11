@@ -66,8 +66,3 @@ func (s *crSink) line(msg string, kvs []any) string {
 	}
 	return b.String()
 }
-
-// The root name stays empty; controller-runtime adds its own via WithName.
-func newCRLogger(ctx context.Context) logr.Logger {
-	return logr.New(&crSink{ctx: ctx})
-}

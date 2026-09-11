@@ -10,6 +10,7 @@ import (
 	"os/signal"
 	"syscall"
 
+	"github.com/go-logr/logr"
 	"github.com/google/go-containerregistry/pkg/authn"
 	"github.com/google/go-containerregistry/pkg/v1/google"
 	"github.com/projecteru2/core/log"
@@ -68,7 +69,7 @@ func main() {
 		fmt.Fprintf(os.Stderr, "setup log: %v\n", err)
 		os.Exit(1)
 	}
-	crlog.SetLogger(newCRLogger(ctx))
+	crlog.SetLogger(logr.New(&crSink{ctx: ctx}))
 	logger := log.WithFunc("main")
 
 	logger.Infof(ctx, "cocoon-operator %s starting (rev=%s built=%s)",
