@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"slices"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -12,6 +13,7 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/client-go/tools/record"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	ctrlfake "sigs.k8s.io/controller-runtime/pkg/client/fake"
 
@@ -495,6 +497,52 @@ func TestReconcileMainLifecycleFailedHonorsSuspend(t *testing.T) {
 	}
 	if !meta.ReadHibernateState(&pod) {
 		t.Error("failed main must receive the hibernate intent; its VM may still be live")
+	}
+}
+
+func TestReconcileSuspendTimesOutAfterTheDeadline(t *testing.T) {
+	scheme := testScheme(t)
+	cs := newCocoonSet("demo", func(cs *cocoonv1.CocoonSet) {
+		cs.Finalizers = []string{finalizerName}
+		cs.Spec.Suspend = true
+		cs.Annotations = map[string]string{annotationSuspendingSince: time.Now().Add(-suspendTimeout - time.Minute).UTC().Format(time.RFC3339)}
+		cs.Status.Phase = cocoonv1.CocoonSetPhaseSuspending
+	})
+	mainPod := mustBuildAgentPod(t, cs, 0, "", "", scheme)
+	mainPod.Status.Phase = corev1.PodRunning
+	mainPod.Annotations[meta.AnnotationLifecycleState] = string(meta.LifecycleStateFailed)
+	cli := ctrlfake.NewClientBuilder().WithScheme(scheme).WithObjects(cs, mainPod).WithStatusSubresource(&cocoonv1.CocoonSet{}).Build()
+	rec := record.NewFakeRecorder(4)
+	r := &Reconciler{Client: cli, Scheme: scheme, Registry: &fakeRegistry{}, Recorder: rec}
+
+	if _, err := r.Reconcile(t.Context(), reqFor(cs)); err != nil {
+		t.Fatalf("Reconcile: %v", err)
+	}
+	var out cocoonv1.CocoonSet
+	if err := cli.Get(t.Context(), types.NamespacedName{Namespace: cs.Namespace, Name: cs.Name}, &out); err != nil {
+		t.Fatalf("get CocoonSet: %v", err)
+	}
+	if out.Status.Phase != cocoonv1.CocoonSetPhaseFailed {
+		t.Fatalf("phase = %q, want Failed after %s in Suspending", out.Status.Phase, suspendTimeout)
+	}
+	select {
+	case ev := <-rec.Events:
+		if !strings.Contains(ev, "SuspendTimedOut") {
+			t.Fatalf("event = %q, want SuspendTimedOut", ev)
+		}
+	default:
+		t.Fatal("a timed-out suspend must raise a SuspendTimedOut event")
+	}
+
+	if _, err := r.Reconcile(t.Context(), reqFor(cs)); err != nil {
+		t.Fatalf("second Reconcile: %v", err)
+	}
+	if err := cli.Get(t.Context(), types.NamespacedName{Namespace: cs.Namespace, Name: cs.Name}, &out); err != nil {
+		t.Fatalf("get CocoonSet: %v", err)
+	}
+	since, err := time.Parse(time.RFC3339, out.Annotations[annotationSuspendingSince])
+	if out.Status.Phase != cocoonv1.CocoonSetPhaseSuspending || err != nil || time.Since(since) > time.Minute {
+		t.Fatalf("phase = %q since = %q (%v), want Suspending again with a fresh deadline", out.Status.Phase, out.Annotations[annotationSuspendingSince], err)
 	}
 }
 

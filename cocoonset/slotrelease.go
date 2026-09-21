@@ -30,6 +30,9 @@ func (r *Reconciler) reconcileSuspendRelease(ctx context.Context, cs *cocoonv1.C
 
 	if !hasLivePod(classified) {
 		// seat already released, suspended before first boot, or only terminal pods left: settle Suspended
+		if err := r.clearSuspendDeadline(ctx, cs); err != nil {
+			return ctrl.Result{}, err
+		}
 		return ctrl.Result{}, r.patchStatus(ctx, cs, buildStatus(cs, classified, cocoonv1.CocoonSetPhaseSuspended))
 	}
 
@@ -41,8 +44,10 @@ func (r *Reconciler) reconcileSuspendRelease(ctx context.Context, cs *cocoonv1.C
 		return ctrl.Result{}, err
 	}
 	if !allHibernated {
-		return ctrl.Result{RequeueAfter: requeueSuspendPoll},
-			r.patchStatus(ctx, cs, buildStatus(cs, classified, cocoonv1.CocoonSetPhaseSuspending))
+		return r.pollSuspend(ctx, cs, classified)
+	}
+	if err := r.clearSuspendDeadline(ctx, cs); err != nil {
+		return ctrl.Result{}, err
 	}
 
 	// stash before the first delete: GC needs the vm names and wake needs the node hint once the pods are gone

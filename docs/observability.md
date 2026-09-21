@@ -9,7 +9,7 @@ Reconciler failures surface as K8s Events on the CR plus Prometheus metrics (cou
 
 | Event reason (CocoonSet) | Type |
 |---|---|
-| `PodLifecycleFailed`, `MainAgentFailed`, `SubAgentDeadLetter`, `WakeNoCapacity`, `MigrateNoCapacity` | Warning |
+| `PodLifecycleFailed`, `MainAgentFailed`, `SubAgentDeadLetter`, `WakeNoCapacity`, `MigrateNoCapacity`, `SuspendTimedOut` | Warning |
 | `SubAgentRebuilding`, `RecoveredFromFailure` | Normal |
 
 `WakeNoCapacity` fires while a `hibernatePolicy: release` wake sits
@@ -18,7 +18,11 @@ reconciler keeps waiting instead of failing the wake, so the event is the
 out-of-capacity signal, not a terminal error. `MigrateNoCapacity` is the same
 signal for a cross-node migration whose restored main cannot be scheduled on
 the target node; the set stays `Migrating` and the event repeats on every
-poll until a seat opens or `spec.nodeName` changes.
+poll until a seat opens or `spec.nodeName` changes. `SuspendTimedOut` fires
+when a `spec.suspend: true` set has sat in `Suspending` for `suspendTimeout`
+(3 min) without every managed VM hibernated and its snapshot in the registry;
+the set reports `Failed`, then re-enters `Suspending` with a fresh deadline on
+the next pass, mirroring `HibernateTimedOut` on the CR path.
 
 Metrics:
 
@@ -42,4 +46,4 @@ elsewhere and cold-pulled from the registry. A rising
 `slot_release_wake_unschedulable_total` means wakes are queuing behind
 cluster capacity, which is the cost side of the policy.
 
-`CocoonSet` consumes the `vm.cocoonstack.io/lifecycle-state=failed` annotation that vk-cocoon writes on terminal failures (hibernate, wake, post-clone, SAC); the rebuild and triage path treats it as terminal on every owned pod role (main, sub-agent, toolbox) so reconciliation reacts immediately instead of waiting for `Pod.Status.Phase` to follow; the suspend gate and the slot-release drain wait for `Pod.Status.Phase` alone. A drifted pod (main, sub-agent or toolbox) or a terminal sub-agent or toolbox is deleted for recreate up to four times with `0/1/5/30 s` backoff between attempts, then marked `cocoonset.cocoonstack.io/dead-letter=<CocoonSet generation>` and left in place, so a slot that cannot converge (a terminal image, or a pod an external defaulter such as a LimitRange keeps rewriting) stops churning VMs. While any owned pod is parked at the current generation the CocoonSet's `Progressing` condition reads `False` with reason `DeadLettered` and names the pods, so the set never looks converged with a pod still on the old spec. Dead-lettering also blocks recreation of a missing slot at that generation: a missing main reports `Phase=Failed`, and a missing sub-agent or toolbox is simply skipped, until a spec edit lifts the budget. A terminal main that still matches its spec is not rebuilt: the CocoonSet reports `Failed` until the main is edited or recovers. A spec edit lifts the dead-letter: at a newer generation the pod is rebuilt with a fresh budget. Rebuild counts persist in the `cocoonset.cocoonstack.io/rebuild-history` annotation on the CocoonSet, keyed by pod name, so they survive the pod delete; entries for pods the spec no longer names are garbage-collected on every write.
+`CocoonSet` consumes the `vm.cocoonstack.io/lifecycle-state=failed` annotation that vk-cocoon writes on terminal failures (hibernate, wake, post-clone, SAC); the rebuild and triage path treats it as terminal on every owned pod role (main, sub-agent, toolbox) so reconciliation reacts immediately instead of waiting for `Pod.Status.Phase` to follow; the suspend gate and the slot-release drain wait for `Pod.Status.Phase` alone, bounded by `suspendTimeout` (see [CocoonSet reconcile loop](cocoonset.md) step 6). A drifted pod (main, sub-agent or toolbox) or a terminal sub-agent or toolbox is deleted for recreate up to four times with `0/1/5/30 s` backoff between attempts, then marked `cocoonset.cocoonstack.io/dead-letter=<CocoonSet generation>` and left in place, so a slot that cannot converge (a terminal image, or a pod an external defaulter such as a LimitRange keeps rewriting) stops churning VMs. While any owned pod is parked at the current generation the CocoonSet's `Progressing` condition reads `False` with reason `DeadLettered` and names the pods, so the set never looks converged with a pod still on the old spec. Dead-lettering also blocks recreation of a missing slot at that generation: a missing main reports `Phase=Failed`, and a missing sub-agent or toolbox is simply skipped, until a spec edit lifts the budget. A terminal main that still matches its spec is not rebuilt: the CocoonSet reports `Failed` until the main is edited or recovers. A spec edit lifts the dead-letter: at a newer generation the pod is rebuilt with a fresh budget. Rebuild counts persist in the `cocoonset.cocoonstack.io/rebuild-history` annotation on the CocoonSet, keyed by pod name, so they survive the pod delete; entries for pods the spec no longer names are garbage-collected on every write.
