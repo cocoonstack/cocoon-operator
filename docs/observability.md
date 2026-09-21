@@ -16,9 +16,12 @@ Reconciler failures surface as K8s Events on the CR plus Prometheus metrics (cou
 Unschedulable: the seat the policy freed is not available again yet. The
 reconciler keeps waiting instead of failing the wake, so the event is the
 out-of-capacity signal, not a terminal error. `MigrateNoCapacity` is the same
-signal for a cross-node migration whose restored main cannot be scheduled on
-the target node; the set stays `Migrating` and the event repeats on every
-poll until a seat opens or `spec.nodeName` changes. `SuspendTimedOut` fires
+signal for a cross-node migration whose restored main cannot be scheduled; the
+set stays `Migrating` and the event repeats on every poll until a seat opens
+on the node the pending pod is pinned to. The pin is the `spec.nodeName` the
+pod was recreated with: changing `spec.nodeName` again while the pod is still
+Pending does not re-pin it, so the scheduler message in the event, not the
+current spec, names the node being waited on. `SuspendTimedOut` fires
 when a `spec.suspend: true` set has sat in `Suspending` for `suspendTimeout`
 (3 min) without every managed VM hibernated and its snapshot in the registry;
 the set reports `Failed`, then re-enters `Suspending` with a fresh deadline on

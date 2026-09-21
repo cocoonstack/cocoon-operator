@@ -126,7 +126,7 @@ func (r *Reconciler) advanceMigration(ctx context.Context, cs *cocoonv1.CocoonSe
 		}
 		if msg := podUnschedulable(main); msg != "" {
 			metrics.MigrateUnschedulableTotal.WithLabelValues(cs.Namespace, cs.Name).Inc()
-			commonk8s.Eventf(r.Recorder, cs, corev1.EventTypeWarning, "MigrateNoCapacity", "main pod %s unschedulable on %s: %s", main.Name, cmp.Or(desired, "any node"), msg)
+			commonk8s.Eventf(r.Recorder, cs, corev1.EventTypeWarning, "MigrateNoCapacity", "main pod %s unschedulable: %s", main.Name, msg)
 		}
 		return r.markMigrating(ctx, cs, classified)
 

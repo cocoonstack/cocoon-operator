@@ -369,8 +369,8 @@ func TestMigrationReportsAnUnschedulableTarget(t *testing.T) {
 	}
 	select {
 	case ev := <-rec.Events:
-		if !strings.Contains(ev, "MigrateNoCapacity") || !strings.Contains(ev, "Insufficient memory") {
-			t.Fatalf("event = %q, want MigrateNoCapacity carrying the scheduler message", ev)
+		if !strings.Contains(ev, "MigrateNoCapacity") || !strings.Contains(ev, "Insufficient memory") || strings.Contains(ev, "node-b") {
+			t.Fatalf("event = %q, want MigrateNoCapacity carrying the scheduler message and naming no target node", ev)
 		}
 	default:
 		t.Fatal("an unschedulable migration target must raise a MigrateNoCapacity event")
