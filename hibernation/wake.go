@@ -26,7 +26,7 @@ func (r *Reconciler) reconcileWake(ctx context.Context, hib *cocoonv1.CocoonHibe
 		}
 	}
 
-	if vmClonedAndRunning(pod) {
+	if meta.VMLive(pod) {
 		// non-fatal to the wake but logged at error: a persistent failure silently leaks every hibernate snapshot
 		if err := r.Registry.DeleteManifest(ctx, vmName, meta.HibernateSnapshotTag); err != nil {
 			logger.Errorf(ctx, err, "delete hibernation snapshot %s", vmName)
@@ -49,6 +49,3 @@ func (r *Reconciler) reconcileWake(ctx context.Context, hib *cocoonv1.CocoonHibe
 }
 
 // vmClonedAndRunning gates on the VMID too: containerStatuses can show Running before the clone succeeds.
-func vmClonedAndRunning(pod *corev1.Pod) bool {
-	return meta.IsContainerRunning(pod) && meta.ParseVMRuntime(pod).VMID != ""
-}

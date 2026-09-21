@@ -100,7 +100,7 @@ func (r *Reconciler) reconcileWake(ctx context.Context, cs *cocoonv1.CocoonSet, 
 	case main == nil:
 		return r.startReleasedWake(ctx, cs, classified)
 
-	case waking && !vmLive(main):
+	case waking && !meta.VMLive(main):
 		// unschedulable is the out-of-stock signal: surface it but keep waiting for a seat
 		if msg := podUnschedulable(main); msg != "" {
 			metrics.SlotReleaseWakeUnschedulableTotal.WithLabelValues(cs.Namespace, cs.Name).Inc()
@@ -109,7 +109,7 @@ func (r *Reconciler) reconcileWake(ctx context.Context, cs *cocoonv1.CocoonSet, 
 		return true, ctrl.Result{RequeueAfter: requeueSuspendPoll},
 			r.patchStatus(ctx, cs, buildStatus(cs, classified, cocoonv1.CocoonSetPhaseWaking))
 
-	case waking && vmLive(main):
+	case waking && meta.VMLive(main):
 		vmName := meta.ParseVMSpec(main).VMName
 		if err := r.Registry.DeleteManifest(ctx, vmName, meta.HibernateSnapshotTag); err != nil {
 			return true, ctrl.Result{}, fmt.Errorf("wake: drop hibernate snapshot %s: %w", vmName, err)

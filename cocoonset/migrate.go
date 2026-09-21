@@ -6,7 +6,6 @@ import (
 	"fmt"
 
 	"github.com/projecteru2/core/log"
-	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	ctrl "sigs.k8s.io/controller-runtime"
 
@@ -117,7 +116,7 @@ func (r *Reconciler) advanceMigration(ctx context.Context, cs *cocoonv1.CocoonSe
 		}
 		return r.markMigrating(ctx, cs, classified)
 
-	case !vmLive(main):
+	case !meta.VMLive(main):
 		// without the durable Migrating phase this is a CR wake mid-flight, not a migration: disengage
 		if cs.Status.Phase != cocoonv1.CocoonSetPhaseMigrating {
 			return false, ctrl.Result{}, nil
@@ -142,6 +141,3 @@ func (r *Reconciler) markMigrating(ctx context.Context, cs *cocoonv1.CocoonSet, 
 }
 
 // vmLive needs both checks: containerStatuses can report Running before vk pulls the snapshot.
-func vmLive(pod *corev1.Pod) bool {
-	return meta.ParseVMRuntime(pod).VMID != "" && meta.IsContainerRunning(pod)
-}
