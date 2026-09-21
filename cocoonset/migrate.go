@@ -11,7 +11,9 @@ import (
 	ctrl "sigs.k8s.io/controller-runtime"
 
 	cocoonv1 "github.com/cocoonstack/cocoon-common/apis/v1"
+	commonk8s "github.com/cocoonstack/cocoon-common/k8s"
 	"github.com/cocoonstack/cocoon-common/meta"
+	"github.com/cocoonstack/cocoon-operator/metrics"
 	"github.com/cocoonstack/cocoon-operator/podpatch"
 	"github.com/cocoonstack/cocoon-operator/snapshot"
 )
@@ -117,10 +119,14 @@ func (r *Reconciler) advanceMigration(ctx context.Context, cs *cocoonv1.CocoonSe
 		}
 		return r.markMigrating(ctx, cs, classified)
 
-	case !vmLive(main):
+	case !meta.VMLive(main):
 		// without the durable Migrating phase this is a CR wake mid-flight, not a migration: disengage
 		if cs.Status.Phase != cocoonv1.CocoonSetPhaseMigrating {
 			return false, ctrl.Result{}, nil
+		}
+		if msg := podUnschedulable(main); msg != "" {
+			metrics.MigrateUnschedulableTotal.WithLabelValues(cs.Namespace, cs.Name).Inc()
+			commonk8s.Eventf(r.Recorder, cs, corev1.EventTypeWarning, "MigrateNoCapacity", "main pod %s unschedulable: %s", main.Name, msg)
 		}
 		return r.markMigrating(ctx, cs, classified)
 
@@ -139,9 +145,4 @@ func (r *Reconciler) markMigrating(ctx context.Context, cs *cocoonv1.CocoonSet, 
 		return true, ctrl.Result{}, fmt.Errorf("migrate: patch migrating status %s/%s: %w", cs.Namespace, cs.Name, err)
 	}
 	return true, ctrl.Result{RequeueAfter: requeueMigratePoll}, nil
-}
-
-// vmLive needs both checks: containerStatuses can report Running before vk pulls the snapshot.
-func vmLive(pod *corev1.Pod) bool {
-	return meta.ParseVMRuntime(pod).VMID != "" && meta.IsContainerRunning(pod)
 }

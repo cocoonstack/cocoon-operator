@@ -275,7 +275,6 @@ func (r *Reconciler) announceRetryFromFailed(hib *cocoonv1.CocoonHibernation, de
 	commonk8s.Eventf(r.Recorder, hib, corev1.EventTypeNormal, "RetryRequested", "retrying %s after prior failure", desire)
 }
 
-// A subsequent reconcile can recover by overwriting it.
 func (r *Reconciler) markFailed(ctx context.Context, hib *cocoonv1.CocoonHibernation, msg string) error {
 	return r.patchNotReady(ctx, hib, cocoonv1.CocoonHibernationPhaseFailed, conditionReasonFailed, msg)
 }

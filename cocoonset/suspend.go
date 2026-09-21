@@ -5,14 +5,22 @@ import (
 	"fmt"
 	"maps"
 	"slices"
+	"time"
 
 	corev1 "k8s.io/api/core/v1"
 	ctrl "sigs.k8s.io/controller-runtime"
 
 	cocoonv1 "github.com/cocoonstack/cocoon-common/apis/v1"
+	commonk8s "github.com/cocoonstack/cocoon-common/k8s"
 	"github.com/cocoonstack/cocoon-common/meta"
 	"github.com/cocoonstack/cocoon-operator/podpatch"
 	"github.com/cocoonstack/cocoon-operator/snapshot"
+)
+
+const (
+	annotationSuspendingSince = "cocoonset.cocoonstack.io/suspending-since"
+
+	suspendTimeout = 3 * time.Minute
 )
 
 // reconcileSuspend polls the registry and stays Suspending until every managed VM's snapshot lands.
@@ -27,16 +35,50 @@ func (r *Reconciler) reconcileSuspend(ctx context.Context, cs *cocoonv1.CocoonSe
 		return ctrl.Result{}, err
 	}
 	allHibernated, err := r.allOwnedPodsHibernated(ctx, cs, classified)
+	if err != nil || !allHibernated {
+		return r.pollSuspend(ctx, cs, classified, err)
+	}
+	if err := r.clearSuspendDeadline(ctx, cs); err != nil {
+		return ctrl.Result{}, err
+	}
+	return ctrl.Result{}, r.patchStatus(ctx, cs, buildStatus(cs, classified, cocoonv1.CocoonSetPhaseSuspended))
+}
+
+func (r *Reconciler) pollSuspend(ctx context.Context, cs *cocoonv1.CocoonSet, classified classifiedPods, probeErr error) (ctrl.Result, error) {
+	exceeded, err := r.suspendDeadlineExceeded(ctx, cs)
 	if err != nil {
 		return ctrl.Result{}, err
 	}
-	phase := cocoonv1.CocoonSetPhaseSuspending
-	result := ctrl.Result{RequeueAfter: requeueSuspendPoll}
-	if allHibernated {
-		phase = cocoonv1.CocoonSetPhaseSuspended
-		result = ctrl.Result{}
+	if !exceeded {
+		if err := r.patchStatus(ctx, cs, buildStatus(cs, classified, cocoonv1.CocoonSetPhaseSuspending)); err != nil {
+			return ctrl.Result{}, err
+		}
+		if probeErr != nil {
+			return ctrl.Result{}, probeErr
+		}
+		return ctrl.Result{RequeueAfter: requeueSuspendPoll}, nil
 	}
-	return result, r.patchStatus(ctx, cs, buildStatus(cs, classified, phase))
+	msg := fmt.Sprintf("not every managed VM was hibernated with its snapshot in the registry within %s", suspendTimeout)
+	if probeErr != nil {
+		msg += ": " + probeErr.Error()
+	}
+	commonk8s.Eventf(r.Recorder, cs, corev1.EventTypeWarning, "SuspendTimedOut", "%s", msg)
+	return ctrl.Result{RequeueAfter: requeueSuspendPoll}, r.patchStatus(ctx, cs, buildStatus(cs, classified, cocoonv1.CocoonSetPhaseFailed))
+}
+
+func (r *Reconciler) suspendDeadlineExceeded(ctx context.Context, cs *cocoonv1.CocoonSet) (bool, error) {
+	since, err := time.Parse(time.RFC3339, cs.Annotations[annotationSuspendingSince])
+	if cs.Status.Phase != cocoonv1.CocoonSetPhaseSuspending || err != nil {
+		return false, r.patchAnnotation(ctx, cs, annotationSuspendingSince, time.Now().UTC().Format(time.RFC3339))
+	}
+	return time.Since(since) > suspendTimeout, nil
+}
+
+func (r *Reconciler) clearSuspendDeadline(ctx context.Context, cs *cocoonv1.CocoonSet) error {
+	if _, ok := cs.Annotations[annotationSuspendingSince]; !ok {
+		return nil
+	}
+	return r.patchAnnotation(ctx, cs, annotationSuspendingSince, "")
 }
 
 // allOwnedPodsHibernated returns (false, nil), not an error, while the expected state is not yet observed.

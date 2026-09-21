@@ -30,6 +30,9 @@ func (r *Reconciler) reconcileSuspendRelease(ctx context.Context, cs *cocoonv1.C
 
 	if !hasLivePod(classified) {
 		// seat already released, suspended before first boot, or only terminal pods left: settle Suspended
+		if err := r.clearSuspendDeadline(ctx, cs); err != nil {
+			return ctrl.Result{}, err
+		}
 		return ctrl.Result{}, r.patchStatus(ctx, cs, buildStatus(cs, classified, cocoonv1.CocoonSetPhaseSuspended))
 	}
 
@@ -37,12 +40,11 @@ func (r *Reconciler) reconcileSuspendRelease(ctx context.Context, cs *cocoonv1.C
 		return ctrl.Result{}, err
 	}
 	allHibernated, err := r.allOwnedPodsHibernated(ctx, cs, classified)
-	if err != nil {
-		return ctrl.Result{}, err
+	if err != nil || !allHibernated {
+		return r.pollSuspend(ctx, cs, classified, err)
 	}
-	if !allHibernated {
-		return ctrl.Result{RequeueAfter: requeueSuspendPoll},
-			r.patchStatus(ctx, cs, buildStatus(cs, classified, cocoonv1.CocoonSetPhaseSuspending))
+	if err := r.clearSuspendDeadline(ctx, cs); err != nil {
+		return ctrl.Result{}, err
 	}
 
 	// stash before the first delete: GC needs the vm names and wake needs the node hint once the pods are gone
@@ -100,7 +102,7 @@ func (r *Reconciler) reconcileWake(ctx context.Context, cs *cocoonv1.CocoonSet, 
 	case main == nil:
 		return r.startReleasedWake(ctx, cs, classified)
 
-	case waking && !vmLive(main):
+	case waking && !meta.VMLive(main):
 		// unschedulable is the out-of-stock signal: surface it but keep waiting for a seat
 		if msg := podUnschedulable(main); msg != "" {
 			metrics.SlotReleaseWakeUnschedulableTotal.WithLabelValues(cs.Namespace, cs.Name).Inc()
@@ -109,7 +111,7 @@ func (r *Reconciler) reconcileWake(ctx context.Context, cs *cocoonv1.CocoonSet, 
 		return true, ctrl.Result{RequeueAfter: requeueSuspendPoll},
 			r.patchStatus(ctx, cs, buildStatus(cs, classified, cocoonv1.CocoonSetPhaseWaking))
 
-	case waking && vmLive(main):
+	case waking && meta.VMLive(main):
 		vmName := meta.ParseVMSpec(main).VMName
 		if err := r.Registry.DeleteManifest(ctx, vmName, meta.HibernateSnapshotTag); err != nil {
 			return true, ctrl.Result{}, fmt.Errorf("wake: drop hibernate snapshot %s: %w", vmName, err)

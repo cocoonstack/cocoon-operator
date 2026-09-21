@@ -1,6 +1,7 @@
 package podpatch
 
 import (
+	"context"
 	"testing"
 
 	corev1 "k8s.io/api/core/v1"
@@ -9,25 +10,14 @@ import (
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	ctrlfake "sigs.k8s.io/controller-runtime/pkg/client/fake"
+	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 
 	"github.com/cocoonstack/cocoon-common/meta"
 )
 
-func TestHibernateStateShortCircuitsNoOp(t *testing.T) {
-	pod := &corev1.Pod{
-		ObjectMeta: metav1.ObjectMeta{Name: "demo", Namespace: "ns"},
-	}
-	meta.HibernateState(true).Apply(pod)
-	cli := newFakeClient(t, pod.DeepCopy())
-
-	if err := HibernateState(t.Context(), cli, pod, true); err != nil {
-		t.Fatalf("no-op HibernateState must not reach the client: %v", err)
-	}
-}
-
 func TestHibernateStateSetsAnnotation(t *testing.T) {
 	pod := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "demo", Namespace: "ns"}}
-	cli := newFakeClient(t, pod.DeepCopy())
+	cli := newFakeClientBuilder(t).WithObjects(pod.DeepCopy()).Build()
 
 	if err := HibernateState(t.Context(), cli, pod, true); err != nil {
 		t.Fatalf("HibernateState: %v", err)
@@ -45,7 +35,7 @@ func TestHibernateStateSetsAnnotation(t *testing.T) {
 func TestHibernateStateClearsAnnotation(t *testing.T) {
 	pod := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "demo", Namespace: "ns"}}
 	meta.HibernateState(true).Apply(pod)
-	cli := newFakeClient(t, pod.DeepCopy())
+	cli := newFakeClientBuilder(t).WithObjects(pod.DeepCopy()).Build()
 
 	if err := HibernateState(t.Context(), cli, pod, false); err != nil {
 		t.Fatalf("HibernateState(false): %v", err)
@@ -62,7 +52,7 @@ func TestHibernateStateClearsAnnotation(t *testing.T) {
 
 func TestCocoonSetGenerationWritesValue(t *testing.T) {
 	pod := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "demo", Namespace: "ns"}}
-	cli := newFakeClient(t, pod.DeepCopy())
+	cli := newFakeClientBuilder(t).WithObjects(pod.DeepCopy()).Build()
 
 	if err := CocoonSetGeneration(t.Context(), cli, pod, 42); err != nil {
 		t.Fatalf("PatchCocoonSetGeneration: %v", err)
@@ -77,21 +67,9 @@ func TestCocoonSetGenerationWritesValue(t *testing.T) {
 	}
 }
 
-func TestCocoonSetGenerationShortCircuitsNoOp(t *testing.T) {
-	pod := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{
-		Name: "demo", Namespace: "ns",
-		Annotations: map[string]string{meta.AnnotationCocoonSetGeneration: "7"},
-	}}
-	cli := newFakeClient(t, pod.DeepCopy())
-
-	if err := CocoonSetGeneration(t.Context(), cli, pod, 7); err != nil {
-		t.Fatalf("no-op PatchCocoonSetGeneration must not reach the client: %v", err)
-	}
-}
-
-func TestKeepSnapshotOnDeletePersistsAndShortCircuits(t *testing.T) {
+func TestKeepSnapshotOnDeletePersists(t *testing.T) {
 	pod := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "demo", Namespace: "ns"}}
-	cli := newFakeClient(t, pod.DeepCopy())
+	cli := newFakeClientBuilder(t).WithObjects(pod.DeepCopy()).Build()
 
 	if err := KeepSnapshotOnDelete(t.Context(), cli, pod); err != nil {
 		t.Fatalf("PatchKeepSnapshotOnDelete: %v", err)
@@ -103,16 +81,46 @@ func TestKeepSnapshotOnDeletePersistsAndShortCircuits(t *testing.T) {
 	if !meta.ReadKeepSnapshotOnDelete(&got) {
 		t.Errorf("flag must reach the API server before the delete lands: %v", got.Annotations)
 	}
-	if err := KeepSnapshotOnDelete(t.Context(), cli, &got); err != nil {
-		t.Fatalf("re-flagging an already-flagged pod must not reach the client: %v", err)
+}
+
+func TestDesiredStateSkipsTheClient(t *testing.T) {
+	pod := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{
+		Name: "demo", Namespace: "ns",
+		Annotations: map[string]string{meta.AnnotationCocoonSetGeneration: "7"},
+	}}
+	meta.HibernateState(true).Apply(pod)
+	meta.MarkKeepSnapshotOnDelete(pod)
+	clean := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "clean", Namespace: "ns"}}
+	patches := 0
+	cli := newFakeClientBuilder(t).WithObjects(pod.DeepCopy(), clean.DeepCopy()).WithInterceptorFuncs(interceptor.Funcs{
+		Patch: func(ctx context.Context, c client.WithWatch, obj client.Object, patch client.Patch, opts ...client.PatchOption) error {
+			patches++
+			return c.Patch(ctx, obj, patch, opts...)
+		},
+	}).Build()
+
+	if err := HibernateState(t.Context(), cli, pod, true); err != nil {
+		t.Fatalf("HibernateState: %v", err)
+	}
+	if err := KeepSnapshotOnDelete(t.Context(), cli, pod); err != nil {
+		t.Fatalf("KeepSnapshotOnDelete: %v", err)
+	}
+	if err := CocoonSetGeneration(t.Context(), cli, pod, 7); err != nil {
+		t.Fatalf("CocoonSetGeneration: %v", err)
+	}
+	if err := HibernateState(t.Context(), cli, clean, false); err != nil {
+		t.Fatalf("HibernateState(false) on a clean pod: %v", err)
+	}
+	if patches != 0 {
+		t.Errorf("no-op patches reached the client: %d", patches)
 	}
 }
 
-func newFakeClient(t *testing.T, objs ...client.Object) client.Client {
+func newFakeClientBuilder(t *testing.T) *ctrlfake.ClientBuilder {
 	t.Helper()
 	scheme := runtime.NewScheme()
 	if err := clientgoscheme.AddToScheme(scheme); err != nil {
 		t.Fatalf("add client-go scheme: %v", err)
 	}
-	return ctrlfake.NewClientBuilder().WithScheme(scheme).WithObjects(objs...).Build()
+	return ctrlfake.NewClientBuilder().WithScheme(scheme)
 }

@@ -93,6 +93,16 @@ var (
 		},
 		[]string{labelNamespace, labelCocoonSet},
 	)
+
+	MigrateUnschedulableTotal = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Namespace: metricNamespace,
+			Subsystem: metricSubsystem,
+			Name:      "migrate_unschedulable_total",
+			Help:      "Number of reconcile passes that observed a migrating main pod Unschedulable on its target node (out of capacity).",
+		},
+		[]string{labelNamespace, labelCocoonSet},
+	)
 )
 
 // Register installs all operator collectors into reg so they surface on the /metrics endpoint.
@@ -106,5 +116,6 @@ func Register(reg prometheus.Registerer) {
 		SlotReleasePodsDeletedTotal,
 		SlotReleaseWakeTotal,
 		SlotReleaseWakeUnschedulableTotal,
+		MigrateUnschedulableTotal,
 	)
 }
