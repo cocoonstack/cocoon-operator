@@ -139,5 +139,3 @@ func (r *Reconciler) markMigrating(ctx context.Context, cs *cocoonv1.CocoonSet, 
 	}
 	return true, ctrl.Result{RequeueAfter: requeueMigratePoll}, nil
 }
-
-// vmLive needs both checks: containerStatuses can report Running before vk pulls the snapshot.

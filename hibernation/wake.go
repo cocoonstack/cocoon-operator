@@ -47,5 +47,3 @@ func (r *Reconciler) reconcileWake(ctx context.Context, hib *cocoonv1.CocoonHibe
 	}
 	return ctrl.Result{RequeueAfter: requeueInterval}, nil
 }
-
-// vmClonedAndRunning gates on the VMID too: containerStatuses can show Running before the clone succeeds.
