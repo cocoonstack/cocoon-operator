@@ -26,6 +26,9 @@ func (r *Reconciler) reconcileHibernate(ctx context.Context, hib *cocoonv1.Cocoo
 		present, err := snapshot.HasHibernateSnapshot(ctx, r.Registry, vmName)
 		// a persistently failing probe must still hit the deadline below, or the phase starves in Hibernating
 		if err != nil && !phaseDeadlineExceeded(hib, cocoonv1.CocoonHibernationPhaseHibernating, hibernateTimeout) {
+			if updateErr := r.setPhase(ctx, hib, cocoonv1.CocoonHibernationPhaseHibernating, vmName); updateErr != nil {
+				return ctrl.Result{}, updateErr
+			}
 			return ctrl.Result{}, err
 		}
 		if err == nil && present {
