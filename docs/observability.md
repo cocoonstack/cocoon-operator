@@ -20,8 +20,10 @@ signal for a cross-node migration whose restored main cannot be scheduled; the
 set stays `Migrating` and the event repeats on every poll until a seat opens
 on the node the pending pod is pinned to. The pin is the `spec.nodeName` the
 pod was recreated with: changing `spec.nodeName` again while the pod is still
-Pending does not re-pin it, so the scheduler message in the event, not the
-current spec, names the node being waited on. `SuspendTimedOut` fires
+Pending does not re-pin it, and the scheduler message usually aggregates
+reasons without naming nodes, so read the node being waited on from the
+pending pod's required node affinity (`kubectl get pod <main> -o
+jsonpath='{.spec.affinity.nodeAffinity}'`), not from the current spec. `SuspendTimedOut` fires
 when a `spec.suspend: true` set has sat in `Suspending` for `suspendTimeout`
 (3 min) without every managed VM hibernated and its snapshot in the registry;
 the set reports `Failed`, then re-enters `Suspending` with a fresh deadline on
