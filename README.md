@@ -61,7 +61,7 @@ The Makefile detects Go workspace mode (`go env GOWORK`) and skips `go mod tidy`
 | Project | Role |
 |---|---|
 | [cocoon-common](https://github.com/cocoonstack/cocoon-common) | CRD types, annotation contract, shared helpers, and the OCI registry client |
-| [cocoon-webhook](https://github.com/cocoonstack/cocoon-webhook) | Admission webhook for sticky scheduling and CocoonSet validation |
+| [cocoon-webhook](https://github.com/cocoonstack/cocoon-webhook) | Admission webhook for cocoon pod ownership, scale-down protection, and CocoonSet/CocoonHibernation validation |
 | [vk-cocoon](https://github.com/cocoonstack/vk-cocoon) | Virtual kubelet provider managing VM lifecycle |
 
 ## License
