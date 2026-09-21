@@ -117,18 +117,14 @@ func (r *Reconciler) patchRebuildHistory(ctx context.Context, cs *cocoonv1.Cocoo
 	if err != nil {
 		return fmt.Errorf("encode rebuild history: %w", err)
 	}
-	csCopy := cs.DeepCopy()
-	if csCopy.Annotations == nil {
-		csCopy.Annotations = map[string]string{}
-	}
-	csCopy.Annotations[annotationRebuildHistory] = enc
-	if err := r.Patch(ctx, csCopy, client.MergeFrom(cs)); err != nil {
+	if err := commonk8s.Patch(ctx, r.Client, cs, func(c *cocoonv1.CocoonSet) {
+		if c.Annotations == nil {
+			c.Annotations = map[string]string{}
+		}
+		c.Annotations[annotationRebuildHistory] = enc
+	}); err != nil {
 		return fmt.Errorf("patch rebuild history: %w", err)
 	}
-	if cs.Annotations == nil {
-		cs.Annotations = map[string]string{}
-	}
-	cs.Annotations[annotationRebuildHistory] = enc
 	return nil
 }
 

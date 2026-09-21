@@ -22,7 +22,6 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
-	"sigs.k8s.io/controller-runtime/pkg/event"
 	"sigs.k8s.io/controller-runtime/pkg/handler"
 	"sigs.k8s.io/controller-runtime/pkg/predicate"
 
@@ -304,16 +303,7 @@ func (r *Reconciler) patchNotReady(ctx context.Context, hib *cocoonv1.CocoonHibe
 }
 
 // podWatchPredicate admits creation, deletion, and annotation changes; status churn is left to the requeue poll.
-func podWatchPredicate() predicate.Predicate {
-	return predicate.Or(
-		predicate.AnnotationChangedPredicate{},
-		predicate.Funcs{
-			CreateFunc: func(event.CreateEvent) bool { return true },
-			DeleteFunc: func(event.DeleteEvent) bool { return true },
-			UpdateFunc: func(event.UpdateEvent) bool { return false },
-		},
-	)
-}
+func podWatchPredicate() predicate.Predicate { return predicate.AnnotationChangedPredicate{} }
 
 // hasPhaseDeadline marks phases whose deadline resets on re-entry so a retry does not inherit the old clock.
 func hasPhaseDeadline(p cocoonv1.CocoonHibernationPhase) bool {
