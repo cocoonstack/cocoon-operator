@@ -50,10 +50,13 @@ func (r *Reconciler) pollSuspend(ctx context.Context, cs *cocoonv1.CocoonSet, cl
 		return ctrl.Result{}, err
 	}
 	if !exceeded {
+		if err := r.patchStatus(ctx, cs, buildStatus(cs, classified, cocoonv1.CocoonSetPhaseSuspending)); err != nil {
+			return ctrl.Result{}, err
+		}
 		if probeErr != nil {
 			return ctrl.Result{}, probeErr
 		}
-		return ctrl.Result{RequeueAfter: requeueSuspendPoll}, r.patchStatus(ctx, cs, buildStatus(cs, classified, cocoonv1.CocoonSetPhaseSuspending))
+		return ctrl.Result{RequeueAfter: requeueSuspendPoll}, nil
 	}
 	msg := fmt.Sprintf("not every managed VM was hibernated with its snapshot in the registry within %s", suspendTimeout)
 	if probeErr != nil {

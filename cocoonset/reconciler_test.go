@@ -578,6 +578,31 @@ func TestReconcileSuspendTimesOutWhenTheRegistryProbeKeepsFailing(t *testing.T) 
 	default:
 		t.Fatal("a timed-out suspend must raise a SuspendTimedOut event even while the registry probe fails")
 	}
+
+	if _, err := r.Reconcile(t.Context(), reqFor(cs)); err == nil {
+		t.Fatal("inside a fresh deadline the probe error must still be returned")
+	}
+	if err := cli.Get(t.Context(), types.NamespacedName{Namespace: cs.Namespace, Name: cs.Name}, &out); err != nil {
+		t.Fatalf("get CocoonSet: %v", err)
+	}
+	if out.Status.Phase != cocoonv1.CocoonSetPhaseSuspending {
+		t.Fatalf("phase = %q after the retry, want Suspending so the next deadline can fire", out.Status.Phase)
+	}
+	out.Annotations[annotationSuspendingSince] = time.Now().Add(-suspendTimeout - time.Minute).UTC().Format(time.RFC3339)
+	if err := cli.Update(t.Context(), &out); err != nil {
+		t.Fatalf("age the deadline: %v", err)
+	}
+	if _, err := r.Reconcile(t.Context(), reqFor(cs)); err != nil {
+		t.Fatalf("second expiry: %v", err)
+	}
+	select {
+	case ev := <-rec.Events:
+		if !strings.Contains(ev, "SuspendTimedOut") {
+			t.Fatalf("event = %q, want a second SuspendTimedOut", ev)
+		}
+	default:
+		t.Fatal("the timeout must fire again once the retried deadline expires")
+	}
 }
 
 func TestReconcileMainLifecycleFailedWithDriftRecreatesPod(t *testing.T) {
