@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"maps"
 	"slices"
+	"strconv"
+	"strings"
 
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/equality"
@@ -20,10 +22,11 @@ import (
 const (
 	conditionTypeProgressing = "Progressing"
 
-	conditionReasonAllReady    = "AllAgentsReady"
-	conditionReasonNotReady    = "AgentsNotReady"
-	conditionReasonStable      = "Stable"
-	conditionReasonReconciling = "Reconciling"
+	conditionReasonAllReady     = "AllAgentsReady"
+	conditionReasonNotReady     = "AgentsNotReady"
+	conditionReasonStable       = "Stable"
+	conditionReasonReconciling  = "Reconciling"
+	conditionReasonDeadLettered = "DeadLettered"
 )
 
 // patchStatus writes status via the /status subresource, skipping no-op updates.
@@ -94,8 +97,19 @@ func buildStatus(cs *cocoonv1.CocoonSet, classified classifiedPods, phase cocoon
 		DesiredToolboxes:   tbDesired,
 		Agents:             agents,
 		Toolboxes:          tbStatuses,
-		Conditions:         buildConditions(cs, ready, desired, tbReady, tbDesired, phase),
+		Conditions:         buildConditions(cs, ready, desired, tbReady, tbDesired, phase, deadLetteredPods(cs, classified)),
 	}
+}
+
+func deadLetteredPods(cs *cocoonv1.CocoonSet, classified classifiedPods) []string {
+	generation := strconv.FormatInt(cs.Generation, 10)
+	var parked []string
+	for _, name := range slices.Sorted(maps.Keys(classified.allByName)) {
+		if classified.allByName[name].Annotations[annotationDeadLetter] == generation {
+			parked = append(parked, name)
+		}
+	}
+	return parked
 }
 
 func derivePhase(main *corev1.Pod, ready, desired, tbReady, tbDesired int32) cocoonv1.CocoonSetPhase {
@@ -140,7 +154,7 @@ func toolboxStatusFromPod(pod *corev1.Pod, name string) cocoonv1.ToolboxStatus {
 }
 
 // buildConditions leaves timestamps zero so mergeConditions preserves LastTransitionTime.
-func buildConditions(cs *cocoonv1.CocoonSet, ready, desired, tbReady, tbDesired int32, phase cocoonv1.CocoonSetPhase) []metav1.Condition {
+func buildConditions(cs *cocoonv1.CocoonSet, ready, desired, tbReady, tbDesired int32, phase cocoonv1.CocoonSetPhase, parked []string) []metav1.Condition {
 	readyStatus := metav1.ConditionFalse
 	readyReason := conditionReasonNotReady
 	if ready == desired && desired > 0 && tbReady == tbDesired {
@@ -164,6 +178,11 @@ func buildConditions(cs *cocoonv1.CocoonSet, ready, desired, tbReady, tbDesired 
 	if phase == cocoonv1.CocoonSetPhasePending || phase == cocoonv1.CocoonSetPhaseScaling {
 		progressing.Status = metav1.ConditionTrue
 		progressing.Reason = conditionReasonReconciling
+	}
+	if len(parked) > 0 {
+		progressing.Status = metav1.ConditionFalse
+		progressing.Reason = conditionReasonDeadLettered
+		progressing.Message = fmt.Sprintf("%s; dead-lettered at generation %d: %s", phase, cs.Generation, strings.Join(parked, ", "))
 	}
 
 	return []metav1.Condition{readyCond, progressing}

@@ -1,6 +1,7 @@
 package cocoonset
 
 import (
+	"strings"
 	"testing"
 
 	corev1 "k8s.io/api/core/v1"
@@ -80,6 +81,36 @@ func TestBuildStatusReportsAgents(t *testing.T) {
 	}
 }
 
+func TestBuildStatusReportsDeadLetteredPods(t *testing.T) {
+	cs := newCocoonSet("demo", func(cs *cocoonv1.CocoonSet) {
+		cs.Spec.Agent.Replicas = 1
+		cs.Generation = 3
+	})
+	main := readyPod(mustBuildAgentPod(t, cs, 0, "", "", testScheme(t)))
+	sub := readyPod(mustBuildAgentPod(t, cs, 1, "vk-ns-demo-0", "", testScheme(t)))
+	sub.Annotations[annotationDeadLetter] = "3"
+	classified := classifiedPods{
+		main:      main,
+		sub:       map[int32]*corev1.Pod{1: sub},
+		toolbox:   map[string]*corev1.Pod{},
+		allByName: map[string]*corev1.Pod{main.Name: main, sub.Name: sub},
+	}
+	status := buildStatus(cs, classified, "")
+	progressing := apimeta.FindStatusCondition(status.Conditions, conditionTypeProgressing)
+	if progressing == nil || progressing.Status != metav1.ConditionFalse || progressing.Reason != conditionReasonDeadLettered || !strings.Contains(progressing.Message, sub.Name) {
+		t.Fatalf("Progressing = %+v, want False/DeadLettered naming %s", progressing, sub.Name)
+	}
+	if status.Phase != cocoonv1.CocoonSetPhaseRunning {
+		t.Errorf("phase = %q, want Running: the parked pod is still Ready", status.Phase)
+	}
+
+	sub.Annotations[annotationDeadLetter] = "2"
+	progressing = apimeta.FindStatusCondition(buildStatus(cs, classified, "").Conditions, conditionTypeProgressing)
+	if progressing == nil || progressing.Reason != conditionReasonStable {
+		t.Fatalf("Progressing = %+v, want Stable once the dead-letter belongs to an older generation", progressing)
+	}
+}
+
 func TestStatusEqualIgnoresConditionTimestamps(t *testing.T) {
 	cs := newCocoonSet("demo")
 	a := buildStatus(cs, classifiedPods{
@@ -129,7 +160,7 @@ func TestAgentStatusFromPod(t *testing.T) {
 
 func TestBuildConditionsAllReady(t *testing.T) {
 	cs := newCocoonSet("demo")
-	conds := buildConditions(cs, 1, 1, 0, 0, cocoonv1.CocoonSetPhaseRunning)
+	conds := buildConditions(cs, 1, 1, 0, 0, cocoonv1.CocoonSetPhaseRunning, nil)
 	ready := apimeta.FindStatusCondition(conds, commonk8s.ConditionTypeReady)
 	if ready == nil || ready.Status != metav1.ConditionTrue {
 		t.Errorf("Ready condition should be True when all agents ready, got %+v", ready)
@@ -138,7 +169,7 @@ func TestBuildConditionsAllReady(t *testing.T) {
 
 func TestBuildConditionsNotReadyWhenToolboxesPending(t *testing.T) {
 	cs := newCocoonSet("demo")
-	conds := buildConditions(cs, 1, 1, 0, 1, cocoonv1.CocoonSetPhaseScaling)
+	conds := buildConditions(cs, 1, 1, 0, 1, cocoonv1.CocoonSetPhaseScaling, nil)
 	ready := apimeta.FindStatusCondition(conds, commonk8s.ConditionTypeReady)
 	if ready == nil || ready.Status != metav1.ConditionFalse {
 		t.Errorf("Ready condition must be False while toolboxes pending, got %+v", ready)
