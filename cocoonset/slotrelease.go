@@ -40,11 +40,8 @@ func (r *Reconciler) reconcileSuspendRelease(ctx context.Context, cs *cocoonv1.C
 		return ctrl.Result{}, err
 	}
 	allHibernated, err := r.allOwnedPodsHibernated(ctx, cs, classified)
-	if err != nil {
-		return ctrl.Result{}, err
-	}
-	if !allHibernated {
-		return r.pollSuspend(ctx, cs, classified)
+	if err != nil || !allHibernated {
+		return r.pollSuspend(ctx, cs, classified, err)
 	}
 	if err := r.clearSuspendDeadline(ctx, cs); err != nil {
 		return ctrl.Result{}, err

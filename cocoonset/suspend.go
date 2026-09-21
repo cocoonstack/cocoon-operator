@@ -35,11 +35,8 @@ func (r *Reconciler) reconcileSuspend(ctx context.Context, cs *cocoonv1.CocoonSe
 		return ctrl.Result{}, err
 	}
 	allHibernated, err := r.allOwnedPodsHibernated(ctx, cs, classified)
-	if err != nil {
-		return ctrl.Result{}, err
-	}
-	if !allHibernated {
-		return r.pollSuspend(ctx, cs, classified)
+	if err != nil || !allHibernated {
+		return r.pollSuspend(ctx, cs, classified, err)
 	}
 	if err := r.clearSuspendDeadline(ctx, cs); err != nil {
 		return ctrl.Result{}, err
@@ -47,18 +44,23 @@ func (r *Reconciler) reconcileSuspend(ctx context.Context, cs *cocoonv1.CocoonSe
 	return ctrl.Result{}, r.patchStatus(ctx, cs, buildStatus(cs, classified, cocoonv1.CocoonSetPhaseSuspended))
 }
 
-func (r *Reconciler) pollSuspend(ctx context.Context, cs *cocoonv1.CocoonSet, classified classifiedPods) (ctrl.Result, error) {
+func (r *Reconciler) pollSuspend(ctx context.Context, cs *cocoonv1.CocoonSet, classified classifiedPods, probeErr error) (ctrl.Result, error) {
 	exceeded, err := r.suspendDeadlineExceeded(ctx, cs)
 	if err != nil {
 		return ctrl.Result{}, err
 	}
-	phase := cocoonv1.CocoonSetPhaseSuspending
-	if exceeded {
-		phase = cocoonv1.CocoonSetPhaseFailed
-		commonk8s.Eventf(r.Recorder, cs, corev1.EventTypeWarning, "SuspendTimedOut",
-			"not every managed VM was hibernated with its snapshot in the registry within %s", suspendTimeout)
+	if !exceeded {
+		if probeErr != nil {
+			return ctrl.Result{}, probeErr
+		}
+		return ctrl.Result{RequeueAfter: requeueSuspendPoll}, r.patchStatus(ctx, cs, buildStatus(cs, classified, cocoonv1.CocoonSetPhaseSuspending))
 	}
-	return ctrl.Result{RequeueAfter: requeueSuspendPoll}, r.patchStatus(ctx, cs, buildStatus(cs, classified, phase))
+	msg := fmt.Sprintf("not every managed VM was hibernated with its snapshot in the registry within %s", suspendTimeout)
+	if probeErr != nil {
+		msg += ": " + probeErr.Error()
+	}
+	commonk8s.Eventf(r.Recorder, cs, corev1.EventTypeWarning, "SuspendTimedOut", "%s", msg)
+	return ctrl.Result{RequeueAfter: requeueSuspendPoll}, r.patchStatus(ctx, cs, buildStatus(cs, classified, cocoonv1.CocoonSetPhaseFailed))
 }
 
 func (r *Reconciler) suspendDeadlineExceeded(ctx context.Context, cs *cocoonv1.CocoonSet) (bool, error) {

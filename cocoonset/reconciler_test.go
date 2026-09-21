@@ -546,6 +546,40 @@ func TestReconcileSuspendTimesOutAfterTheDeadline(t *testing.T) {
 	}
 }
 
+func TestReconcileSuspendTimesOutWhenTheRegistryProbeKeepsFailing(t *testing.T) {
+	scheme := testScheme(t)
+	cs := newCocoonSet("demo", func(cs *cocoonv1.CocoonSet) {
+		cs.Finalizers = []string{finalizerName}
+		cs.Spec.Suspend = true
+		cs.Annotations = map[string]string{annotationSuspendingSince: time.Now().Add(-suspendTimeout - time.Minute).UTC().Format(time.RFC3339)}
+		cs.Status.Phase = cocoonv1.CocoonSetPhaseSuspending
+	})
+	mainPod := lifecycleHibernated(mustBuildAgentPod(t, cs, 0, "", "", scheme))
+	mainPod.Status.Phase = corev1.PodRunning
+	cli := ctrlfake.NewClientBuilder().WithScheme(scheme).WithObjects(cs, mainPod).WithStatusSubresource(&cocoonv1.CocoonSet{}).Build()
+	rec := record.NewFakeRecorder(4)
+	r := &Reconciler{Client: cli, Scheme: scheme, Registry: &fakeRegistry{probeErr: errors.New("registry down")}, Recorder: rec}
+
+	if _, err := r.Reconcile(t.Context(), reqFor(cs)); err != nil {
+		t.Fatalf("Reconcile past the deadline must report Failed instead of returning the probe error: %v", err)
+	}
+	var out cocoonv1.CocoonSet
+	if err := cli.Get(t.Context(), types.NamespacedName{Namespace: cs.Namespace, Name: cs.Name}, &out); err != nil {
+		t.Fatalf("get CocoonSet: %v", err)
+	}
+	if out.Status.Phase != cocoonv1.CocoonSetPhaseFailed {
+		t.Fatalf("phase = %q, want Failed", out.Status.Phase)
+	}
+	select {
+	case ev := <-rec.Events:
+		if !strings.Contains(ev, "SuspendTimedOut") || !strings.Contains(ev, "registry down") {
+			t.Fatalf("event = %q, want SuspendTimedOut carrying the probe error", ev)
+		}
+	default:
+		t.Fatal("a timed-out suspend must raise a SuspendTimedOut event even while the registry probe fails")
+	}
+}
+
 func TestReconcileMainLifecycleFailedWithDriftRecreatesPod(t *testing.T) {
 	scheme := testScheme(t)
 	cs := newCocoonSet("demo", func(cs *cocoonv1.CocoonSet) {
