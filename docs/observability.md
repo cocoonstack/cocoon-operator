@@ -9,13 +9,16 @@ Reconciler failures surface as K8s Events on the CR plus Prometheus metrics (cou
 
 | Event reason (CocoonSet) | Type |
 |---|---|
-| `PodLifecycleFailed`, `MainAgentFailed`, `SubAgentDeadLetter`, `WakeNoCapacity` | Warning |
+| `PodLifecycleFailed`, `MainAgentFailed`, `SubAgentDeadLetter`, `WakeNoCapacity`, `MigrateNoCapacity` | Warning |
 | `SubAgentRebuilding`, `RecoveredFromFailure` | Normal |
 
 `WakeNoCapacity` fires while a `hibernatePolicy: release` wake sits
 Unschedulable: the seat the policy freed is not available again yet. The
 reconciler keeps waiting instead of failing the wake, so the event is the
-out-of-capacity signal, not a terminal error.
+out-of-capacity signal, not a terminal error. `MigrateNoCapacity` is the same
+signal for a cross-node migration whose restored main cannot be scheduled on
+the target node; the set stays `Migrating` and the event repeats on every
+poll until a seat opens or `spec.nodeName` changes.
 
 Metrics:
 
@@ -28,6 +31,7 @@ cocoon_operator_lifecycle_state_failed_observed_total{phase}
 cocoon_operator_slot_release_pods_deleted_total{namespace, cocoonset}
 cocoon_operator_slot_release_wake_total{namespace, cocoonset, placement}   # placement=hint-node|pool
 cocoon_operator_slot_release_wake_unschedulable_total{namespace, cocoonset}
+cocoon_operator_migrate_unschedulable_total{namespace, cocoonset}
 ```
 
 The three `slot_release_*` families cover `hibernatePolicy: release`

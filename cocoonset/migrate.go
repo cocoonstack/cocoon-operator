@@ -6,11 +6,14 @@ import (
 	"fmt"
 
 	"github.com/projecteru2/core/log"
+	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	ctrl "sigs.k8s.io/controller-runtime"
 
 	cocoonv1 "github.com/cocoonstack/cocoon-common/apis/v1"
+	commonk8s "github.com/cocoonstack/cocoon-common/k8s"
 	"github.com/cocoonstack/cocoon-common/meta"
+	"github.com/cocoonstack/cocoon-operator/metrics"
 	"github.com/cocoonstack/cocoon-operator/podpatch"
 	"github.com/cocoonstack/cocoon-operator/snapshot"
 )
@@ -120,6 +123,10 @@ func (r *Reconciler) advanceMigration(ctx context.Context, cs *cocoonv1.CocoonSe
 		// without the durable Migrating phase this is a CR wake mid-flight, not a migration: disengage
 		if cs.Status.Phase != cocoonv1.CocoonSetPhaseMigrating {
 			return false, ctrl.Result{}, nil
+		}
+		if msg := podUnschedulable(main); msg != "" {
+			metrics.MigrateUnschedulableTotal.WithLabelValues(cs.Namespace, cs.Name).Inc()
+			commonk8s.Eventf(r.Recorder, cs, corev1.EventTypeWarning, "MigrateNoCapacity", "main pod %s unschedulable on %s: %s", main.Name, cmp.Or(desired, "any node"), msg)
 		}
 		return r.markMigrating(ctx, cs, classified)
 

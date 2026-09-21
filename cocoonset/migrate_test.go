@@ -3,12 +3,14 @@ package cocoonset
 import (
 	"errors"
 	"slices"
+	"strings"
 	"testing"
 
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/client-go/tools/record"
 	ctrlfake "sigs.k8s.io/controller-runtime/pkg/client/fake"
 
 	cocoonv1 "github.com/cocoonstack/cocoon-common/apis/v1"
@@ -345,6 +347,40 @@ func TestMigrationDisengagesFromCRWakeWindow(t *testing.T) {
 	}
 	if len(reg.deleted) != 0 {
 		t.Errorf("must not touch the wake's snapshot: %v", reg.deleted)
+	}
+}
+
+func TestMigrationReportsAnUnschedulableTarget(t *testing.T) {
+	cs := migCocoonSet("node-b")
+	cs.Status.Phase = cocoonv1.CocoonSetPhaseMigrating
+	main := migMainPod(t, cs, "node-b", "", false)
+	main.Status.Conditions = []corev1.PodCondition{{
+		Type: corev1.PodScheduled, Status: corev1.ConditionFalse, Reason: corev1.PodReasonUnschedulable, Message: "0/2 nodes are available: Insufficient memory.",
+	}}
+	reg := &fakeRegistry{present: map[string]bool{migVMName + ":" + meta.HibernateSnapshotTag: true}}
+	cli := ctrlfake.NewClientBuilder().WithScheme(testScheme(t)).
+		WithObjects(cs, main).WithStatusSubresource(&cocoonv1.CocoonSet{}).Build()
+	rec := record.NewFakeRecorder(4)
+	r := &Reconciler{Client: cli, Scheme: testScheme(t), Registry: reg, Recorder: rec}
+
+	handled, _, err := r.reconcileMigration(t.Context(), cs, classifiedPods{main: main})
+	if err != nil || !handled {
+		t.Fatalf("handled=%v err=%v", handled, err)
+	}
+	select {
+	case ev := <-rec.Events:
+		if !strings.Contains(ev, "MigrateNoCapacity") || !strings.Contains(ev, "Insufficient memory") {
+			t.Fatalf("event = %q, want MigrateNoCapacity carrying the scheduler message", ev)
+		}
+	default:
+		t.Fatal("an unschedulable migration target must raise a MigrateNoCapacity event")
+	}
+	var out cocoonv1.CocoonSet
+	if err := cli.Get(t.Context(), types.NamespacedName{Namespace: cs.Namespace, Name: cs.Name}, &out); err != nil {
+		t.Fatalf("get CocoonSet: %v", err)
+	}
+	if out.Status.Phase != cocoonv1.CocoonSetPhaseMigrating {
+		t.Errorf("phase = %q, want Migrating kept while waiting for capacity", out.Status.Phase)
 	}
 }
 
