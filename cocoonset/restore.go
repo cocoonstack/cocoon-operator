@@ -39,6 +39,16 @@ func (r *Reconciler) hibernationPodNames(ctx context.Context, namespace string, 
 	return out, nil
 }
 
+func (r *Reconciler) podsTrackedByHibernationCR(ctx context.Context, namespace string) (map[string]struct{}, error) {
+	return r.hibernationPodNames(ctx, namespace, func(h *cocoonv1.CocoonHibernation) bool {
+		if h.DeletionTimestamp != nil {
+			return false
+		}
+		return h.Status.ObservedGeneration != h.Generation ||
+			h.Status.Phase != cocoonv1.CocoonHibernationPhaseActive
+	})
+}
+
 // podsRestorableByCR gates on Phase, not Desire; Phase flips only once the push is confirmed.
 func (r *Reconciler) podsRestorableByCR(ctx context.Context, namespace string) (map[string]struct{}, error) {
 	return r.hibernationPodNames(ctx, namespace, func(h *cocoonv1.CocoonHibernation) bool {
