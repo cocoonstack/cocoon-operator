@@ -41,7 +41,11 @@ func (r *Reconciler) hibernationPodNames(ctx context.Context, namespace string, 
 
 func (r *Reconciler) podsTrackedByHibernationCR(ctx context.Context, namespace string) (map[string]struct{}, error) {
 	return r.hibernationPodNames(ctx, namespace, func(h *cocoonv1.CocoonHibernation) bool {
-		return h.DeletionTimestamp == nil
+		if h.DeletionTimestamp != nil {
+			return false
+		}
+		return h.Status.ObservedGeneration != h.Generation ||
+			h.Status.Phase != cocoonv1.CocoonHibernationPhaseActive
 	})
 }
 
