@@ -96,6 +96,9 @@ func (r *Reconciler) advanceMigration(ctx context.Context, cs *cocoonv1.CocoonSe
 		}
 		// NodeName != "" spares the just-recreated, still unscheduled restore pod from a delete/recreate loop
 		logger.Infof(ctx, "migrate %s/%s: snapshot in registry, deleting old pod on %s", cs.Namespace, cs.Name, main.Spec.NodeName)
+		if err := podpatch.KeepSnapshotOnDelete(ctx, r.Client, main); err != nil {
+			logger.Errorf(ctx, err, "migrate: flag keep-snapshot on %s/%s; the wake will cold-pull", main.Namespace, main.Name)
+		}
 		if err := r.Delete(ctx, main); err != nil && !apierrors.IsNotFound(err) {
 			return true, ctrl.Result{}, fmt.Errorf("migrate: delete old main %s/%s: %w", main.Namespace, main.Name, err)
 		}
