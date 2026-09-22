@@ -73,10 +73,9 @@ spec:
                     - firecracker
                     type: string
                   connType:
-                    description: |-
-                      ConnType is the connection protocol advertised for a VM. Empty
-                      falls back to OS-based inference (Linux→ssh, Windows→rdp, Android→adb);
-                      set explicitly to override (e.g. Linux+xrdp→rdp).
+                    description: ConnType is the connection protocol advertised for
+                      a VM; empty lets the node infer it from the VNC port and the
+                      guest OS.
                     enum:
                     - ssh
                     - rdp
@@ -301,10 +300,9 @@ spec:
                       - firecracker
                       type: string
                     connType:
-                      description: |-
-                        ConnType is the connection protocol advertised for a VM. Empty
-                        falls back to OS-based inference (Linux→ssh, Windows→rdp, Android→adb);
-                        set explicitly to override (e.g. Linux+xrdp→rdp).
+                      description: ConnType is the connection protocol advertised
+                        for a VM; empty lets the node infer it from the VNC port and
+                        the guest OS.
                       enum:
                       - ssh
                       - rdp
@@ -572,10 +570,9 @@ spec:
                     toolbox VM.
                   properties:
                     connType:
-                      description: |-
-                        ConnType is the connection protocol advertised for a VM. Empty
-                        falls back to OS-based inference (Linux→ssh, Windows→rdp, Android→adb);
-                        set explicitly to override (e.g. Linux+xrdp→rdp).
+                      description: ConnType is the connection protocol advertised
+                        for a VM; empty lets the node infer it from the VNC port and
+                        the guest OS.
                       enum:
                       - ssh
                       - rdp
