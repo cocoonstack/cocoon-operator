@@ -1350,6 +1350,85 @@ func TestReconcileWakeLeavesSettledCRInert(t *testing.T) {
 	}
 }
 
+func TestReconcileWakeReclaimsALeakedTagOnASettledCR(t *testing.T) {
+	hib := &cocoonv1.CocoonHibernation{
+		ObjectMeta: metav1.ObjectMeta{Name: "hib", Namespace: "ns", Finalizers: []string{finalizerName}},
+		Spec: cocoonv1.CocoonHibernationSpec{
+			Desire: cocoonv1.HibernationDesireWake,
+			PodRef: cocoonv1.HibernationPodRef{Name: "demo-0"},
+		},
+		Status: cocoonv1.CocoonHibernationStatus{Phase: cocoonv1.CocoonHibernationPhaseActive, VMName: "vk-ns-demo-0"},
+	}
+	pod := wakeLivePod()
+
+	scheme := testScheme(t)
+	cli := ctrlfake.NewClientBuilder().
+		WithScheme(scheme).
+		WithObjects(hib, pod).
+		WithStatusSubresource(&cocoonv1.CocoonHibernation{}).
+		Build()
+	reg := &fakeRegistry{manifestPresent: true}
+	r := &Reconciler{Client: cli, Scheme: scheme, Registry: reg}
+
+	if _, err := r.Reconcile(t.Context(), ctrl.Request{
+		NamespacedName: types.NamespacedName{Namespace: "ns", Name: "hib"},
+	}); err != nil {
+		t.Fatalf("Reconcile: %v", err)
+	}
+	if !reg.deleteCalled {
+		t.Error("a tag left behind by an earlier wake must be reclaimed")
+	}
+	var got cocoonv1.CocoonHibernation
+	if err := cli.Get(t.Context(), types.NamespacedName{Namespace: "ns", Name: "hib"}, &got); err != nil {
+		t.Fatalf("get hibernation: %v", err)
+	}
+	if got.Status.Phase != cocoonv1.CocoonHibernationPhaseActive {
+		t.Errorf("phase = %q, want Active kept", got.Status.Phase)
+	}
+}
+
+func TestReconcileWakeSettlesThenRetriesTheReclaim(t *testing.T) {
+	hib := &cocoonv1.CocoonHibernation{
+		ObjectMeta: metav1.ObjectMeta{Name: "hib", Namespace: "ns", Finalizers: []string{finalizerName}},
+		Spec: cocoonv1.CocoonHibernationSpec{
+			Desire: cocoonv1.HibernationDesireWake,
+			PodRef: cocoonv1.HibernationPodRef{Name: "demo-0"},
+		},
+		Status: cocoonv1.CocoonHibernationStatus{Phase: cocoonv1.CocoonHibernationPhaseWaking, VMName: "vk-ns-demo-0"},
+	}
+	pod := wakeLivePod()
+
+	scheme := testScheme(t)
+	cli := ctrlfake.NewClientBuilder().
+		WithScheme(scheme).
+		WithObjects(hib, pod).
+		WithStatusSubresource(&cocoonv1.CocoonHibernation{}).
+		Build()
+	reg := &fakeRegistry{manifestPresent: true, deleteErr: errors.New("registry unavailable")}
+	r := &Reconciler{Client: cli, Scheme: scheme, Registry: reg}
+	req := ctrl.Request{NamespacedName: types.NamespacedName{Namespace: "ns", Name: "hib"}}
+
+	if _, err := r.Reconcile(t.Context(), req); err == nil {
+		t.Fatal("a failed reclaim must surface so the reconcile is retried")
+	}
+	var got cocoonv1.CocoonHibernation
+	if err := cli.Get(t.Context(), types.NamespacedName{Namespace: "ns", Name: "hib"}, &got); err != nil {
+		t.Fatalf("get hibernation: %v", err)
+	}
+	if got.Status.Phase != cocoonv1.CocoonHibernationPhaseActive || got.Status.ObservedGeneration != got.Generation {
+		t.Fatalf("the wake itself succeeded, phase = %q observed = %d/%d", got.Status.Phase, got.Status.ObservedGeneration, got.Generation)
+	}
+
+	reg.deleteErr = nil
+	reg.deleteCalled = false
+	if _, err := r.Reconcile(t.Context(), req); err != nil {
+		t.Fatalf("Reconcile after the registry recovered: %v", err)
+	}
+	if !reg.deleteCalled {
+		t.Error("the settled CR must retry the reclaim the wake could not finish")
+	}
+}
+
 func TestPodWatchPredicateIgnoresStatusOnlyUpdates(t *testing.T) {
 	old := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "demo-0", Namespace: "ns", Annotations: map[string]string{"a": "1"}}}
 	updated := old.DeepCopy()
@@ -1365,6 +1444,20 @@ func TestPodWatchPredicateIgnoresStatusOnlyUpdates(t *testing.T) {
 	if !p.Create(event.CreateEvent{Object: old}) || !p.Delete(event.DeleteEvent{Object: old}) {
 		t.Error("create and delete must enqueue")
 	}
+}
+
+func wakeLivePod() *corev1.Pod {
+	pod := &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{Name: "demo-0", Namespace: "ns"},
+		Status: corev1.PodStatus{
+			ContainerStatuses: []corev1.ContainerStatus{{
+				State: corev1.ContainerState{Running: &corev1.ContainerStateRunning{}},
+			}},
+		},
+	}
+	(&meta.VMSpec{VMName: "vk-ns-demo-0", Managed: true}).Apply(pod)
+	(&meta.VMRuntime{VMID: "vmid-live"}).Apply(pod)
+	return pod
 }
 
 type concurrencyProbe struct {
