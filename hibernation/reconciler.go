@@ -35,10 +35,8 @@ import (
 const (
 	requeueInterval   = 5 * time.Second
 	requeueAfterWrite = time.Second
-	// hibernateTimeout bounds how long Hibernating can last before marking Failed.
-	hibernateTimeout = 3 * time.Minute
-	// wakeTimeout bounds how long Waking can last before marking Failed.
-	wakeTimeout = 5 * time.Minute
+	hibernateTimeout  = 3 * time.Minute
+	wakeTimeout       = 5 * time.Minute
 
 	// indexPodRefName lets the pod watcher resolve a pod event back to the CRs targeting it.
 	indexPodRefName = "spec.podRef.name"
@@ -224,7 +222,8 @@ func (r *Reconciler) setPhase(ctx context.Context, hib *cocoonv1.CocoonHibernati
 	if hib.Status.Phase == phase && hib.Status.VMName == vmName && hib.Status.ObservedGeneration == hib.Generation {
 		return nil
 	}
-	refreshDeadline := hasPhaseDeadline(phase) && hib.Status.Phase != phase
+	refreshDeadline := hib.Status.Phase != phase &&
+		(phase == cocoonv1.CocoonHibernationPhaseHibernating || phase == cocoonv1.CocoonHibernationPhaseWaking)
 	if err := commonk8s.PatchStatus(ctx, r.Client, hib, func(h *cocoonv1.CocoonHibernation) {
 		h.Status.ObservedGeneration = h.Generation
 		h.Status.Phase = phase
@@ -304,11 +303,6 @@ func (r *Reconciler) patchNotReady(ctx context.Context, hib *cocoonv1.CocoonHibe
 
 // podWatchPredicate admits creation, deletion, and annotation changes; status churn is left to the requeue poll.
 func podWatchPredicate() predicate.Predicate { return predicate.AnnotationChangedPredicate{} }
-
-// hasPhaseDeadline marks phases whose deadline resets on re-entry so a retry does not inherit the old clock.
-func hasPhaseDeadline(p cocoonv1.CocoonHibernationPhase) bool {
-	return p == cocoonv1.CocoonHibernationPhaseHibernating || p == cocoonv1.CocoonHibernationPhaseWaking
-}
 
 func phaseDeadlineExceeded(hib *cocoonv1.CocoonHibernation, phase cocoonv1.CocoonHibernationPhase, timeout time.Duration) bool {
 	if hib.Status.Phase != phase {
