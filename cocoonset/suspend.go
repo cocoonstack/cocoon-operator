@@ -154,7 +154,6 @@ func (r *Reconciler) applyUnsuspend(ctx context.Context, namespace string, class
 	return nil
 }
 
-// podsHibernatedByCR returns pod names whose CR desires Hibernate or is already Hibernating.
 func (r *Reconciler) podsHibernatedByCR(ctx context.Context, namespace string) (map[string]struct{}, error) {
 	return r.hibernationPodNames(ctx, namespace, func(h *cocoonv1.CocoonHibernation) bool {
 		return h.Spec.Desire == cocoonv1.HibernationDesireHibernate || h.Status.Phase == cocoonv1.CocoonHibernationPhaseHibernating
