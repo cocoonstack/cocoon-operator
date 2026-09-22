@@ -229,32 +229,44 @@ func TestMigrationLeavesTheSnapshotAloneWhileACocoonHibernationWakes(t *testing.
 	}
 }
 
-func TestMigrationProceedsOnceTheHibernationSettled(t *testing.T) {
-	for _, tc := range []struct {
-		name  string
-		phase cocoonv1.CocoonHibernationPhase
-	}{
-		{"woken", cocoonv1.CocoonHibernationPhaseActive},
-		{"gave up", cocoonv1.CocoonHibernationPhaseFailed},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			cs := migCocoonSet("node-b")
-			main := migMainPod(t, cs, "node-a", "vmid-1", true)
-			hib := migHibernation(cocoonv1.HibernationDesireWake, tc.phase)
-			hib.Status.ObservedGeneration = hib.Generation
-			reg := &fakeRegistry{present: map[string]bool{migVMName + ":" + meta.HibernateSnapshotTag: true}}
-			cli := ctrlfake.NewClientBuilder().WithScheme(testScheme(t)).
-				WithObjects(cs, main, hib).WithStatusSubresource(&cocoonv1.CocoonSet{}).Build()
-			r := &Reconciler{Client: cli, Scheme: testScheme(t), Registry: reg}
+func TestMigrationProceedsOnceTheHibernationWoke(t *testing.T) {
+	cs := migCocoonSet("node-b")
+	main := migMainPod(t, cs, "node-a", "vmid-1", true)
+	hib := migHibernation(cocoonv1.HibernationDesireWake, cocoonv1.CocoonHibernationPhaseActive)
+	hib.Status.ObservedGeneration = hib.Generation
+	reg := &fakeRegistry{present: map[string]bool{migVMName + ":" + meta.HibernateSnapshotTag: true}}
+	cli := ctrlfake.NewClientBuilder().WithScheme(testScheme(t)).
+		WithObjects(cs, main, hib).WithStatusSubresource(&cocoonv1.CocoonSet{}).Build()
+	r := &Reconciler{Client: cli, Scheme: testScheme(t), Registry: reg}
 
-			handled, _, err := r.reconcileMigration(t.Context(), cs, classifiedPods{main: main})
-			if err != nil || !handled {
-				t.Fatalf("a settled hibernation must not pin the pod, handled=%v err=%v", handled, err)
-			}
-			if !slices.Contains(reg.deleted, migVMName+":"+meta.HibernateSnapshotTag) {
-				t.Errorf("the leftover tag must be dropped, deleted=%v", reg.deleted)
-			}
-		})
+	handled, _, err := r.reconcileMigration(t.Context(), cs, classifiedPods{main: main})
+	if err != nil || !handled {
+		t.Fatalf("a woken hibernation must not pin the pod, handled=%v err=%v", handled, err)
+	}
+	if !slices.Contains(reg.deleted, migVMName+":"+meta.HibernateSnapshotTag) {
+		t.Errorf("the leftover tag must be dropped, deleted=%v", reg.deleted)
+	}
+}
+
+func TestMigrationLeavesTheSnapshotAloneWhileAFailedWakeRetries(t *testing.T) {
+	cs := migCocoonSet("node-b")
+	main := migMainPod(t, cs, "node-a", "", false)
+	hib := migHibernation(cocoonv1.HibernationDesireWake, cocoonv1.CocoonHibernationPhaseFailed)
+	hib.Status.ObservedGeneration = hib.Generation
+	reg := &fakeRegistry{present: map[string]bool{migVMName + ":" + meta.HibernateSnapshotTag: true}}
+	cli := ctrlfake.NewClientBuilder().WithScheme(testScheme(t)).
+		WithObjects(cs, main, hib).WithStatusSubresource(&cocoonv1.CocoonSet{}).Build()
+	r := &Reconciler{Client: cli, Scheme: testScheme(t), Registry: reg}
+
+	handled, _, err := r.reconcileMigration(t.Context(), cs, classifiedPods{main: main})
+	if err != nil {
+		t.Fatalf("reconcileMigration: %v", err)
+	}
+	if handled {
+		t.Error("a timed-out wake retries on the next reconcile; the pod stays with that reconciler")
+	}
+	if slices.Contains(reg.deleted, migVMName+":"+meta.HibernateSnapshotTag) {
+		t.Fatalf("the wake retry still needs the hibernate snapshot, deleted=%v", reg.deleted)
 	}
 }
 

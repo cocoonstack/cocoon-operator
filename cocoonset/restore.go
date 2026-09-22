@@ -44,11 +44,8 @@ func (r *Reconciler) podsTrackedByHibernationCR(ctx context.Context, namespace s
 		if h.DeletionTimestamp != nil {
 			return false
 		}
-		if h.Status.ObservedGeneration != h.Generation {
-			return true
-		}
-		return h.Status.Phase != cocoonv1.CocoonHibernationPhaseActive &&
-			h.Status.Phase != cocoonv1.CocoonHibernationPhaseFailed
+		return h.Status.ObservedGeneration != h.Generation ||
+			h.Status.Phase != cocoonv1.CocoonHibernationPhaseActive
 	})
 }
 
