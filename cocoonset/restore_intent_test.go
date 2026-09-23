@@ -28,7 +28,7 @@ func TestReconcileSteadyStateSkipsHibernationList(t *testing.T) {
 		}
 	})
 	mainPod := readyPod(mustBuildAgentPod(t, cs, 0, "", "", scheme))
-	subPod := readyPod(mustBuildAgentPod(t, cs, 1, "vk-ns-demo-0", "", scheme))
+	subPod := readyPod(mustBuildAgentPod(t, cs, 1, "vk-ns.demo-0", "", scheme))
 	tbPod := readyPod(mustBuildToolboxPod(t, cs, cs.Spec.Toolboxes[0], scheme))
 
 	var lists atomic.Int32

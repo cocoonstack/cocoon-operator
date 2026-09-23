@@ -83,7 +83,7 @@ func TestApplyUnsuspendNoopOnCleanSet(t *testing.T) {
 	scheme := testScheme(t)
 	cs := newCocoonSet("demo")
 	mainPod := mustBuildAgentPod(t, cs, 0, "", "", scheme)
-	subPod := mustBuildAgentPod(t, cs, 1, "vk-ns-demo-0", "", scheme)
+	subPod := mustBuildAgentPod(t, cs, 1, "vk-ns.demo-0", "", scheme)
 
 	cli := ctrlfake.NewClientBuilder().
 		WithScheme(scheme).
@@ -209,7 +209,7 @@ func TestAllOwnedPodsHibernatedWaitsForEachManagedPod(t *testing.T) {
 		cs.Spec.Agent.Replicas = 1
 	})
 	main := lifecycleHibernated(mustBuildAgentPod(t, cs, 0, "", "", scheme))
-	sub := lifecycleHibernated(mustBuildAgentPod(t, cs, 1, "vk-ns-demo-0", "", scheme))
+	sub := lifecycleHibernated(mustBuildAgentPod(t, cs, 1, "vk-ns.demo-0", "", scheme))
 	classified := classifiedPods{
 		main:      main,
 		sub:       map[int32]*corev1.Pod{1: sub},
@@ -217,7 +217,7 @@ func TestAllOwnedPodsHibernatedWaitsForEachManagedPod(t *testing.T) {
 		allByName: map[string]*corev1.Pod{main.Name: main, sub.Name: sub},
 	}
 	reg := &fakeRegistry{present: map[string]bool{
-		"vk-ns-demo-0:" + meta.HibernateSnapshotTag: true,
+		"vk-ns.demo-0:" + meta.HibernateSnapshotTag: true,
 	}}
 	r := &Reconciler{Scheme: scheme, Registry: reg}
 
@@ -229,7 +229,7 @@ func TestAllOwnedPodsHibernatedWaitsForEachManagedPod(t *testing.T) {
 		t.Error("must stay pending while sub-agent snapshot is missing")
 	}
 
-	reg.present["vk-ns-demo-1:"+meta.HibernateSnapshotTag] = true
+	reg.present["vk-ns.demo-1:"+meta.HibernateSnapshotTag] = true
 	done, err = r.allOwnedPodsHibernated(t.Context(), cs, classified)
 	if err != nil {
 		t.Fatalf("allOwnedPodsHibernated after sub snapshot: %v", err)
@@ -255,7 +255,7 @@ func TestAllOwnedPodsHibernatedSkipsUnmanagedToolbox(t *testing.T) {
 		allByName: map[string]*corev1.Pod{main.Name: main, tb.Name: tb},
 	}
 	reg := &fakeRegistry{present: map[string]bool{
-		"vk-ns-demo-0:" + meta.HibernateSnapshotTag: true,
+		"vk-ns.demo-0:" + meta.HibernateSnapshotTag: true,
 	}}
 	r := &Reconciler{Scheme: scheme, Registry: reg}
 
@@ -295,7 +295,7 @@ func TestAllOwnedPodsHibernatedIgnoresStaleTag(t *testing.T) {
 		allByName: map[string]*corev1.Pod{main.Name: main},
 	}
 	reg := &fakeRegistry{present: map[string]bool{
-		"vk-ns-demo-0:" + meta.HibernateSnapshotTag: true,
+		"vk-ns.demo-0:" + meta.HibernateSnapshotTag: true,
 	}}
 	r := &Reconciler{Scheme: scheme, Registry: reg}
 
@@ -332,7 +332,7 @@ func TestAllOwnedPodsHibernatedSkipsTerminalPod(t *testing.T) {
 		cs.Spec.Agent.Replicas = 1
 	})
 	main := lifecycleHibernated(mustBuildAgentPod(t, cs, 0, "", "", scheme))
-	sub := mustBuildAgentPod(t, cs, 1, "vk-ns-demo-0", "", scheme)
+	sub := mustBuildAgentPod(t, cs, 1, "vk-ns.demo-0", "", scheme)
 	sub.Status.Phase = corev1.PodFailed
 	classified := classifiedPods{
 		main:      main,
@@ -341,7 +341,7 @@ func TestAllOwnedPodsHibernatedSkipsTerminalPod(t *testing.T) {
 		allByName: map[string]*corev1.Pod{main.Name: main, sub.Name: sub},
 	}
 	reg := &fakeRegistry{present: map[string]bool{
-		"vk-ns-demo-0:" + meta.HibernateSnapshotTag: true,
+		"vk-ns.demo-0:" + meta.HibernateSnapshotTag: true,
 	}}
 	r := &Reconciler{Scheme: scheme, Registry: reg}
 
@@ -360,7 +360,7 @@ func TestEnsureSubAgentsReplacesTerminalPod(t *testing.T) {
 		cs.Spec.Agent.Replicas = 1
 	})
 
-	subPod := mustBuildAgentPod(t, cs, 1, "vk-ns-demo-0", "", scheme)
+	subPod := mustBuildAgentPod(t, cs, 1, "vk-ns.demo-0", "", scheme)
 	subPod.Status.Phase = corev1.PodFailed
 
 	cli := ctrlfake.NewClientBuilder().
@@ -374,7 +374,7 @@ func TestEnsureSubAgentsReplacesTerminalPod(t *testing.T) {
 		allByName: map[string]*corev1.Pod{subPod.Name: subPod},
 	}
 
-	changed, _, err := r.ensureSubAgents(t.Context(), cs, classified, "vk-ns-demo-0", "", r.newRestoreIntent(t.Context(), cs.Namespace))
+	changed, _, err := r.ensureSubAgents(t.Context(), cs, classified, "vk-ns.demo-0", "", r.newRestoreIntent(t.Context(), cs.Namespace))
 	if err != nil {
 		t.Fatalf("ensureSubAgents: %v", err)
 	}
@@ -391,7 +391,7 @@ func TestEnsureSubAgentsDeadLetterStaysUntilSpecEdit(t *testing.T) {
 	cs := newCocoonSet("demo", func(cs *cocoonv1.CocoonSet) {
 		cs.Spec.Agent.Replicas = 1
 	})
-	subPod := mustBuildAgentPod(t, cs, 1, "vk-ns-demo-0", "", scheme)
+	subPod := mustBuildAgentPod(t, cs, 1, "vk-ns.demo-0", "", scheme)
 	subPod.Annotations[annotationDeadLetter] = "0"
 
 	enc, err := encodeRebuildHistory(cs, map[string]rebuildEntry{subPod.Name: {Count: maxRebuildAttempts}})
@@ -408,7 +408,7 @@ func TestEnsureSubAgentsDeadLetterStaysUntilSpecEdit(t *testing.T) {
 		allByName: map[string]*corev1.Pod{subPod.Name: subPod},
 	}
 
-	changed, _, err := r.ensureSubAgents(t.Context(), cs, classified, "vk-ns-demo-0", "", r.newRestoreIntent(t.Context(), cs.Namespace))
+	changed, _, err := r.ensureSubAgents(t.Context(), cs, classified, "vk-ns.demo-0", "", r.newRestoreIntent(t.Context(), cs.Namespace))
 	if err != nil {
 		t.Fatalf("ensureSubAgents: %v", err)
 	}
@@ -418,7 +418,7 @@ func TestEnsureSubAgentsDeadLetterStaysUntilSpecEdit(t *testing.T) {
 
 	cs.Spec.Agent.Image = "ghcr.io/cocoonstack/cocoon/ubuntu:26.04"
 	cs.Generation = 1
-	changed, _, err = r.ensureSubAgents(t.Context(), cs, classified, "vk-ns-demo-0", "", r.newRestoreIntent(t.Context(), cs.Namespace))
+	changed, _, err = r.ensureSubAgents(t.Context(), cs, classified, "vk-ns.demo-0", "", r.newRestoreIntent(t.Context(), cs.Namespace))
 	if err != nil {
 		t.Fatalf("ensureSubAgents after spec fix: %v", err)
 	}
@@ -641,7 +641,7 @@ func TestEnsureSubAgentsTreatsLifecycleFailedAsTerminal(t *testing.T) {
 	cs := newCocoonSet("demo", func(cs *cocoonv1.CocoonSet) {
 		cs.Spec.Agent.Replicas = 1
 	})
-	subPod := mustBuildAgentPod(t, cs, 1, "vk-ns-demo-0", "", scheme)
+	subPod := mustBuildAgentPod(t, cs, 1, "vk-ns.demo-0", "", scheme)
 	subPod.Status.Phase = corev1.PodRunning
 	if subPod.Annotations == nil {
 		subPod.Annotations = map[string]string{}
@@ -659,7 +659,7 @@ func TestEnsureSubAgentsTreatsLifecycleFailedAsTerminal(t *testing.T) {
 		allByName: map[string]*corev1.Pod{subPod.Name: subPod},
 	}
 
-	changed, _, err := r.ensureSubAgents(t.Context(), cs, classified, "vk-ns-demo-0", "", r.newRestoreIntent(t.Context(), cs.Namespace))
+	changed, _, err := r.ensureSubAgents(t.Context(), cs, classified, "vk-ns.demo-0", "", r.newRestoreIntent(t.Context(), cs.Namespace))
 	if err != nil {
 		t.Fatalf("ensureSubAgents: %v", err)
 	}
@@ -750,52 +750,52 @@ func TestReconcileDeleteSnapshotPolicyGC(t *testing.T) {
 			name:   "never drops both tags — no push happened",
 			policy: cocoonv1.SnapshotPolicyNever,
 			agents: []cocoonv1.AgentStatus{
-				{Slot: 0, Role: "main", PodName: "demo-0", VMName: "vk-ns-demo-0"},
+				{Slot: 0, Role: "main", PodName: "demo-0", VMName: "vk-ns.demo-0"},
 			},
 			want: []string{
-				"vk-ns-demo-0:" + meta.HibernateSnapshotTag,
-				"vk-ns-demo-0:" + meta.DefaultSnapshotTag,
+				"vk-ns.demo-0:" + meta.HibernateSnapshotTag,
+				"vk-ns.demo-0:" + meta.DefaultSnapshotTag,
 			},
 		},
 		{
 			name:   "always preserves :latest for downstream retag",
 			policy: cocoonv1.SnapshotPolicyAlways,
 			agents: []cocoonv1.AgentStatus{
-				{Slot: 0, Role: "main", PodName: "demo-0", VMName: "vk-ns-demo-0"},
+				{Slot: 0, Role: "main", PodName: "demo-0", VMName: "vk-ns.demo-0"},
 			},
-			want: []string{"vk-ns-demo-0:" + meta.HibernateSnapshotTag},
+			want: []string{"vk-ns.demo-0:" + meta.HibernateSnapshotTag},
 		},
 		{
 			name:   "main-only keeps slot 0, drops other slots and toolboxes",
 			policy: cocoonv1.SnapshotPolicyMainOnly,
 			agents: []cocoonv1.AgentStatus{
-				{Slot: 0, Role: "main", PodName: "demo-0", VMName: "vk-ns-demo-0"},
-				{Slot: 1, Role: "sub", PodName: "demo-1", VMName: "vk-ns-demo-1"},
+				{Slot: 0, Role: "main", PodName: "demo-0", VMName: "vk-ns.demo-0"},
+				{Slot: 1, Role: "sub", PodName: "demo-1", VMName: "vk-ns.demo-1"},
 			},
 			toolboxes: []cocoonv1.ToolboxStatus{
-				{Name: "tb", PodName: "demo-tb", VMName: "vk-ns-demo-tb"},
+				{Name: "tb", PodName: "demo-tb", VMName: "vk-ns.demo-tb"},
 			},
 			want: []string{
-				"vk-ns-demo-0:" + meta.HibernateSnapshotTag,
-				"vk-ns-demo-1:" + meta.HibernateSnapshotTag,
-				"vk-ns-demo-1:" + meta.DefaultSnapshotTag,
-				"vk-ns-demo-tb:" + meta.HibernateSnapshotTag,
-				"vk-ns-demo-tb:" + meta.DefaultSnapshotTag,
+				"vk-ns.demo-0:" + meta.HibernateSnapshotTag,
+				"vk-ns.demo-1:" + meta.HibernateSnapshotTag,
+				"vk-ns.demo-1:" + meta.DefaultSnapshotTag,
+				"vk-ns.demo-tb:" + meta.HibernateSnapshotTag,
+				"vk-ns.demo-tb:" + meta.DefaultSnapshotTag,
 			},
 		},
 		{
 			name:   "main-only reclaims :latest for toolbox with numeric-suffix name",
 			policy: cocoonv1.SnapshotPolicyMainOnly,
 			agents: []cocoonv1.AgentStatus{
-				{Slot: 0, Role: "main", PodName: "demo-0", VMName: "vk-ns-demo-0"},
+				{Slot: 0, Role: "main", PodName: "demo-0", VMName: "vk-ns.demo-0"},
 			},
 			toolboxes: []cocoonv1.ToolboxStatus{
-				{Name: "db-0", PodName: "demo-db-0", VMName: "vk-ns-demo-db-0"},
+				{Name: "db-0", PodName: "demo-db-0", VMName: "vk-ns.demo-db-0"},
 			},
 			want: []string{
-				"vk-ns-demo-0:" + meta.HibernateSnapshotTag,
-				"vk-ns-demo-db-0:" + meta.HibernateSnapshotTag,
-				"vk-ns-demo-db-0:" + meta.DefaultSnapshotTag,
+				"vk-ns.demo-0:" + meta.HibernateSnapshotTag,
+				"vk-ns.demo-db-0:" + meta.HibernateSnapshotTag,
+				"vk-ns.demo-db-0:" + meta.DefaultSnapshotTag,
 			},
 		},
 	}
@@ -832,7 +832,7 @@ func TestReconcileDeleteSkipsAbsentSnapshotTags(t *testing.T) {
 	cs.Finalizers = []string{finalizerName}
 	cs.Spec.SnapshotPolicy = cocoonv1.SnapshotPolicyNever
 	cs.Status.Agents = []cocoonv1.AgentStatus{
-		{Slot: 0, Role: "main", PodName: "demo-0", VMName: "vk-ns-demo-0"},
+		{Slot: 0, Role: "main", PodName: "demo-0", VMName: "vk-ns.demo-0"},
 	}
 
 	cli := ctrlfake.NewClientBuilder().WithScheme(scheme).WithObjects(cs).Build()
@@ -846,8 +846,8 @@ func TestReconcileDeleteSkipsAbsentSnapshotTags(t *testing.T) {
 		t.Errorf("DeleteManifest calls = %v, want none", reg.deleted)
 	}
 	wantProbed := []string{
-		"vk-ns-demo-0:" + meta.HibernateSnapshotTag,
-		"vk-ns-demo-0:" + meta.DefaultSnapshotTag,
+		"vk-ns.demo-0:" + meta.HibernateSnapshotTag,
+		"vk-ns.demo-0:" + meta.DefaultSnapshotTag,
 	}
 	if !slices.Equal(reg.probed, wantProbed) {
 		t.Errorf("HasManifest calls = %v, want %v", reg.probed, wantProbed)
@@ -864,8 +864,8 @@ func TestReconcileDeleteStashesPodVMNamesEvenWhenStatusIsEmpty(t *testing.T) {
 		WithObjects(cs, mustBuildAgentPod(t, cs, 0, "", "", scheme)).
 		Build()
 	reg := &fakeRegistry{present: map[string]bool{
-		"vk-ns-demo-0:" + meta.HibernateSnapshotTag: true,
-		"vk-ns-demo-0:" + meta.DefaultSnapshotTag:   true,
+		"vk-ns.demo-0:" + meta.HibernateSnapshotTag: true,
+		"vk-ns.demo-0:" + meta.DefaultSnapshotTag:   true,
 	}}
 	r := &Reconciler{Client: cli, Scheme: scheme, Registry: reg}
 
@@ -876,7 +876,7 @@ func TestReconcileDeleteStashesPodVMNamesEvenWhenStatusIsEmpty(t *testing.T) {
 		t.Fatalf("pass 2: %v", err)
 	}
 
-	want := []string{"vk-ns-demo-0:" + meta.HibernateSnapshotTag}
+	want := []string{"vk-ns.demo-0:" + meta.HibernateSnapshotTag}
 	if !slices.Equal(reg.deleted, want) {
 		t.Errorf("DeleteManifest calls = %v, want %v", reg.deleted, want)
 	}
@@ -887,18 +887,18 @@ func TestReconcileDeleteCleansTagsAfterPodsGone(t *testing.T) {
 	cs := newCocoonSet("demo")
 	cs.Finalizers = []string{finalizerName}
 	cs.Status.Agents = []cocoonv1.AgentStatus{
-		{Slot: 0, Role: "main", PodName: "demo-0", VMName: "vk-ns-demo-0"},
-		{Slot: 1, Role: "sub", PodName: "demo-1", VMName: "vk-ns-demo-1"},
+		{Slot: 0, Role: "main", PodName: "demo-0", VMName: "vk-ns.demo-0"},
+		{Slot: 1, Role: "sub", PodName: "demo-1", VMName: "vk-ns.demo-1"},
 	}
 	cs.Status.Toolboxes = []cocoonv1.ToolboxStatus{
-		{Name: "tb", PodName: "demo-tb", VMName: "vk-ns-demo-tb"},
+		{Name: "tb", PodName: "demo-tb", VMName: "vk-ns.demo-tb"},
 	}
 
 	cli := ctrlfake.NewClientBuilder().WithScheme(scheme).WithObjects(cs).Build()
 	reg := &fakeRegistry{present: map[string]bool{
-		"vk-ns-demo-0:" + meta.HibernateSnapshotTag:  true,
-		"vk-ns-demo-1:" + meta.HibernateSnapshotTag:  true,
-		"vk-ns-demo-tb:" + meta.HibernateSnapshotTag: true,
+		"vk-ns.demo-0:" + meta.HibernateSnapshotTag:  true,
+		"vk-ns.demo-1:" + meta.HibernateSnapshotTag:  true,
+		"vk-ns.demo-tb:" + meta.HibernateSnapshotTag: true,
 	}}
 	r := &Reconciler{Client: cli, Scheme: scheme, Registry: reg}
 
@@ -907,9 +907,9 @@ func TestReconcileDeleteCleansTagsAfterPodsGone(t *testing.T) {
 	}
 
 	want := []string{
-		"vk-ns-demo-0:" + meta.HibernateSnapshotTag,
-		"vk-ns-demo-1:" + meta.HibernateSnapshotTag,
-		"vk-ns-demo-tb:" + meta.HibernateSnapshotTag,
+		"vk-ns.demo-0:" + meta.HibernateSnapshotTag,
+		"vk-ns.demo-1:" + meta.HibernateSnapshotTag,
+		"vk-ns.demo-tb:" + meta.HibernateSnapshotTag,
 	}
 	if !slices.Equal(reg.deleted, want) {
 		t.Errorf("DeleteManifest calls = %v, want %v", reg.deleted, want)
@@ -1039,15 +1039,15 @@ func TestReconcileSuspendRequeuesWhileOldMainTerminates(t *testing.T) {
 func TestEnsureSubAgentsStashesRemovedSlotVMName(t *testing.T) {
 	scheme := testScheme(t)
 	cs := newCocoonSet("demo", func(cs *cocoonv1.CocoonSet) { cs.Spec.Agent.Replicas = 1 })
-	sub := mustBuildAgentPod(t, cs, 1, "vk-ns-demo-0", "", scheme)
+	sub := mustBuildAgentPod(t, cs, 1, "vk-ns.demo-0", "", scheme)
 	cs.Spec.Agent.Replicas = 0
 	cli := ctrlfake.NewClientBuilder().WithScheme(scheme).WithObjects(cs, sub).Build()
 	r := &Reconciler{Client: cli, Scheme: scheme}
-	if _, _, err := r.ensureSubAgents(t.Context(), cs, classifyPods([]corev1.Pod{*sub}), "vk-ns-demo-0", "", r.newRestoreIntent(t.Context(), cs.Namespace)); err != nil {
+	if _, _, err := r.ensureSubAgents(t.Context(), cs, classifyPods([]corev1.Pod{*sub}), "vk-ns.demo-0", "", r.newRestoreIntent(t.Context(), cs.Namespace)); err != nil {
 		t.Fatalf("ensureSubAgents: %v", err)
 	}
-	if names := stashedVMNames(t, cli); !slices.Contains(names, "vk-ns-demo-1") {
-		t.Errorf("delete-vm-names = %v, want vk-ns-demo-1 stashed for teardown GC", names)
+	if names := stashedVMNames(t, cli); !slices.Contains(names, "vk-ns.demo-1") {
+		t.Errorf("delete-vm-names = %v, want vk-ns.demo-1 stashed for teardown GC", names)
 	}
 }
 
@@ -1061,8 +1061,8 @@ func TestEnsureToolboxesStashesRemovedToolboxVMName(t *testing.T) {
 	if _, _, err := r.ensureToolboxes(t.Context(), cs, classifyPods([]corev1.Pod{*pod}), r.newRestoreIntent(t.Context(), cs.Namespace)); err != nil {
 		t.Fatalf("ensureToolboxes: %v", err)
 	}
-	if names := stashedVMNames(t, cli); !slices.Contains(names, "vk-ns-demo-tb") {
-		t.Errorf("delete-vm-names = %v, want vk-ns-demo-tb stashed for teardown GC", names)
+	if names := stashedVMNames(t, cli); !slices.Contains(names, "vk-ns.demo-tb") {
+		t.Errorf("delete-vm-names = %v, want vk-ns.demo-tb stashed for teardown GC", names)
 	}
 }
 
