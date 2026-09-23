@@ -652,6 +652,20 @@ func TestBuildAgentPodDoesNotShareSpecResourceMaps(t *testing.T) {
 	}
 }
 
+func TestPodSpecMatchesAgentAcceptsAPIDefaultedRequests(t *testing.T) {
+	cs := newCocoonSet("demo", func(cs *cocoonv1.CocoonSet) {
+		cs.Spec.Agent.Resources = corev1.ResourceRequirements{
+			Limits:   corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("2"), corev1.ResourceMemory: resource.MustParse("2Gi")},
+			Requests: corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("1")},
+		}
+	})
+	pod := mustBuildAgentPod(t, cs, 0, "", "", testScheme(t))
+	pod.Spec.Containers[0].Resources.Requests[corev1.ResourceMemory] = resource.MustParse("2Gi")
+	if !podSpecMatchesAgent(pod, cs, 0) {
+		t.Error("API-defaulted memory request must not read as drift")
+	}
+}
+
 func testScheme(t testing.TB) *runtime.Scheme {
 	t.Helper()
 	scheme := runtime.NewScheme()

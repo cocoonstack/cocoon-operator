@@ -242,15 +242,15 @@ func podSpecMatchesToolbox(pod *corev1.Pod, cs *cocoonv1.CocoonSet, tb cocoonv1.
 
 func resourcesMatch(pod *corev1.Pod, want corev1.ResourceRequirements) bool {
 	got := pod.Spec.Containers[0].Resources
-	// Guaranteed-QoS defaulting fills Requests from Limits; mirror it
-	wantReq := want.Requests
-	if len(wantReq) == 0 {
-		wantReq = want.Limits
-	}
 	// only CPU and memory: K8s defaulting injects ephemeral-storage into both lists, which a spec never carries
 	for _, res := range []corev1.ResourceName{corev1.ResourceCPU, corev1.ResourceMemory} {
 		if !quantityEqual(got.Limits, want.Limits, res) {
 			return false
+		}
+		// API defaulting fills each missing request from its limit; mirror it per resource
+		wantReq := want.Requests
+		if _, ok := wantReq[res]; !ok {
+			wantReq = want.Limits
 		}
 		if !quantityEqual(got.Requests, wantReq, res) {
 			return false
