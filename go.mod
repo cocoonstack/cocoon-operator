@@ -3,7 +3,7 @@ module github.com/cocoonstack/cocoon-operator
 go 1.27.0
 
 require (
-	github.com/cocoonstack/cocoon-common v0.3.5-0.20260923164801-279bb2749624
+	github.com/cocoonstack/cocoon-common v0.3.5-0.20260923170943-2d59536cb0d4
 	github.com/go-logr/logr v1.4.4
 	github.com/google/go-containerregistry v0.21.7
 	github.com/projecteru2/core v0.1.3
