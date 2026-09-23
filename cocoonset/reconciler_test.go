@@ -612,9 +612,6 @@ func TestReconcileMainLifecycleFailedWithDriftRecreatesPod(t *testing.T) {
 	})
 	mainPod := mustBuildAgentPod(t, cs, 0, "", "", scheme)
 	mainPod.Status.Phase = corev1.PodRunning
-	if mainPod.Annotations == nil {
-		mainPod.Annotations = map[string]string{}
-	}
 	mainPod.Annotations[meta.AnnotationLifecycleState] = string(meta.LifecycleStateFailed)
 
 	cs.Spec.Agent.Image = "ghcr.io/cocoonstack/cocoon/ubuntu:26.04"
@@ -643,9 +640,6 @@ func TestEnsureSubAgentsTreatsLifecycleFailedAsTerminal(t *testing.T) {
 	})
 	subPod := mustBuildAgentPod(t, cs, 1, "vk-ns.demo-0", "", scheme)
 	subPod.Status.Phase = corev1.PodRunning
-	if subPod.Annotations == nil {
-		subPod.Annotations = map[string]string{}
-	}
 	subPod.Annotations[meta.AnnotationLifecycleState] = string(meta.LifecycleStateFailed)
 
 	cli := ctrlfake.NewClientBuilder().
