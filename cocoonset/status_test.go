@@ -59,7 +59,7 @@ func TestBuildStatusReportsAgents(t *testing.T) {
 		cs.Spec.Agent.Replicas = 2
 	})
 	main := readyPod(mustBuildAgentPod(t, cs, 0, "", "", testScheme(t)))
-	sub1 := readyPod(mustBuildAgentPod(t, cs, 1, "vk-ns-demo-0", "", testScheme(t)))
+	sub1 := readyPod(mustBuildAgentPod(t, cs, 1, "vk-ns.demo-0", "", testScheme(t)))
 	classified := classifiedPods{
 		main:      main,
 		sub:       map[int32]*corev1.Pod{1: sub1},
@@ -76,7 +76,7 @@ func TestBuildStatusReportsAgents(t *testing.T) {
 	if len(status.Agents) != 2 {
 		t.Errorf("agents: %d, want 2", len(status.Agents))
 	}
-	if status.Agents[1].ForkedFrom != "vk-ns-demo-0" {
+	if status.Agents[1].ForkedFrom != "vk-ns.demo-0" {
 		t.Errorf("forkedFrom: %q", status.Agents[1].ForkedFrom)
 	}
 }
@@ -87,7 +87,7 @@ func TestBuildStatusReportsDeadLetteredPods(t *testing.T) {
 		cs.Generation = 3
 	})
 	main := readyPod(mustBuildAgentPod(t, cs, 0, "", "", testScheme(t)))
-	sub := readyPod(mustBuildAgentPod(t, cs, 1, "vk-ns-demo-0", "", testScheme(t)))
+	sub := readyPod(mustBuildAgentPod(t, cs, 1, "vk-ns.demo-0", "", testScheme(t)))
 	sub.Annotations[annotationDeadLetter] = "3"
 	classified := classifiedPods{
 		main:      main,
@@ -144,7 +144,7 @@ func TestAgentStatusFromPod(t *testing.T) {
 	vmRuntime := meta.VMRuntime{VMID: "qemu-1", IP: "10.0.0.1"}
 	vmRuntime.Apply(pod)
 	st := agentStatusFromPod(pod, 0, meta.RoleMain, "")
-	if st.VMName != "vk-ns-demo-0" {
+	if st.VMName != "vk-ns.demo-0" {
 		t.Errorf("vmName: %q", st.VMName)
 	}
 	if st.VMID != "qemu-1" {
