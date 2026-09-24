@@ -3,7 +3,7 @@ module github.com/cocoonstack/cocoon-operator
 go 1.27.1
 
 require (
-	github.com/cocoonstack/cocoon-common v0.3.5-0.20260924034939-67f0f9cf3e8f
+	github.com/cocoonstack/cocoon-common v0.3.5-0.20260924070459-6b6188ce11d7
 	github.com/go-logr/logr v1.4.4
 	github.com/google/go-containerregistry v0.22.1
 	github.com/projecteru2/core v0.1.5
@@ -73,7 +73,6 @@ require (
 	github.com/x448/float16 v0.8.4 // indirect
 	go.yaml.in/yaml/v2 v2.4.4 // indirect
 	go.yaml.in/yaml/v3 v3.0.5 // indirect
-	golang.org/x/mod v0.40.0 // indirect
 	golang.org/x/net v0.58.0 // indirect
 	golang.org/x/oauth2 v0.36.0 // indirect
 	golang.org/x/sys v0.47.0 // indirect
