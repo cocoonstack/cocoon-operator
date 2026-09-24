@@ -31,7 +31,7 @@ func TestReconcileHibernateProbeErrorsKeepDeadlineAcrossRetries(t *testing.T) {
 		},
 	}
 	pod := &corev1.Pod{Name: key.Name, Namespace: key.Namespace}
-	(&meta.VMSpec{VMName: "vk-ns.demo-0", Managed: true}).Apply(pod)
+	(&meta.VMSpec{VMName: "vk-ns-demo-0-505043", Managed: true}).Apply(pod)
 	meta.HibernateState(true).Apply(pod)
 	meta.StampCocoonSetGeneration(pod, 1)
 	meta.LifecycleStatus{State: meta.LifecycleStateHibernated, ObservedGeneration: 1}.Apply(pod)

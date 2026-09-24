@@ -24,10 +24,6 @@ import (
 func (r *Reconciler) reconcileSuspendRelease(ctx context.Context, cs *cocoonv1.CocoonSet, classified classifiedPods) (ctrl.Result, error) {
 	logger := log.WithFunc("cocoonset.Reconciler.reconcileSuspendRelease")
 
-	if r.Registry == nil {
-		return ctrl.Result{}, fmt.Errorf("hibernatePolicy=release on %s/%s requires a configured registry", cs.Namespace, cs.Name)
-	}
-
 	if !hasLivePod(classified) {
 		// seat already released, suspended before first boot, or only terminal pods left: settle Suspended
 		if err := r.clearSuspendDeadline(ctx, cs); err != nil {
@@ -94,7 +90,7 @@ func (r *Reconciler) reconcileWake(ctx context.Context, cs *cocoonv1.CocoonSet, 
 	cleanupPending := main != nil && meta.ReadRestoreFromHibernate(main) &&
 		!bool(meta.ReadHibernateState(main)) && hint != ""
 	waking = waking || cleanupPending
-	if (!waking && !suspended && !suspending) || r.Registry == nil {
+	if !waking && !suspended && !suspending {
 		return false, ctrl.Result{}, nil
 	}
 

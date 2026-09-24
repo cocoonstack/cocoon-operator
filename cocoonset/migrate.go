@@ -22,7 +22,7 @@ import (
 func (r *Reconciler) reconcileMigration(ctx context.Context, cs *cocoonv1.CocoonSet, classified classifiedPods) (bool, ctrl.Result, error) {
 	desired := cs.Spec.NodeName
 	migrating := cs.Status.Phase == cocoonv1.CocoonSetPhaseMigrating
-	if r.Registry == nil || (desired == "" && !migrating) {
+	if desired == "" && !migrating {
 		return false, ctrl.Result{}, nil
 	}
 	main := classified.main

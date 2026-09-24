@@ -35,7 +35,7 @@ func (r *Reconciler) ensureToolboxes(ctx context.Context, cs *cocoonv1.CocoonSet
 	changed := false
 	var requeueAfter time.Duration
 	for _, tb := range cs.Spec.Toolboxes {
-		podName := toolboxPodName(cs.Name, tb.Name)
+		podName := meta.ToolboxPodName(cs.Name, tb.Name)
 		if classified.allByName[podName] != nil && classified.toolbox[tb.Name] == nil {
 			return changed, requeueAfter, fmt.Errorf("create toolbox %s: name collision with existing pod %s", tb.Name, podName)
 		}

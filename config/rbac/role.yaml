@@ -24,11 +24,7 @@ rules:
     resources: ["pods/status"]
     verbs: ["get"]
 
-  # Leader election needs ConfigMap and Lease access in the
-  # operator's own namespace.
-  - apiGroups: [""]
-    resources: ["configmaps"]
-    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  # Leader election holds a Lease.
   - apiGroups: ["coordination.k8s.io"]
     resources: ["leases"]
     verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]

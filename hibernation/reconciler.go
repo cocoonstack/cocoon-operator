@@ -163,8 +163,6 @@ func (r *Reconciler) reconcileDelete(ctx context.Context, hib *cocoonv1.CocoonHi
 	// lock Status.VMName, the VM this CR actually owns; defense in depth for CRs retargeted before podRef became immutable
 	if hib.Status.VMName != "" {
 		defer r.lockVM(hib.Status.VMName)()
-	}
-	if r.Registry != nil && hib.Status.VMName != "" {
 		held, err := r.vmHeldByAnotherCR(ctx, hib)
 		if err != nil {
 			return err

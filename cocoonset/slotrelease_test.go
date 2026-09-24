@@ -25,14 +25,6 @@ var (
 	relHibernateTagKey = relVMName + ":" + meta.HibernateSnapshotTag
 )
 
-func TestSuspendReleaseRequiresRegistry(t *testing.T) {
-	cs := relCocoonSet()
-	r := &Reconciler{Scheme: testScheme(t)}
-	if _, err := r.reconcileSuspendRelease(t.Context(), cs, classifiedPods{}); err == nil {
-		t.Error("release without a registry must fail closed, not release the seat")
-	}
-}
-
 func TestSuspendReleaseNoPodsSettlesSuspended(t *testing.T) {
 	cs := relCocoonSet()
 	cli := relClient(t, cs)

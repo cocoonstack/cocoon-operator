@@ -69,7 +69,7 @@ func (r *Reconciler) markRestoreFromIntent(ctx context.Context, pod *corev1.Pod,
 // markRestoreIfHibernated fails closed; a fresh boot on probe error would let a re-hibernate overwrite the snapshot.
 func (r *Reconciler) markRestoreIfHibernated(ctx context.Context, pod *corev1.Pod, intent bool) error {
 	logger := log.WithFunc("cocoonset.Reconciler.markRestoreIfHibernated")
-	if !intent || r.Registry == nil {
+	if !intent {
 		return nil
 	}
 	vmName := meta.ParseVMSpec(pod).VMName

@@ -133,7 +133,7 @@ func TestReconcileDeleteClearsHibernateTagAndFinalizer(t *testing.T) {
 			DeletionTimestamp: &metav1.Time{Time: time.Now()},
 		},
 		Spec:   cocoonv1.CocoonHibernationSpec{PodRef: cocoonv1.HibernationPodRef{Name: "demo-0"}},
-		Status: cocoonv1.CocoonHibernationStatus{VMName: "vk-ns.demo-0"},
+		Status: cocoonv1.CocoonHibernationStatus{VMName: "vk-ns-demo-0-505043"},
 	}
 
 	scheme := testScheme(t)
@@ -167,7 +167,7 @@ func TestReconcileDeleteTagErrorStillRemovesFinalizer(t *testing.T) {
 			DeletionTimestamp: &metav1.Time{Time: time.Now()},
 		},
 		Spec:   cocoonv1.CocoonHibernationSpec{PodRef: cocoonv1.HibernationPodRef{Name: "demo-0"}},
-		Status: cocoonv1.CocoonHibernationStatus{VMName: "vk-ns.demo-0"},
+		Status: cocoonv1.CocoonHibernationStatus{VMName: "vk-ns-demo-0-505043"},
 	}
 
 	scheme := testScheme(t)
@@ -235,7 +235,7 @@ func TestReconcileHibernateProbeErrorAtDeadlineFails(t *testing.T) {
 		},
 	}
 	pod := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "demo-0", Namespace: "ns"}}
-	(&meta.VMSpec{VMName: "vk-ns.demo-0", Managed: true}).Apply(pod)
+	(&meta.VMSpec{VMName: "vk-ns-demo-0-505043", Managed: true}).Apply(pod)
 	meta.HibernateState(true).Apply(pod)
 	pod.Annotations[meta.AnnotationLifecycleState] = string(meta.LifecycleStateHibernated)
 
@@ -267,8 +267,8 @@ func TestReconcileHibernateProbeErrorAtDeadlineFails(t *testing.T) {
 
 func TestPodVMNameRoundtrip(t *testing.T) {
 	pod := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "demo-0", Namespace: "ns"}}
-	(&meta.VMSpec{VMName: "vk-ns.demo-0", Managed: true}).Apply(pod)
-	if got := meta.ParseVMSpec(pod).VMName; got != "vk-ns.demo-0" {
+	(&meta.VMSpec{VMName: "vk-ns-demo-0-505043", Managed: true}).Apply(pod)
+	if got := meta.ParseVMSpec(pod).VMName; got != "vk-ns-demo-0-505043" {
 		t.Errorf("vmName roundtrip: %q", got)
 	}
 }
@@ -282,7 +282,7 @@ func TestReconcileHibernateSurfacesProbeError(t *testing.T) {
 		},
 	}
 	pod := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "demo-0", Namespace: "ns"}}
-	(&meta.VMSpec{VMName: "vk-ns.demo-0", Managed: true}).Apply(pod)
+	(&meta.VMSpec{VMName: "vk-ns-demo-0-505043", Managed: true}).Apply(pod)
 	meta.HibernateState(true).Apply(pod)
 	pod.Annotations[meta.AnnotationLifecycleState] = string(meta.LifecycleStateHibernated)
 
@@ -322,7 +322,7 @@ func TestReconcileHibernateFoldsAbsenceToRequeue(t *testing.T) {
 		},
 	}
 	pod := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "demo-0", Namespace: "ns"}}
-	(&meta.VMSpec{VMName: "vk-ns.demo-0", Managed: true}).Apply(pod)
+	(&meta.VMSpec{VMName: "vk-ns-demo-0-505043", Managed: true}).Apply(pod)
 	meta.HibernateState(true).Apply(pod)
 
 	scheme := testScheme(t)
@@ -419,7 +419,7 @@ func TestReconcileWakeFailsOnTimeout(t *testing.T) {
 		},
 	}
 	pod := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "demo-0", Namespace: "ns"}}
-	(&meta.VMSpec{VMName: "vk-ns.demo-0", Managed: true}).Apply(pod)
+	(&meta.VMSpec{VMName: "vk-ns-demo-0-505043", Managed: true}).Apply(pod)
 
 	scheme := testScheme(t)
 	cli := ctrlfake.NewClientBuilder().
@@ -463,7 +463,7 @@ func TestReconcileWakeRecoversFromFailed(t *testing.T) {
 		},
 	}
 	pod := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "demo-0", Namespace: "ns"}}
-	(&meta.VMSpec{VMName: "vk-ns.demo-0", Managed: true}).Apply(pod)
+	(&meta.VMSpec{VMName: "vk-ns-demo-0-505043", Managed: true}).Apply(pod)
 
 	scheme := testScheme(t)
 	cli := ctrlfake.NewClientBuilder().
@@ -523,7 +523,7 @@ func TestReconcileWakeClearsHibernateResidueOnFastPath(t *testing.T) {
 			}},
 		},
 	}
-	(&meta.VMSpec{VMName: "vk-ns.demo-0", Managed: true}).Apply(pod)
+	(&meta.VMSpec{VMName: "vk-ns-demo-0-505043", Managed: true}).Apply(pod)
 	(&meta.VMRuntime{VMID: "vmid-live"}).Apply(pod)
 	meta.HibernateState(true).Apply(pod)
 
@@ -619,7 +619,7 @@ func TestReconcileHibernateFailsOnTimeout(t *testing.T) {
 		},
 	}
 	pod := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "demo-0", Namespace: "ns"}}
-	(&meta.VMSpec{VMName: "vk-ns.demo-0", Managed: true}).Apply(pod)
+	(&meta.VMSpec{VMName: "vk-ns-demo-0-505043", Managed: true}).Apply(pod)
 	meta.HibernateState(true).Apply(pod)
 
 	scheme := testScheme(t)
@@ -663,7 +663,7 @@ func TestReconcileHibernateRecoversFromFailed(t *testing.T) {
 		},
 	}
 	pod := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "demo-0", Namespace: "ns"}}
-	(&meta.VMSpec{VMName: "vk-ns.demo-0", Managed: true}).Apply(pod)
+	(&meta.VMSpec{VMName: "vk-ns-demo-0-505043", Managed: true}).Apply(pod)
 
 	scheme := testScheme(t)
 	cli := ctrlfake.NewClientBuilder().
@@ -699,7 +699,7 @@ func TestSetPhasePatchesObservedGenerationOnSamePhase(t *testing.T) {
 		ObjectMeta: metav1.ObjectMeta{Name: "hib", Namespace: "ns", Generation: 7},
 		Status: cocoonv1.CocoonHibernationStatus{
 			Phase:              cocoonv1.CocoonHibernationPhaseHibernated,
-			VMName:             "vk-ns.demo-0",
+			VMName:             "vk-ns-demo-0-505043",
 			ObservedGeneration: 6,
 		},
 	}
@@ -711,7 +711,7 @@ func TestSetPhasePatchesObservedGenerationOnSamePhase(t *testing.T) {
 		Build()
 	r := &Reconciler{Client: cli, Scheme: scheme}
 
-	if err := r.setPhase(t.Context(), hib, cocoonv1.CocoonHibernationPhaseHibernated, "vk-ns.demo-0"); err != nil {
+	if err := r.setPhase(t.Context(), hib, cocoonv1.CocoonHibernationPhaseHibernated, "vk-ns-demo-0-505043"); err != nil {
 		t.Fatalf("setPhase: %v", err)
 	}
 
@@ -781,7 +781,7 @@ func TestReconcileKeepsHibernatedPhaseThroughPodGaps(t *testing.T) {
 						Desire: cocoonv1.HibernationDesireHibernate,
 						PodRef: cocoonv1.HibernationPodRef{Name: "demo-0"},
 					},
-					Status: cocoonv1.CocoonHibernationStatus{Phase: phase, VMName: "vk-ns.demo-0"},
+					Status: cocoonv1.CocoonHibernationStatus{Phase: phase, VMName: "vk-ns-demo-0-505043"},
 				}
 				scheme := testScheme(t)
 				builder := ctrlfake.NewClientBuilder().
@@ -824,7 +824,7 @@ func TestReconcileHibernateIgnoresStaleTagUntilLifecycleHibernated(t *testing.T)
 		},
 	}
 	pod := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "demo-0", Namespace: "ns"}}
-	(&meta.VMSpec{VMName: "vk-ns.demo-0", Managed: true}).Apply(pod)
+	(&meta.VMSpec{VMName: "vk-ns-demo-0-505043", Managed: true}).Apply(pod)
 	meta.HibernateState(true).Apply(pod)
 
 	scheme := testScheme(t)
@@ -874,7 +874,7 @@ func TestReconcileDeleteKeepsTagForFreshDuplicate(t *testing.T) {
 			DeletionTimestamp: &metav1.Time{Time: time.Now()},
 		},
 		Spec:   cocoonv1.CocoonHibernationSpec{PodRef: cocoonv1.HibernationPodRef{Name: "demo-0"}},
-		Status: cocoonv1.CocoonHibernationStatus{VMName: "vk-ns.demo-0"},
+		Status: cocoonv1.CocoonHibernationStatus{VMName: "vk-ns-demo-0-505043"},
 	}
 	fresh := &cocoonv1.CocoonHibernation{
 		ObjectMeta: metav1.ObjectMeta{Name: "c", Namespace: "ns", UID: "uid-c"},
@@ -906,7 +906,7 @@ func TestReconcileHibernateRejectsStaleLifecycleRound(t *testing.T) {
 		},
 	}
 	pod := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "demo-0", Namespace: "ns"}}
-	(&meta.VMSpec{VMName: "vk-ns.demo-0", Managed: true}).Apply(pod)
+	(&meta.VMSpec{VMName: "vk-ns-demo-0-505043", Managed: true}).Apply(pod)
 	meta.HibernateState(true).Apply(pod)
 	meta.StampCocoonSetGeneration(pod, 3)
 	meta.LifecycleStatus{State: meta.LifecycleStateHibernated, ObservedGeneration: 2}.Apply(pod)
@@ -957,10 +957,10 @@ func TestHibernateDesireFinishesInFlightWakeFirst(t *testing.T) {
 			Desire: cocoonv1.HibernationDesireHibernate,
 			PodRef: cocoonv1.HibernationPodRef{Name: "demo-0"},
 		},
-		Status: cocoonv1.CocoonHibernationStatus{Phase: cocoonv1.CocoonHibernationPhaseWaking, VMName: "vk-ns.demo-0"},
+		Status: cocoonv1.CocoonHibernationStatus{Phase: cocoonv1.CocoonHibernationPhaseWaking, VMName: "vk-ns-demo-0-505043"},
 	}
 	pod := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "demo-0", Namespace: "ns"}}
-	(&meta.VMSpec{VMName: "vk-ns.demo-0", Managed: true}).Apply(pod)
+	(&meta.VMSpec{VMName: "vk-ns-demo-0-505043", Managed: true}).Apply(pod)
 	meta.LifecycleStatus{State: meta.LifecycleStateHibernated}.Apply(pod)
 
 	scheme := testScheme(t)
@@ -996,7 +996,7 @@ func TestWakeDesireFinishesInFlightHibernateFirst(t *testing.T) {
 			Desire: cocoonv1.HibernationDesireWake,
 			PodRef: cocoonv1.HibernationPodRef{Name: "demo-0"},
 		},
-		Status: cocoonv1.CocoonHibernationStatus{Phase: cocoonv1.CocoonHibernationPhaseHibernating, VMName: "vk-ns.demo-0"},
+		Status: cocoonv1.CocoonHibernationStatus{Phase: cocoonv1.CocoonHibernationPhaseHibernating, VMName: "vk-ns-demo-0-505043"},
 	}
 	pod := &corev1.Pod{
 		ObjectMeta: metav1.ObjectMeta{Name: "demo-0", Namespace: "ns"},
@@ -1004,7 +1004,7 @@ func TestWakeDesireFinishesInFlightHibernateFirst(t *testing.T) {
 			{State: corev1.ContainerState{Running: &corev1.ContainerStateRunning{}}},
 		}},
 	}
-	(&meta.VMSpec{VMName: "vk-ns.demo-0", Managed: true}).Apply(pod)
+	(&meta.VMSpec{VMName: "vk-ns-demo-0-505043", Managed: true}).Apply(pod)
 	(&meta.VMRuntime{VMID: "vmid-old"}).Apply(pod)
 	meta.HibernateState(true).Apply(pod)
 
@@ -1042,12 +1042,12 @@ func TestReconcileDeleteKeepsTagWhileAnotherCRHoldsVM(t *testing.T) {
 			DeletionTimestamp: &metav1.Time{Time: time.Now()},
 		},
 		Spec:   cocoonv1.CocoonHibernationSpec{PodRef: cocoonv1.HibernationPodRef{Name: "demo-0"}},
-		Status: cocoonv1.CocoonHibernationStatus{VMName: "vk-ns.demo-0", Phase: cocoonv1.CocoonHibernationPhaseHibernated},
+		Status: cocoonv1.CocoonHibernationStatus{VMName: "vk-ns-demo-0-505043", Phase: cocoonv1.CocoonHibernationPhaseHibernated},
 	}
 	holder := &cocoonv1.CocoonHibernation{
 		ObjectMeta: metav1.ObjectMeta{Name: "b", Namespace: "ns", UID: "uid-b", Finalizers: []string{finalizerName}},
 		Spec:       cocoonv1.CocoonHibernationSpec{PodRef: cocoonv1.HibernationPodRef{Name: "demo-0"}},
-		Status:     cocoonv1.CocoonHibernationStatus{VMName: "vk-ns.demo-0", Phase: cocoonv1.CocoonHibernationPhaseHibernated},
+		Status:     cocoonv1.CocoonHibernationStatus{VMName: "vk-ns-demo-0-505043", Phase: cocoonv1.CocoonHibernationPhaseHibernated},
 	}
 	scheme := testScheme(t)
 	cli := ctrlfake.NewClientBuilder().
@@ -1169,7 +1169,7 @@ func TestReconcileSerializesCRsTargetingOnePod(t *testing.T) {
 		ObjectMeta: metav1.ObjectMeta{
 			Name: "demo-0", Namespace: "ns",
 			Annotations: map[string]string{
-				meta.AnnotationVMName: "vk-ns.demo-0",
+				meta.AnnotationVMName: "vk-ns-demo-0-505043",
 				meta.AnnotationVMID:   "vmid-1",
 			},
 		},
@@ -1211,7 +1211,7 @@ func TestReconcileSerializesDeletingCRAgainstLiveCR(t *testing.T) {
 			Desire: cocoonv1.HibernationDesireHibernate,
 			PodRef: cocoonv1.HibernationPodRef{Name: "demo-0"},
 		},
-		Status: cocoonv1.CocoonHibernationStatus{VMName: "vk-ns.demo-0"},
+		Status: cocoonv1.CocoonHibernationStatus{VMName: "vk-ns-demo-0-505043"},
 	}
 	live := &cocoonv1.CocoonHibernation{
 		ObjectMeta: metav1.ObjectMeta{Name: "b", Namespace: "ns", Finalizers: []string{finalizerName}},
@@ -1222,7 +1222,7 @@ func TestReconcileSerializesDeletingCRAgainstLiveCR(t *testing.T) {
 	}
 	pod := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{
 		Name: "demo-0", Namespace: "ns",
-		Annotations: map[string]string{meta.AnnotationVMName: "vk-ns.demo-0"},
+		Annotations: map[string]string{meta.AnnotationVMName: "vk-ns-demo-0-505043"},
 	}}
 	scheme := testScheme(t)
 	cli := ctrlfake.NewClientBuilder().
@@ -1258,7 +1258,7 @@ func TestReconcileSerializesRetargetedCRAgainstItsStaleVM(t *testing.T) {
 			Desire: cocoonv1.HibernationDesireHibernate,
 			PodRef: cocoonv1.HibernationPodRef{Name: "demo-1"},
 		},
-		Status: cocoonv1.CocoonHibernationStatus{VMName: "vk-ns.demo-0"},
+		Status: cocoonv1.CocoonHibernationStatus{VMName: "vk-ns-demo-0-505043"},
 	}
 	live := &cocoonv1.CocoonHibernation{
 		ObjectMeta: metav1.ObjectMeta{Name: "b", Namespace: "ns", Finalizers: []string{finalizerName}},
@@ -1269,7 +1269,7 @@ func TestReconcileSerializesRetargetedCRAgainstItsStaleVM(t *testing.T) {
 	}
 	pod := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{
 		Name: "demo-0", Namespace: "ns",
-		Annotations: map[string]string{meta.AnnotationVMName: "vk-ns.demo-0"},
+		Annotations: map[string]string{meta.AnnotationVMName: "vk-ns-demo-0-505043"},
 	}}
 	scheme := testScheme(t)
 	cli := ctrlfake.NewClientBuilder().
@@ -1309,7 +1309,7 @@ func TestReconcileWakeLeavesSettledCRInert(t *testing.T) {
 			Desire: cocoonv1.HibernationDesireWake,
 			PodRef: cocoonv1.HibernationPodRef{Name: "demo-0"},
 		},
-		Status: cocoonv1.CocoonHibernationStatus{Phase: cocoonv1.CocoonHibernationPhaseActive, VMName: "vk-ns.demo-0"},
+		Status: cocoonv1.CocoonHibernationStatus{Phase: cocoonv1.CocoonHibernationPhaseActive, VMName: "vk-ns-demo-0-505043"},
 	}
 	pod := &corev1.Pod{
 		ObjectMeta: metav1.ObjectMeta{Name: "demo-0", Namespace: "ns"},
@@ -1319,7 +1319,7 @@ func TestReconcileWakeLeavesSettledCRInert(t *testing.T) {
 			}},
 		},
 	}
-	(&meta.VMSpec{VMName: "vk-ns.demo-0", Managed: true}).Apply(pod)
+	(&meta.VMSpec{VMName: "vk-ns-demo-0-505043", Managed: true}).Apply(pod)
 	(&meta.VMRuntime{VMID: "vmid-live"}).Apply(pod)
 	meta.HibernateState(true).Apply(pod)
 
@@ -1357,7 +1357,7 @@ func TestReconcileWakeReclaimsALeakedTagOnASettledCR(t *testing.T) {
 			Desire: cocoonv1.HibernationDesireWake,
 			PodRef: cocoonv1.HibernationPodRef{Name: "demo-0"},
 		},
-		Status: cocoonv1.CocoonHibernationStatus{Phase: cocoonv1.CocoonHibernationPhaseActive, VMName: "vk-ns.demo-0"},
+		Status: cocoonv1.CocoonHibernationStatus{Phase: cocoonv1.CocoonHibernationPhaseActive, VMName: "vk-ns-demo-0-505043"},
 	}
 	pod := wakeLivePod()
 
@@ -1394,7 +1394,7 @@ func TestReconcileWakeSettlesThenRetriesTheReclaim(t *testing.T) {
 			Desire: cocoonv1.HibernationDesireWake,
 			PodRef: cocoonv1.HibernationPodRef{Name: "demo-0"},
 		},
-		Status: cocoonv1.CocoonHibernationStatus{Phase: cocoonv1.CocoonHibernationPhaseWaking, VMName: "vk-ns.demo-0"},
+		Status: cocoonv1.CocoonHibernationStatus{Phase: cocoonv1.CocoonHibernationPhaseWaking, VMName: "vk-ns-demo-0-505043"},
 	}
 	pod := wakeLivePod()
 
@@ -1455,7 +1455,7 @@ func wakeLivePod() *corev1.Pod {
 			}},
 		},
 	}
-	(&meta.VMSpec{VMName: "vk-ns.demo-0", Managed: true}).Apply(pod)
+	(&meta.VMSpec{VMName: "vk-ns-demo-0-505043", Managed: true}).Apply(pod)
 	(&meta.VMRuntime{VMID: "vmid-live"}).Apply(pod)
 	return pod
 }
