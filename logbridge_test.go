@@ -1,7 +1,13 @@
 package main
 
 import (
+	"bytes"
+	"errors"
+	"strings"
 	"testing"
+
+	"github.com/go-logr/logr"
+	"github.com/projecteru2/core/log"
 )
 
 func TestCRSinkLine(t *testing.T) {
@@ -48,12 +54,34 @@ func TestCRSinkEnabledOnlyV0(t *testing.T) {
 	}
 }
 
-func TestCRSinkErrorNilDoesNotPanic(t *testing.T) {
-	s := &crSink{ctx: t.Context(), name: "controller-runtime"}
-	s.Error(nil, "update event has no old object", "type", "pod")
-	s.Error(assertErr{}, "real error path")
+func TestCRSinkErrorKeepsTheErrorLevel(t *testing.T) {
+	for _, tt := range []struct {
+		name string
+		err  error
+		want string
+	}{
+		{"nil err", nil, `"error":"Update event has no old object to update"`},
+		{"err", errors.New("boom"), `"error":"boom"`},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			buf := captureLog(t)
+			logr.New(&crSink{ctx: t.Context()}).WithName("predicate").Error(tt.err, "Update event has no old object to update", "event", "update")
+			got := buf.String()
+			for _, part := range []string{`"level":"error"`, `"func":"predicate"`, `"message":"Update event has no old object to update event=update"`, tt.want} {
+				if !strings.Contains(got, part) {
+					t.Fatalf("missing %s in %s", part, got)
+				}
+			}
+		})
+	}
 }
 
-type assertErr struct{}
-
-func (assertErr) Error() string { return "boom" }
+func captureLog(t *testing.T) *bytes.Buffer {
+	t.Helper()
+	global := log.GetGlobalLogger()
+	prev := *global
+	var buf bytes.Buffer
+	*global = prev.Output(&buf)
+	t.Cleanup(func() { *global = prev })
+	return &buf
+}

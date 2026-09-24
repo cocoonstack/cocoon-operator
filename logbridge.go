@@ -3,6 +3,7 @@ package main
 import (
 	"cmp"
 	"context"
+	"errors"
 	"fmt"
 	"slices"
 	"strings"
@@ -28,9 +29,8 @@ func (s *crSink) Info(_ int, msg string, kvs ...any) {
 
 func (s *crSink) Error(err error, msg string, kvs ...any) {
 	if err == nil {
-		// logr allows Error(nil, ...) for anomaly reports, which core/log would drop; keep them visible as warnings
-		log.WithFunc(s.funcName()).Warn(s.ctx, s.line(msg, kvs))
-		return
+		// core/log drops a nil err, and logr passes nil for an error-level report with no error value.
+		err = errors.New(msg)
 	}
 	log.WithFunc(s.funcName()).Error(s.ctx, err, s.line(msg, kvs))
 }
