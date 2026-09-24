@@ -1020,7 +1020,7 @@ func TestReconcileSuspendRequeuesWhileOldMainTerminates(t *testing.T) {
 	cs := newCocoonSet("demo", func(cs *cocoonv1.CocoonSet) { cs.Spec.Suspend = true })
 	old := mustBuildAgentPod(t, cs, 0, "", "", scheme)
 	cli := ctrlfake.NewClientBuilder().WithScheme(scheme).WithObjects(cs, old).Build()
-	r := &Reconciler{Client: cli, Scheme: scheme}
+	r := &Reconciler{Client: cli, Scheme: scheme, Registry: &fakeRegistry{}}
 	res, err := r.reconcileSuspend(t.Context(), cs, classifiedPods{allByName: map[string]*corev1.Pod{}})
 	if err != nil {
 		t.Fatalf("a terminating main must requeue, not error: %v", err)

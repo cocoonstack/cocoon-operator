@@ -45,19 +45,6 @@ func TestMarkRestoreIfHibernated(t *testing.T) {
 	}
 }
 
-func TestMarkRestoreIfHibernatedNoRegistry(t *testing.T) {
-	pod := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{
-		Annotations: map[string]string{meta.AnnotationVMName: "vm"},
-	}}
-	r := &Reconciler{}
-	if err := r.markRestoreIfHibernated(t.Context(), pod, true); err != nil {
-		t.Fatalf("nil registry should be a no-op, got %v", err)
-	}
-	if meta.ReadRestoreFromHibernate(pod) {
-		t.Error("no registry must not flag restore")
-	}
-}
-
 func TestPodsRestorableByCR(t *testing.T) {
 	hib := func(pod string, phase cocoonv1.CocoonHibernationPhase) *cocoonv1.CocoonHibernation {
 		return &cocoonv1.CocoonHibernation{

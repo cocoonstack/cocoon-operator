@@ -51,20 +51,16 @@ func (r *Reconciler) reconcileDelete(ctx context.Context, cs *cocoonv1.CocoonSet
 	}
 
 	// :hibernate is always orphaned at teardown; :latest is kept when vk-cocoon pushed it for retag
-	if r.Registry != nil {
-		for _, name := range parseVMNamesAnnotation(cs.Annotations[annotationDeleteVMNames]) {
-			if err := snapshot.DeleteManifestIfPresent(ctx, r.Registry, name, meta.HibernateSnapshotTag); err != nil {
-				logger.Errorf(ctx, err, "delete snapshot %s:%s", name, meta.HibernateSnapshotTag)
-			}
-			if shouldKeepLatestTag(cs, name) {
-				continue
-			}
-			if err := snapshot.DeleteManifestIfPresent(ctx, r.Registry, name, meta.DefaultSnapshotTag); err != nil {
-				logger.Errorf(ctx, err, "delete snapshot %s:%s", name, meta.DefaultSnapshotTag)
-			}
+	for _, name := range parseVMNamesAnnotation(cs.Annotations[annotationDeleteVMNames]) {
+		if err := snapshot.DeleteManifestIfPresent(ctx, r.Registry, name, meta.HibernateSnapshotTag); err != nil {
+			logger.Errorf(ctx, err, "delete snapshot %s:%s", name, meta.HibernateSnapshotTag)
 		}
-	} else {
-		logger.Warnf(ctx, "skipping registry tag GC for cocoonset %s/%s: registry not configured", cs.Namespace, cs.Name)
+		if shouldKeepLatestTag(cs, name) {
+			continue
+		}
+		if err := snapshot.DeleteManifestIfPresent(ctx, r.Registry, name, meta.DefaultSnapshotTag); err != nil {
+			logger.Errorf(ctx, err, "delete snapshot %s:%s", name, meta.DefaultSnapshotTag)
+		}
 	}
 
 	if controllerutil.RemoveFinalizer(cs, finalizerName) {
