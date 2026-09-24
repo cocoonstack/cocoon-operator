@@ -179,7 +179,7 @@ func desiredPodNames(cs *cocoonv1.CocoonSet) map[string]bool {
 		names[agentPodName(cs.Name, slot)] = true
 	}
 	for _, tb := range cs.Spec.Toolboxes {
-		names[toolboxPodName(cs.Name, tb.Name)] = true
+		names[meta.ToolboxPodName(cs.Name, tb.Name)] = true
 	}
 	return names
 }

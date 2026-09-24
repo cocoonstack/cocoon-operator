@@ -28,7 +28,7 @@ func TestReconcileSteadyStateSkipsHibernationList(t *testing.T) {
 		}
 	})
 	mainPod := readyPod(mustBuildAgentPod(t, cs, 0, "", "", scheme))
-	subPod := readyPod(mustBuildAgentPod(t, cs, 1, "vk-ns.demo-0", "", scheme))
+	subPod := readyPod(mustBuildAgentPod(t, cs, 1, "vk-ns-demo-0-505043", "", scheme))
 	tbPod := readyPod(mustBuildToolboxPod(t, cs, cs.Spec.Toolboxes[0], scheme))
 
 	var lists atomic.Int32
@@ -79,7 +79,7 @@ func TestReconcileMissingPodsListsHibernationsOnce(t *testing.T) {
 	if got := lists.Load(); got != 1 {
 		t.Errorf("reconcile listed CocoonHibernations %d times, want exactly 1", got)
 	}
-	for _, name := range []string{"demo-1", "demo-2", toolboxPodName(cs.Name, "tb")} {
+	for _, name := range []string{"demo-1", "demo-2", meta.ToolboxPodName(cs.Name, "tb")} {
 		if err := cli.Get(t.Context(), types.NamespacedName{Namespace: "ns", Name: name}, &corev1.Pod{}); err != nil {
 			t.Errorf("pod %s should have been created: %v", name, err)
 		}

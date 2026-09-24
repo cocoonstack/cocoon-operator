@@ -88,7 +88,7 @@ func TestEnsureToolboxesRestoresHibernated(t *testing.T) {
 			Toolboxes: []cocoonv1.ToolboxSpec{{Name: "tb", Image: "img", Mode: cocoonv1.ToolboxModeRun}},
 		},
 	}
-	tbPodName := toolboxPodName(cs.Name, "tb")
+	tbPodName := meta.ToolboxPodName(cs.Name, "tb")
 	tbVMName := meta.VMNameForPod(cs.Namespace, tbPodName)
 	hib := &cocoonv1.CocoonHibernation{
 		ObjectMeta: metav1.ObjectMeta{Name: "h-tb", Namespace: "ns"},

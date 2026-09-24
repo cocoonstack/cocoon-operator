@@ -3,7 +3,7 @@ module github.com/cocoonstack/cocoon-operator
 go 1.27.0
 
 require (
-	github.com/cocoonstack/cocoon-common v0.3.5-0.20260923170943-2d59536cb0d4
+	github.com/cocoonstack/cocoon-common v0.3.5-0.20260924034939-67f0f9cf3e8f
 	github.com/go-logr/logr v1.4.4
 	github.com/google/go-containerregistry v0.22.1
 	github.com/projecteru2/core v0.1.3
@@ -46,10 +46,10 @@ require (
 	github.com/go-openapi/swag/typeutils v0.28.0 // indirect
 	github.com/go-openapi/swag/yamlutils v0.28.0 // indirect
 	github.com/gogo/protobuf v1.3.2 // indirect
-	github.com/google/gnostic-models v0.7.0 // indirect
+	github.com/google/gnostic-models v0.7.1 // indirect
 	github.com/google/uuid v1.6.0 // indirect
 	github.com/json-iterator/go v1.1.12 // indirect
-	github.com/klauspost/compress v1.19.2 // indirect
+	github.com/klauspost/compress v1.20.0 // indirect
 	github.com/kr/pretty v0.3.1 // indirect
 	github.com/kr/text v0.2.0 // indirect
 	github.com/kylelemons/godebug v1.1.0 // indirect

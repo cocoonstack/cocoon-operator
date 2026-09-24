@@ -28,7 +28,7 @@ func TestBuildAgentPodSlot0IsMain(t *testing.T) {
 	if pod.Labels[meta.LabelSlot] != "0" {
 		t.Errorf("slot label: %q, want 0", pod.Labels[meta.LabelSlot])
 	}
-	if pod.Annotations[meta.AnnotationVMName] != "vk-ns.demo-0" {
+	if pod.Annotations[meta.AnnotationVMName] != "vk-ns-demo-0-505043" {
 		t.Errorf("vmname: %q", pod.Annotations[meta.AnnotationVMName])
 	}
 	if pod.Annotations[meta.AnnotationForkFrom] != "" {
@@ -40,7 +40,7 @@ func TestBuildAgentPodSubAgentForksFromMain(t *testing.T) {
 	cs := newCocoonSet("demo", func(cs *cocoonv1.CocoonSet) {
 		cs.Spec.Agent.Replicas = 2
 	})
-	mainVMName := "vk-ns.demo-0"
+	mainVMName := "vk-ns-demo-0-505043"
 	pod := mustBuildAgentPod(t, cs, 1, mainVMName, "cocoonset-node-2", testScheme(t))
 
 	if pod.Labels[meta.LabelRole] != meta.RoleSubAgent {
@@ -121,8 +121,8 @@ func TestClassifyPodsGroupsByRole(t *testing.T) {
 	cs := newCocoonSet("demo")
 	scheme := testScheme(t)
 	main := mustBuildAgentPod(t, cs, 0, "", "", scheme)
-	sub1 := mustBuildAgentPod(t, cs, 1, "vk-ns.demo-0", "", scheme)
-	sub2 := mustBuildAgentPod(t, cs, 2, "vk-ns.demo-0", "", scheme)
+	sub1 := mustBuildAgentPod(t, cs, 1, "vk-ns-demo-0-505043", "", scheme)
+	sub2 := mustBuildAgentPod(t, cs, 2, "vk-ns-demo-0-505043", "", scheme)
 	tb := mustBuildToolboxPod(t, cs, cocoonv1.ToolboxSpec{Name: "tb", Image: "x"}, scheme)
 
 	pods := []corev1.Pod{*main, *sub1, *sub2, *tb}
@@ -372,7 +372,7 @@ func TestPodSpecMatchesSubAgentPreservesForkFrom(t *testing.T) {
 		cs.Spec.Agent.Replicas = 1
 	})
 	scheme := testScheme(t)
-	pod := mustBuildAgentPod(t, cs, 1, "vk-ns.demo-0", "", scheme)
+	pod := mustBuildAgentPod(t, cs, 1, "vk-ns-demo-0-505043", "", scheme)
 	if !podSpecMatchesAgent(pod, cs, 1) {
 		t.Error("sub-agent should match when spec is unchanged")
 	}
@@ -617,7 +617,7 @@ func TestBuildAgentPodSubAgentIgnoresNodeNameAffinity(t *testing.T) {
 		cs.Spec.Agent.Replicas = 2
 		cs.Spec.NodeName = "node-b"
 	})
-	pod := mustBuildAgentPod(t, cs, 1, "vk-ns.demo-0", "node-a", testScheme(t))
+	pod := mustBuildAgentPod(t, cs, 1, "vk-ns-demo-0-505043", "node-a", testScheme(t))
 	if pod.Spec.NodeName != "node-a" {
 		t.Errorf("sub-agent must hard-bind to main's node; NodeName=%q want node-a", pod.Spec.NodeName)
 	}

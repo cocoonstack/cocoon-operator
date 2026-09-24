@@ -137,7 +137,7 @@ func hostnameSelectorTerm(nodeName string) corev1.NodeSelectorTerm {
 }
 
 func buildToolboxPod(cs *cocoonv1.CocoonSet, tb cocoonv1.ToolboxSpec, scheme *runtime.Scheme) (*corev1.Pod, error) {
-	podName := toolboxPodName(cs.Name, tb.Name)
+	podName := meta.ToolboxPodName(cs.Name, tb.Name)
 	vmName := meta.VMNameForPod(cs.Namespace, podName)
 
 	pod, err := newManagedPod(cs, podName, meta.RoleToolbox, tb.Name, scheme)
@@ -158,11 +158,6 @@ func buildToolboxPod(cs *cocoonv1.CocoonSet, tb cocoonv1.ToolboxSpec, scheme *ru
 
 func agentPodName(csName string, slot int32) string {
 	return fmt.Sprintf("%s-%d", csName, slot)
-}
-
-// toolboxPodName is shared by the builder and the collision check so the two cannot diverge.
-func toolboxPodName(csName, tbName string) string {
-	return fmt.Sprintf("%s-%s", csName, tbName)
 }
 
 func newManagedPod(cs *cocoonv1.CocoonSet, podName, role, slotLabel string, scheme *runtime.Scheme) (*corev1.Pod, error) {
