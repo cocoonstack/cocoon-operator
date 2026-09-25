@@ -40,6 +40,9 @@ func (r *Reconciler) ensureToolboxes(ctx context.Context, cs *cocoonv1.CocoonSet
 			return changed, requeueAfter, fmt.Errorf("create toolbox %s: name collision with existing pod %s", tb.Name, podName)
 		}
 		if pod, exists := classified.toolbox[tb.Name]; exists {
+			if err := r.reclaimImageDriftedSnapshot(ctx, cs, pod, tb.Image); err != nil {
+				return changed, requeueAfter, err
+			}
 			deleted, wait, err := r.triagePod(ctx, logger, cs, pod, podSpecMatchesToolbox(pod, cs, tb))
 			if err != nil {
 				return changed, requeueAfter, err

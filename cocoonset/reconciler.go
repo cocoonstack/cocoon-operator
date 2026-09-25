@@ -170,6 +170,9 @@ func (r *Reconciler) rebuildDriftedMain(ctx context.Context, logger *log.Fields,
 	if classified.main == nil || podSpecMatchesAgent(classified.main, cs, 0) {
 		return false, ctrl.Result{}, nil
 	}
+	if err := r.reclaimImageDriftedSnapshot(ctx, cs, classified.main, cs.Spec.Agent.Image); err != nil {
+		return true, ctrl.Result{}, err
+	}
 	deleted, wait, err := r.triagePod(ctx, logger, cs, classified.main, false)
 	if err != nil {
 		return true, ctrl.Result{}, err

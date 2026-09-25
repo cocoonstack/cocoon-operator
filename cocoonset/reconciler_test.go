@@ -231,6 +231,104 @@ func TestReconcileReclaimsTheTagAPlainUnsuspendWoke(t *testing.T) {
 	}
 }
 
+func TestReconcileRebuildOfAnOwedMainDropsTheSnapshotOnlyAcrossAnImageChange(t *testing.T) {
+	for _, tc := range []struct {
+		name        string
+		edit        func(*cocoonv1.CocoonSet)
+		wantDropped bool
+	}{
+		{name: "image edit", edit: func(cs *cocoonv1.CocoonSet) { cs.Spec.Agent.Image = "ghcr.io/cocoonstack/cocoon/ubuntu:26.04" }, wantDropped: true},
+		{name: "service account edit", edit: func(cs *cocoonv1.CocoonSet) { cs.Spec.Agent.ServiceAccountName = "agent" }},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			cs := newCocoonSet("demo", tc.edit, func(cs *cocoonv1.CocoonSet) {
+				cs.Finalizers = []string{finalizerName}
+				cs.Generation = 2
+				cs.Status.Phase = cocoonv1.CocoonSetPhaseSuspended
+			})
+			main := rehibernated(lifecycleHibernated(mustBuildAgentPod(t, newCocoonSet("demo"), 0, "", "", testScheme(t))))
+			reg := &fakeRegistry{present: map[string]bool{relHibernateTagKey: true}}
+			cli := relClient(t, cs, main)
+			r := &Reconciler{Client: cli, APIReader: cli, Scheme: testScheme(t), Registry: reg}
+
+			if _, err := r.Reconcile(t.Context(), reqFor(cs)); err != nil {
+				t.Fatalf("unsuspend pass: %v", err)
+			}
+			if err := cli.Get(t.Context(), client.ObjectKeyFromObject(main), &corev1.Pod{}); !apierrors.IsNotFound(err) {
+				t.Fatalf("the drifted main must be deleted for rebuild, got err=%v", err)
+			}
+			if dropped := slices.Contains(reg.deleted, relHibernateTagKey); dropped != tc.wantDropped {
+				t.Fatalf("%s dropped = %v, want %v", relHibernateTagKey, dropped, tc.wantDropped)
+			}
+			if _, owed := mustGetCS(t, cli).Annotations[annotationHibernateReclaim]; owed == tc.wantDropped {
+				t.Errorf("reclaim record kept = %v, want %v", owed, !tc.wantDropped)
+			}
+
+			if _, err := r.Reconcile(t.Context(), reqFor(cs)); err != nil {
+				t.Fatalf("recreate pass: %v", err)
+			}
+			var fresh corev1.Pod
+			if err := cli.Get(t.Context(), client.ObjectKeyFromObject(main), &fresh); err != nil {
+				t.Fatalf("the main must be recreated: %v", err)
+			}
+			if restores := meta.ReadRestoreFromHibernate(&fresh); restores == tc.wantDropped {
+				t.Errorf("recreated main restores from :hibernate = %v, want %v", restores, !tc.wantDropped)
+			}
+		})
+	}
+}
+
+func TestReconcileKeepsAnImageDriftedMainWhileTheRegistryRefusesItsSnapshotDrop(t *testing.T) {
+	cs := reclaimOwedSet(t, 0)
+	cs.Finalizers = []string{finalizerName}
+	cs.Spec.Agent.Image = "ghcr.io/cocoonstack/cocoon/ubuntu:26.04"
+	main := readyAt(t, 0, 1)
+	cli := relClient(t, cs, main)
+	r := &Reconciler{Client: cli, APIReader: cli, Scheme: testScheme(t), Registry: &fakeRegistry{probeErr: errors.New("registry down")}}
+
+	if _, err := r.Reconcile(t.Context(), reqFor(cs)); err == nil {
+		t.Fatal("a refused snapshot drop must fail the pass so it retries with backoff")
+	}
+	if err := cli.Get(t.Context(), client.ObjectKeyFromObject(main), &corev1.Pod{}); err != nil {
+		t.Errorf("the main must survive until its snapshot is dropped: %v", err)
+	}
+	if got := readHibernateReclaim(new(mustGetCS(t, cli))).VMs; !slices.Equal(got, slotNames([]int32{0}, "")) {
+		t.Errorf("still owed %v, want the main kept recorded", got)
+	}
+}
+
+func TestEnsureToolboxesDropsTheOwedSnapshotBeforeAnImageRebuild(t *testing.T) {
+	tb := cocoonv1.ToolboxSpec{Name: "tb", Image: "ghcr.io/cocoonstack/cocoon/toolbox:1", Mode: cocoonv1.ToolboxModeRun}
+	pod := mustBuildToolboxPod(t, newCocoonSet("demo"), tb, testScheme(t))
+	tagKey := meta.VMNameForPod("ns", pod.Name) + ":" + meta.HibernateSnapshotTag
+	raw, err := json.Marshal(hibernateReclaim{Generation: 2, VMs: []string{meta.VMNameForPod("ns", pod.Name)}})
+	if err != nil {
+		t.Fatalf("encode owed reclaim: %v", err)
+	}
+	tb.Image = "ghcr.io/cocoonstack/cocoon/toolbox:2"
+	cs := newCocoonSet("demo", func(cs *cocoonv1.CocoonSet) {
+		cs.Generation = 2
+		cs.Annotations = map[string]string{annotationHibernateReclaim: string(raw)}
+		cs.Spec.Toolboxes = []cocoonv1.ToolboxSpec{tb}
+	})
+	reg := &fakeRegistry{present: map[string]bool{tagKey: true}}
+	cli := relClient(t, cs, pod)
+	r := &Reconciler{Client: cli, Scheme: testScheme(t), Registry: reg}
+
+	if _, _, err := r.ensureToolboxes(t.Context(), cs, classifyPods([]corev1.Pod{*pod}), r.newRestoreIntent(t.Context(), cs.Namespace)); err != nil {
+		t.Fatalf("ensureToolboxes: %v", err)
+	}
+	if err := cli.Get(t.Context(), client.ObjectKeyFromObject(pod), &corev1.Pod{}); !apierrors.IsNotFound(err) {
+		t.Fatalf("the drifted toolbox must be deleted for rebuild, got err=%v", err)
+	}
+	if !slices.Contains(reg.deleted, tagKey) {
+		t.Errorf("the owed %s must be dropped before the rebuild, deleted %v", tagKey, reg.deleted)
+	}
+	if _, owed := mustGetCS(t, cli).Annotations[annotationHibernateReclaim]; owed {
+		t.Errorf("the dropped VM must leave the reclaim record")
+	}
+}
+
 func TestEnsureToolboxesCollisionReturnsError(t *testing.T) {
 	scheme := testScheme(t)
 	cs := newCocoonSet("demo", func(cs *cocoonv1.CocoonSet) {
@@ -1279,6 +1377,8 @@ func (f *fakeRegistry) HasManifest(_ context.Context, name, tag string) (bool, e
 		<-ch
 	}
 	time.Sleep(f.delay)
+	f.deletedMu.Lock()
+	defer f.deletedMu.Unlock()
 	return f.present[name+":"+tag], nil
 }
 
@@ -1286,5 +1386,6 @@ func (f *fakeRegistry) DeleteManifest(_ context.Context, name, tag string) error
 	f.deletedMu.Lock()
 	defer f.deletedMu.Unlock()
 	f.deleted = append(f.deleted, name+":"+tag)
+	delete(f.present, name+":"+tag)
 	return nil
 }

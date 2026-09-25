@@ -181,16 +181,28 @@ func (r *Reconciler) reclaimWokenSnapshots(ctx context.Context, cs *cocoonv1.Coc
 	if len(owed.VMs) == 0 {
 		return nil
 	}
-	woken := map[string]bool{}
+	var woken []string
 	for _, pod := range classified.allByName {
 		if wokenAt(pod, owed.Generation) {
-			woken[meta.ParseVMSpec(pod).VMName] = true
+			woken = append(woken, meta.ParseVMSpec(pod).VMName)
 		}
 	}
+	return r.reclaimSnapshots(ctx, cs, woken)
+}
+
+func (r *Reconciler) reclaimImageDriftedSnapshot(ctx context.Context, cs *cocoonv1.CocoonSet, pod *corev1.Pod, image string) error {
+	if spec := meta.ParseVMSpec(pod); spec.Image != image {
+		return r.reclaimSnapshots(ctx, cs, []string{spec.VMName})
+	}
+	return nil
+}
+
+func (r *Reconciler) reclaimSnapshots(ctx context.Context, cs *cocoonv1.CocoonSet, vms []string) error {
+	owed := readHibernateReclaim(cs)
 	var pending []string
 	var errs []error
 	for _, vm := range owed.VMs {
-		if woken[vm] {
+		if slices.Contains(vms, vm) {
 			err := snapshot.DeleteManifestIfPresent(ctx, r.Registry, vm, meta.HibernateSnapshotTag)
 			if err == nil {
 				continue
