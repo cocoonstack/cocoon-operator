@@ -14,6 +14,7 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 
 	cocoonv1 "github.com/cocoonstack/cocoon-common/apis/v1"
+	"github.com/cocoonstack/cocoon-common/meta"
 )
 
 // subAgentCreateConcurrency caps parallel creates so a scale-up does not burst the apiserver.
@@ -43,6 +44,9 @@ func (r *Reconciler) ensureSubAgents(ctx context.Context, cs *cocoonv1.CocoonSet
 	}
 
 	missing = slices.DeleteFunc(missing, func(slot int32) bool { return budgetExhausted(cs, agentPodName(cs.Name, slot)) })
+	if err := r.reclaimUnrestoredForks(ctx, cs, missing, intent); err != nil {
+		return changed, requeueAfter, err
+	}
 	created, err := r.createSubAgents(ctx, logger, cs, missing, mainVMName, mainNodeName, intent)
 	changed = changed || created
 	if err != nil {
@@ -98,4 +102,21 @@ func (r *Reconciler) createSubAgents(ctx context.Context, logger *log.Fields, cs
 	}
 	waitErr := g.Wait()
 	return created.Load(), waitErr
+}
+
+func (r *Reconciler) reclaimUnrestoredForks(ctx context.Context, cs *cocoonv1.CocoonSet, missing []int32, intent restoreIntent) error {
+	if len(missing) == 0 || len(readHibernateReclaim(cs).VMs) == 0 {
+		return nil
+	}
+	restorable, err := intent()
+	if err != nil {
+		return err
+	}
+	var forks []string
+	for _, slot := range missing {
+		if _, restores := restorable[agentPodName(cs.Name, slot)]; !restores {
+			forks = append(forks, meta.VMNameForDeployment(cs.Namespace, cs.Name, int(slot)))
+		}
+	}
+	return r.reclaimSnapshots(ctx, cs, forks)
 }

@@ -661,6 +661,94 @@ func TestEnsureSubAgentsDeadLetterStaysUntilSpecEdit(t *testing.T) {
 	}
 }
 
+func TestEnsureSubAgentsDropsTheOwedSnapshotOfASlotItRecreates(t *testing.T) {
+	vm1 := slotNames([]int32{1}, "")[0]
+	vm1Tag := vm1 + ":" + meta.HibernateSnapshotTag
+	for _, tc := range []struct {
+		name         string
+		restoredByCR bool
+		probeErr     error
+		wantDropped  bool
+		wantErr      bool
+	}{
+		{name: "rebuilt slot", wantDropped: true},
+		{name: "slot a CocoonHibernation restores", restoredByCR: true},
+		{name: "registry refuses", probeErr: errors.New("registry down"), wantErr: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			cs := reclaimOwedSet(t, 1)
+			cs.Spec.Agent.Replicas = 1
+			objs := []client.Object{cs}
+			if tc.restoredByCR {
+				objs = append(objs, &cocoonv1.CocoonHibernation{
+					ObjectMeta: metav1.ObjectMeta{Name: "demo-1", Namespace: "ns"},
+					Spec: cocoonv1.CocoonHibernationSpec{
+						Desire: cocoonv1.HibernationDesireHibernate,
+						PodRef: cocoonv1.HibernationPodRef{Name: "demo-1"},
+					},
+					Status: cocoonv1.CocoonHibernationStatus{Phase: cocoonv1.CocoonHibernationPhaseHibernated},
+				})
+			}
+			reg := &fakeRegistry{probeErr: tc.probeErr, present: map[string]bool{vm1Tag: true}}
+			cli := relClient(t, objs...)
+			r := &Reconciler{Client: cli, Scheme: testScheme(t), Registry: reg}
+
+			_, _, err := r.ensureSubAgents(t.Context(), cs, classifyPods(nil), relVMName, "", r.newRestoreIntent(t.Context(), cs.Namespace))
+			if (err != nil) != tc.wantErr {
+				t.Fatalf("ensureSubAgents error %v, want error %v", err, tc.wantErr)
+			}
+			if dropped := slices.Contains(reg.deleted, vm1Tag); dropped != tc.wantDropped {
+				t.Errorf("%s dropped = %v, want %v", vm1Tag, dropped, tc.wantDropped)
+			}
+			if owed := slices.Contains(readHibernateReclaim(new(mustGetCS(t, cli))).VMs, vm1); owed == tc.wantDropped {
+				t.Errorf("%s still owed = %v, want %v", vm1, owed, !tc.wantDropped)
+			}
+			var sub corev1.Pod
+			getErr := cli.Get(t.Context(), types.NamespacedName{Namespace: "ns", Name: "demo-1"}, &sub)
+			if created := getErr == nil; created == tc.wantErr {
+				t.Fatalf("sub-agent created = %v, want %v", created, !tc.wantErr)
+			}
+			if restores := meta.ReadRestoreFromHibernate(&sub); !tc.wantErr && restores != tc.restoredByCR {
+				t.Errorf("sub-agent restores from :hibernate = %v, want %v", restores, tc.restoredByCR)
+			}
+		})
+	}
+}
+
+func TestEnsureSubAgentsDropsTheOwedSnapshotOfASlotThatReturnsAfterAScaleDown(t *testing.T) {
+	vm2Tag := slotNames([]int32{2}, ":"+meta.HibernateSnapshotTag)[0]
+	cs := reclaimOwedSet(t, 2)
+	cs.Spec.Agent.Replicas = 2
+	sub1 := mustBuildAgentPod(t, cs, 1, relVMName, "", testScheme(t))
+	sub2 := mustBuildAgentPod(t, cs, 2, relVMName, "", testScheme(t))
+	cs.Spec.Agent.Replicas = 1
+	reg := &fakeRegistry{present: map[string]bool{vm2Tag: true}}
+	cli := relClient(t, cs, sub1, sub2)
+	r := &Reconciler{Client: cli, Scheme: testScheme(t), Registry: reg}
+
+	if _, _, err := r.ensureSubAgents(t.Context(), cs, classifyPods([]corev1.Pod{*sub1, *sub2}), relVMName, "", r.newRestoreIntent(t.Context(), cs.Namespace)); err != nil {
+		t.Fatalf("scale-down: %v", err)
+	}
+	if err := cli.Get(t.Context(), client.ObjectKeyFromObject(sub2), &corev1.Pod{}); !apierrors.IsNotFound(err) {
+		t.Fatalf("the extra slot must be deleted, got err=%v", err)
+	}
+
+	scaledUp := mustGetCS(t, cli)
+	scaledUp.Spec.Agent.Replicas = 2
+	if _, _, err := r.ensureSubAgents(t.Context(), &scaledUp, classifyPods([]corev1.Pod{*sub1}), relVMName, "", r.newRestoreIntent(t.Context(), cs.Namespace)); err != nil {
+		t.Fatalf("scale-up: %v", err)
+	}
+	if !slices.Contains(reg.deleted, vm2Tag) {
+		t.Errorf("the returning slot's owed %s must be dropped before its create, deleted %v", vm2Tag, reg.deleted)
+	}
+	if err := cli.Get(t.Context(), client.ObjectKeyFromObject(sub2), &corev1.Pod{}); err != nil {
+		t.Errorf("the returning slot must be recreated: %v", err)
+	}
+	if _, owed := mustGetCS(t, cli).Annotations[annotationHibernateReclaim]; owed {
+		t.Errorf("the dropped VM must leave the reclaim record")
+	}
+}
+
 func TestMainPodFailedReason(t *testing.T) {
 	annot := func(state meta.LifecycleState) map[string]string {
 		return map[string]string{meta.AnnotationLifecycleState: string(state)}
