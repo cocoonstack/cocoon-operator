@@ -34,6 +34,32 @@ func TestRebuildHistoryRoundTrip(t *testing.T) {
 	}
 }
 
+func TestRebuildHistoryEncodesSortedKeysAndOmitsUnparked(t *testing.T) {
+	cs := &cocoonv1.CocoonSet{}
+	cs.Name = "demo"
+	cs.Spec.Agent.Replicas = 4
+	at := time.Date(2026, 9, 25, 6, 1, 2, 0, time.UTC)
+	in := map[string]rebuildEntry{
+		"demo-3": {Count: 1, LastDeleted: at, Generation: 2, Parked: true},
+		"demo-0": {Count: 2, LastDeleted: at, Generation: 3},
+		"demo-2": {Count: 3, LastDeleted: at, Generation: 4},
+		"demo-1": {Count: 4, LastDeleted: at, Generation: 5, Parked: true},
+	}
+	want := `{"demo-0":{"count":2,"lastDeleted":"2026-09-25T06:01:02Z","generation":3},` +
+		`"demo-1":{"count":4,"lastDeleted":"2026-09-25T06:01:02Z","generation":5,"parked":true},` +
+		`"demo-2":{"count":3,"lastDeleted":"2026-09-25T06:01:02Z","generation":4},` +
+		`"demo-3":{"count":1,"lastDeleted":"2026-09-25T06:01:02Z","generation":2,"parked":true}}`
+	for range 10 {
+		got, err := encodeRebuildHistory(cs, in)
+		if err != nil {
+			t.Fatalf("encodeRebuildHistory: %v", err)
+		}
+		if got != want {
+			t.Fatalf("encoded\n%s\nwant\n%s", got, want)
+		}
+	}
+}
+
 func TestRebuildHistoryGarbageCollectsStalePods(t *testing.T) {
 	cs := &cocoonv1.CocoonSet{}
 	cs.Name = "demo"

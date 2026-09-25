@@ -40,7 +40,7 @@ type Reconciler struct {
 	Scheme    *runtime.Scheme
 	Registry  snapshot.Registry
 	Recorder  record.EventRecorder
-	// Concurrency caps in-flight reconciles; at 1, one slow registry probe stalls every other CocoonSet.
+	// Concurrency caps in-flight reconciles, since at 1 a slow registry probe stalls every other CocoonSet.
 	Concurrency int
 }
 
@@ -84,7 +84,7 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 	}
 	classified := classifyPods(owned)
 
-	// stamp before any spec-driven patch so observed-generation names the revision that produced the state
+	// Stamp before any spec-driven patch so observed-generation names the revision that produced the state.
 	if err := r.syncCocoonSetGeneration(ctx, &cs, classified); err != nil {
 		return ctrl.Result{}, err
 	}
@@ -96,7 +96,7 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 		return r.reconcileSuspend(ctx, &cs, classified)
 	}
 
-	// lifecycle-state=Failed is the vk-cocoon terminal path and fires before Pod Phase flips; IsPodTerminal is the kubelet path
+	// vk-cocoon's lifecycle-state=Failed fires before the kubelet flips the Pod phase.
 	if classified.main != nil {
 		if reason := mainPodFailedReason(classified.main); reason != "" {
 			return r.handleFailedMainAgent(ctx, &cs, classified, reason)
@@ -107,17 +107,20 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 		}
 	}
 
-	// migration runs before applyUnsuspend, which would otherwise clear its hibernate annotation
+	// Migration runs before applyUnsuspend, which would otherwise clear its hibernate annotation.
 	if handled, res, err := r.reconcileMigration(ctx, &cs, classified); handled {
 		return res, err
 	}
 
-	// wake runs before createMainAgent, whose CR-only restore intent would fresh-boot over the snapshot
+	// Wake runs before createMainAgent, whose CR-only restore intent would fresh-boot over the snapshot.
 	if handled, res, err := r.reconcileWake(ctx, &cs, classified); handled {
 		return res, err
 	}
 
-	if err := r.applyUnsuspend(ctx, cs.Namespace, classified); err != nil {
+	if err := r.applyUnsuspend(ctx, &cs, classified); err != nil {
+		return ctrl.Result{}, err
+	}
+	if err := r.reclaimWokenSnapshots(ctx, &cs, classified); err != nil {
 		return ctrl.Result{}, err
 	}
 
@@ -132,7 +135,7 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 		return r.createMainAgent(ctx, &cs, intent)
 	}
 
-	// sub-agents fork from main and need it live before creation
+	// Sub-agents fork from the main, so it must be live first.
 	if !meta.IsPodReady(classified.main) {
 		return ctrl.Result{RequeueAfter: requeueWaitForMain},
 			r.patchStatus(ctx, &cs, buildStatus(&cs, classified, cocoonv1.CocoonSetPhasePending))
@@ -162,7 +165,7 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 	return ctrl.Result{RequeueAfter: subRequeue}, nil
 }
 
-// rebuildDriftedMain deletes a main that no longer matches the spec, within its rebuild budget; handled reports a delete or a pending backoff.
+// rebuildDriftedMain deletes a main that no longer matches the spec within its rebuild budget, and reports a delete or a pending backoff as handled.
 func (r *Reconciler) rebuildDriftedMain(ctx context.Context, logger *log.Fields, cs *cocoonv1.CocoonSet, classified classifiedPods) (bool, ctrl.Result, error) {
 	if classified.main == nil || podSpecMatchesAgent(classified.main, cs, 0) {
 		return false, ctrl.Result{}, nil
@@ -177,7 +180,7 @@ func (r *Reconciler) rebuildDriftedMain(ctx context.Context, logger *log.Fields,
 	return false, ctrl.Result{}, nil
 }
 
-// handleFailedMainAgent recreates a drifted terminal main; parked in Failed it would wait for a Ready it can never reach.
+// handleFailedMainAgent recreates a drifted terminal main, which would otherwise wait in Failed for a Ready it cannot reach.
 func (r *Reconciler) handleFailedMainAgent(ctx context.Context, cs *cocoonv1.CocoonSet, classified classifiedPods, reason string) (ctrl.Result, error) {
 	if handled, res, err := r.rebuildDriftedMain(ctx, log.WithFunc("cocoonset.Reconciler.handleFailedMainAgent"), cs, classified); handled {
 		return res, err
@@ -198,7 +201,7 @@ func (r *Reconciler) createMainAgent(ctx context.Context, cs *cocoonv1.CocoonSet
 	}
 	if err := r.Create(ctx, mainPod); err != nil {
 		if apierrors.IsAlreadyExists(err) {
-			// old pod still Terminating; requeue and wait
+			// The old pod is still Terminating.
 			return ctrl.Result{RequeueAfter: requeueWaitForMain}, nil
 		}
 		return ctrl.Result{}, fmt.Errorf("create main agent: %w", err)
@@ -217,7 +220,7 @@ func (r *Reconciler) observeMainPodFailed(cs *cocoonv1.CocoonSet, pod *corev1.Po
 	commonk8s.Eventf(r.Recorder, cs, corev1.EventTypeWarning, reason, "main pod %s/%s: %s", pod.Namespace, pod.Name, msg)
 }
 
-// mainPodFailedReason maps a terminal signal to its Failed Event reason; "" means not terminal.
+// mainPodFailedReason maps a terminal signal to its Failed Event reason, or "" when the pod is not terminal.
 func mainPodFailedReason(pod *corev1.Pod) string {
 	if meta.ReadLifecycleState(pod) == meta.LifecycleStateFailed {
 		return "PodLifecycleFailed"

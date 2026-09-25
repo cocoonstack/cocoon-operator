@@ -34,7 +34,7 @@ func (r *Reconciler) reconcileWake(ctx context.Context, hib *cocoonv1.CocoonHibe
 				return ctrl.Result{}, err
 			}
 		}
-		// the live VM owns the state now; a surviving tag would roll a recreated pod back to it
+		// The live VM owns the state now; a surviving tag would roll a recreated pod back to it
 		if err := snapshot.DeleteManifestIfPresent(ctx, r.Registry, vmName, meta.HibernateSnapshotTag); err != nil {
 			return ctrl.Result{}, fmt.Errorf("delete hibernation snapshot %s: %w", vmName, err)
 		}

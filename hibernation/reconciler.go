@@ -119,7 +119,7 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 	err := r.Get(ctx, types.NamespacedName{Namespace: hib.Namespace, Name: hib.Spec.PodRef.Name}, &pod)
 	if err != nil {
 		if apierrors.IsNotFound(err) {
-			// a pod may arrive after the CR; the pod watcher reconciles us, the requeue is a safety net
+			// A pod may arrive after the CR; the pod watcher reconciles us, the requeue is a safety net
 			return ctrl.Result{RequeueAfter: requeueInterval}, r.markPending(ctx, &hib, fmt.Sprintf("pod %s/%s not yet present", hib.Namespace, hib.Spec.PodRef.Name))
 		}
 		return ctrl.Result{}, fmt.Errorf("get target pod: %w", err)
@@ -134,7 +134,7 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 
 	logger.Debugf(ctx, "reconcile hibernation %s/%s desire=%s vm=%s", hib.Namespace, hib.Name, hib.Spec.Desire, vmName)
 
-	// reverse desires serialize through the in-flight terminal phase; vk flips neither the tag nor the annotations until the transition ends
+	// Reverse desires serialize through the in-flight terminal phase; vk flips neither the tag nor the annotations until the transition ends
 	switch hib.Spec.Desire {
 	case cocoonv1.HibernationDesireHibernate:
 		if hib.Status.Phase == cocoonv1.CocoonHibernationPhaseWaking {
@@ -160,7 +160,7 @@ func (r *Reconciler) lockVM(vmName string) func() {
 
 func (r *Reconciler) reconcileDelete(ctx context.Context, hib *cocoonv1.CocoonHibernation) error {
 	logger := log.WithFunc("hibernation.Reconciler.reconcileDelete")
-	// lock Status.VMName, the VM this CR actually owns; defense in depth for CRs retargeted before podRef became immutable
+	// Lock Status.VMName, the VM this CR actually owns; defense in depth for CRs retargeted before podRef became immutable
 	if hib.Status.VMName != "" {
 		defer r.lockVM(hib.Status.VMName)()
 		held, err := r.vmHeldByAnotherCR(ctx, hib)

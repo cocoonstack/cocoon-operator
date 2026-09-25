@@ -20,11 +20,11 @@ func (r *Reconciler) reconcileHibernate(ctx context.Context, hib *cocoonv1.Cocoo
 		return ctrl.Result{}, fmt.Errorf("patch hibernate annotation: %w", err)
 	}
 
-	// gate on vk's completion signal for this generation before the probe; a stale tag from a prior cycle would satisfy it immediately
+	// Gate on vk's completion signal for this generation before the probe; a stale tag from a prior cycle would satisfy it immediately
 	if st := meta.ReadLifecycleStatus(pod); st.State == meta.LifecycleStateHibernated &&
 		st.ObservedGeneration >= meta.ReadCocoonSetGeneration(pod) {
 		present, err := snapshot.HasHibernateSnapshot(ctx, r.Registry, vmName)
-		// a persistently failing probe must still hit the deadline below, or the phase starves in Hibernating
+		// A persistently failing probe must still hit the deadline below, or the phase starves in Hibernating
 		if err != nil && !phaseDeadlineExceeded(hib, cocoonv1.CocoonHibernationPhaseHibernating, hibernateTimeout) {
 			if updateErr := r.setPhase(ctx, hib, cocoonv1.CocoonHibernationPhaseHibernating, vmName); updateErr != nil {
 				return ctrl.Result{}, updateErr

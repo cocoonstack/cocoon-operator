@@ -2,7 +2,7 @@ package cocoonset
 
 import (
 	"context"
-	"encoding/json"
+	"encoding/json/v2"
 	"fmt"
 	"maps"
 	"strconv"
@@ -32,7 +32,7 @@ type rebuildEntry struct {
 	Count       int       `json:"count"`
 	LastDeleted time.Time `json:"lastDeleted"`
 	Generation  int64     `json:"generation"`
-	Parked      bool      `json:"parked,omitempty"`
+	Parked      bool      `json:"parked,omitzero"`
 }
 
 // triagePod deletes a terminal or drifted pod for recreate within its rebuild budget; a dead-lettered pod waits for a spec edit.
@@ -147,7 +147,7 @@ func (r *Reconciler) patchAnnotation(ctx context.Context, obj client.Object, key
 func readRebuildHistory(cs *cocoonv1.CocoonSet) map[string]rebuildEntry {
 	m := map[string]rebuildEntry{}
 	if raw := cs.Annotations[annotationRebuildHistory]; raw != "" {
-		// json "null" leaves m nil; callers write to it
+		// A JSON null leaves m nil, which callers would write to.
 		if err := json.Unmarshal([]byte(raw), &m); err != nil || m == nil {
 			return map[string]rebuildEntry{}
 		}
@@ -160,7 +160,7 @@ func encodeRebuildHistory(cs *cocoonv1.CocoonSet, m map[string]rebuildEntry) (st
 	keep := desiredPodNames(cs)
 	kept := maps.Clone(m)
 	maps.DeleteFunc(kept, func(name string, _ rebuildEntry) bool { return !keep[name] })
-	raw, err := json.Marshal(kept)
+	raw, err := json.Marshal(kept, json.Deterministic(true))
 	if err != nil {
 		return "", err
 	}

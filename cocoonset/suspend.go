@@ -2,6 +2,8 @@ package cocoonset
 
 import (
 	"context"
+	"encoding/json/v2"
+	"errors"
 	"fmt"
 	"maps"
 	"slices"
@@ -18,10 +20,16 @@ import (
 )
 
 const (
-	annotationSuspendingSince = "cocoonset.cocoonstack.io/suspending-since"
+	annotationSuspendingSince  = "cocoonset.cocoonstack.io/suspending-since"
+	annotationHibernateReclaim = "cocoonset.cocoonstack.io/hibernate-reclaim"
 
 	suspendTimeout = 3 * time.Minute
 )
+
+type hibernateReclaim struct {
+	Generation int64    `json:"generation"`
+	VMs        []string `json:"vms"`
+}
 
 // reconcileSuspend polls the registry and stays Suspending until every managed VM's snapshot lands.
 func (r *Reconciler) reconcileSuspend(ctx context.Context, cs *cocoonv1.CocoonSet, classified classifiedPods) (ctrl.Result, error) {
@@ -92,14 +100,14 @@ func (r *Reconciler) allOwnedPodsHibernated(ctx context.Context, cs *cocoonv1.Co
 		if !spec.Managed {
 			continue
 		}
-		// a kubelet-terminal pod has no VM to snapshot; waiting on it would park the set in Suspending forever
+		// A kubelet-terminal pod has no VM to snapshot, so waiting on it would park the set in Suspending forever.
 		if meta.IsPodTerminal(pod) {
 			continue
 		}
 		if spec.VMName == "" {
 			return false, nil
 		}
-		// vk flips hibernated with observed-generation only after this round's push; a stale tag or lagging informer cannot pass
+		// vk reports hibernated at this generation only after this round's push, so a stale tag cannot pass.
 		if st := meta.ReadLifecycleStatus(pod); st.State != meta.LifecycleStateHibernated ||
 			st.ObservedGeneration < cs.Generation {
 			return false, nil
@@ -125,7 +133,7 @@ func (r *Reconciler) applySuspend(ctx context.Context, classified classifiedPods
 }
 
 // applyUnsuspend skips pods targeted by an active CocoonHibernation CR to avoid racing that reconciler.
-func (r *Reconciler) applyUnsuspend(ctx context.Context, namespace string, classified classifiedPods) error {
+func (r *Reconciler) applyUnsuspend(ctx context.Context, cs *cocoonv1.CocoonSet, classified classifiedPods) error {
 	var hibernated []*corev1.Pod
 	for _, name := range slices.Sorted(maps.Keys(classified.allByName)) {
 		if pod := classified.allByName[name]; meta.ReadHibernateState(pod) {
@@ -136,16 +144,30 @@ func (r *Reconciler) applyUnsuspend(ctx context.Context, namespace string, class
 		return nil
 	}
 
-	hibernatedByCR, err := r.podsHibernatedByCR(ctx, namespace)
+	hibernatedByCR, err := r.podsHibernatedByCR(ctx, cs.Namespace)
 	if err != nil {
+		return err
+	}
+	hibernated = slices.DeleteFunc(hibernated, func(pod *corev1.Pod) bool {
+		_, ownedByCR := hibernatedByCR[pod.Name]
+		return ownedByCR
+	})
+	if len(hibernated) == 0 {
+		return nil
+	}
+	owed := readHibernateReclaim(cs)
+	owed.Generation = cs.Generation
+	for _, pod := range hibernated {
+		if spec := meta.ParseVMSpec(pod); spec.Managed && spec.VMName != "" && !slices.Contains(owed.VMs, spec.VMName) {
+			owed.VMs = append(owed.VMs, spec.VMName)
+		}
+	}
+	if err := r.writeHibernateReclaim(ctx, cs, owed); err != nil {
 		return err
 	}
 	for _, pod := range hibernated {
 		if ctxErr := ctx.Err(); ctxErr != nil {
 			return ctxErr
-		}
-		if _, ownedByCR := hibernatedByCR[pod.Name]; ownedByCR {
-			continue
 		}
 		if err := podpatch.HibernateState(ctx, r.Client, pod, false); err != nil {
 			return fmt.Errorf("clear hibernate annotation on %s/%s: %w", pod.Namespace, pod.Name, err)
@@ -154,8 +176,69 @@ func (r *Reconciler) applyUnsuspend(ctx context.Context, namespace string, class
 	return nil
 }
 
+func (r *Reconciler) reclaimWokenSnapshots(ctx context.Context, cs *cocoonv1.CocoonSet, classified classifiedPods) error {
+	owed := readHibernateReclaim(cs)
+	if len(owed.VMs) == 0 {
+		return nil
+	}
+	woken := map[string]bool{}
+	for _, pod := range classified.allByName {
+		if wokenAt(pod, owed.Generation) {
+			woken[meta.ParseVMSpec(pod).VMName] = true
+		}
+	}
+	var pending []string
+	var errs []error
+	for _, vm := range owed.VMs {
+		if woken[vm] {
+			err := snapshot.DeleteManifestIfPresent(ctx, r.Registry, vm, meta.HibernateSnapshotTag)
+			if err == nil {
+				continue
+			}
+			errs = append(errs, fmt.Errorf("reclaim %s:%s: %w", vm, meta.HibernateSnapshotTag, err))
+		}
+		pending = append(pending, vm)
+	}
+	if len(pending) < len(owed.VMs) {
+		owed.VMs = pending
+		errs = append(errs, r.writeHibernateReclaim(ctx, cs, owed))
+	}
+	return errors.Join(errs...)
+}
+
+func (r *Reconciler) writeHibernateReclaim(ctx context.Context, cs *cocoonv1.CocoonSet, owed hibernateReclaim) error {
+	value := ""
+	if len(owed.VMs) > 0 {
+		raw, err := json.Marshal(owed)
+		if err != nil {
+			return fmt.Errorf("encode hibernate reclaim of %s/%s: %w", cs.Namespace, cs.Name, err)
+		}
+		value = string(raw)
+	}
+	if cs.Annotations[annotationHibernateReclaim] == value {
+		return nil
+	}
+	return r.patchAnnotation(ctx, cs, annotationHibernateReclaim, value)
+}
+
 func (r *Reconciler) podsHibernatedByCR(ctx context.Context, namespace string) (map[string]struct{}, error) {
 	return r.hibernationPodNames(ctx, namespace, func(h *cocoonv1.CocoonHibernation) bool {
 		return h.Spec.Desire == cocoonv1.HibernationDesireHibernate || h.Status.Phase == cocoonv1.CocoonHibernationPhaseHibernating
 	})
+}
+
+func readHibernateReclaim(cs *cocoonv1.CocoonSet) hibernateReclaim {
+	var owed hibernateReclaim
+	if raw := cs.Annotations[annotationHibernateReclaim]; raw != "" {
+		if err := json.Unmarshal([]byte(raw), &owed); err != nil {
+			return hibernateReclaim{}
+		}
+	}
+	return owed
+}
+
+func wokenAt(pod *corev1.Pod, generation int64) bool {
+	st := meta.ReadLifecycleStatus(pod)
+	return !bool(meta.ReadHibernateState(pod)) && meta.VMLive(pod) &&
+		st.State == meta.LifecycleStateReady && st.ObservedGeneration >= generation
 }
