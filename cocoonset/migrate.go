@@ -109,16 +109,16 @@ func (r *Reconciler) advanceMigration(ctx context.Context, cs *cocoonv1.CocoonSe
 
 	case main == nil:
 		// Recreating also finishes an aborted migration; never strand the snapshot
-		discarded, err := r.discardReleasedSnapshotOnImageChange(ctx, cs, vmName)
+		pod, err := buildAgentPod(cs, 0, "", "", r.Scheme)
+		if err != nil {
+			return true, ctrl.Result{}, fmt.Errorf("migrate: build main: %w", err)
+		}
+		discarded, err := r.discardImageConflict(ctx, cs, pod)
 		if err != nil {
 			return true, ctrl.Result{}, fmt.Errorf("migrate: %w", err)
 		}
 		if discarded {
 			return false, ctrl.Result{}, nil
-		}
-		pod, err := buildAgentPod(cs, 0, "", "", r.Scheme)
-		if err != nil {
-			return true, ctrl.Result{}, fmt.Errorf("migrate: build main: %w", err)
 		}
 		meta.MarkRestoreFromHibernate(pod)
 		if err := r.Create(ctx, pod); err != nil {

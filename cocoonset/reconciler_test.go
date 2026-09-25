@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json/v2"
 	"errors"
+	"fmt"
 	"slices"
 	"strings"
 	"sync"
@@ -22,7 +23,9 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 
 	cocoonv1 "github.com/cocoonstack/cocoon-common/apis/v1"
+	"github.com/cocoonstack/cocoon-common/manifest"
 	"github.com/cocoonstack/cocoon-common/meta"
+	commonsnapshot "github.com/cocoonstack/cocoon-common/snapshot"
 )
 
 func TestApplyUnsuspendClearsHibernateAnnotation(t *testing.T) {
@@ -211,14 +214,11 @@ func TestApplyUnsuspendRecordsARestoreForASubAgentMissingAtUnsuspend(t *testing.
 		name        string
 		subPresent  bool
 		tagged      bool
-		imageEdited bool
-		wantOwed    bool
 		wantRestore bool
 	}{
-		{name: "missing slot with a snapshot", tagged: true, wantOwed: true, wantRestore: true},
+		{name: "missing slot with a snapshot", tagged: true, wantRestore: true},
 		{name: "missing slot without a snapshot"},
-		{name: "every slot present", subPresent: true, tagged: true, wantOwed: true},
-		{name: "missing slot after an image edit", tagged: true, imageEdited: true, wantOwed: true},
+		{name: "every slot present", subPresent: true, tagged: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			cs := newCocoonSet("demo", func(cs *cocoonv1.CocoonSet) {
@@ -228,9 +228,6 @@ func TestApplyUnsuspendRecordsARestoreForASubAgentMissingAtUnsuspend(t *testing.
 			pods := []corev1.Pod{*rehibernated(mustBuildAgentPod(t, cs, 0, "", "", testScheme(t)))}
 			if tc.subPresent {
 				pods = append(pods, *rehibernated(mustBuildAgentPod(t, cs, 1, relVMName, "", testScheme(t))))
-			}
-			if tc.imageEdited {
-				cs.Spec.Agent.Image += "-edited"
 			}
 			objs := []client.Object{cs}
 			for i := range pods {
@@ -244,8 +241,8 @@ func TestApplyUnsuspendRecordsARestoreForASubAgentMissingAtUnsuspend(t *testing.
 				t.Fatalf("applyUnsuspend: %v", err)
 			}
 			owed := readHibernateReclaim(new(mustGetCS(t, cli)))
-			if slices.Contains(owed.VMs, vm1) != tc.wantOwed || slices.Contains(owed.Restore, vm1) != tc.wantRestore {
-				t.Errorf("record %+v for %s, want owed %v and restore %v", owed, vm1, tc.wantOwed, tc.wantRestore)
+			if restores := slices.Contains(owed.Restore, vm1) && slices.Contains(owed.VMs, vm1); restores != tc.wantRestore {
+				t.Errorf("record %+v owes a restore of %s = %v, want %v", owed, vm1, restores, tc.wantRestore)
 			}
 			if tc.subPresent && len(reg.probed) != 0 {
 				t.Errorf("an unsuspend with every slot present must not probe the registry, probed %v", reg.probed)
@@ -310,7 +307,7 @@ func TestReconcileRebuildOfAnOwedMainDropsTheSnapshotOnlyAcrossAnImageChange(t *
 				cs.Status.Phase = cocoonv1.CocoonSetPhaseSuspended
 			})
 			main := rehibernated(lifecycleHibernated(mustBuildAgentPod(t, newCocoonSet("demo"), 0, "", "", testScheme(t))))
-			reg := &fakeRegistry{present: map[string]bool{relHibernateTagKey: true}}
+			reg := &fakeRegistry{present: map[string]bool{relHibernateTagKey: true}, images: map[string]string{relHibernateTagKey: meta.ParseVMSpec(main).Image}}
 			cli := relClient(t, cs, main)
 			r := &Reconciler{Client: cli, APIReader: cli, Scheme: testScheme(t), Registry: reg}
 
@@ -319,12 +316,6 @@ func TestReconcileRebuildOfAnOwedMainDropsTheSnapshotOnlyAcrossAnImageChange(t *
 			}
 			if err := cli.Get(t.Context(), client.ObjectKeyFromObject(main), &corev1.Pod{}); !apierrors.IsNotFound(err) {
 				t.Fatalf("the drifted main must be deleted for rebuild, got err=%v", err)
-			}
-			if dropped := slices.Contains(reg.deleted, relHibernateTagKey); dropped != tc.wantDropped {
-				t.Fatalf("%s dropped = %v, want %v", relHibernateTagKey, dropped, tc.wantDropped)
-			}
-			if _, owed := mustGetCS(t, cli).Annotations[annotationHibernateReclaim]; owed == tc.wantDropped {
-				t.Errorf("reclaim record kept = %v, want %v", owed, !tc.wantDropped)
 			}
 
 			if _, err := r.Reconcile(t.Context(), reqFor(cs)); err != nil {
@@ -337,55 +328,145 @@ func TestReconcileRebuildOfAnOwedMainDropsTheSnapshotOnlyAcrossAnImageChange(t *
 			if restores := meta.ReadRestoreFromHibernate(&fresh); restores == tc.wantDropped {
 				t.Errorf("recreated main restores from :hibernate = %v, want %v", restores, !tc.wantDropped)
 			}
+			if dropped := slices.Contains(reg.deleted, relHibernateTagKey); dropped != tc.wantDropped {
+				t.Errorf("%s dropped = %v, want %v", relHibernateTagKey, dropped, tc.wantDropped)
+			}
+			if _, owed := mustGetCS(t, cli).Annotations[annotationHibernateReclaim]; owed == tc.wantDropped {
+				t.Errorf("reclaim record kept = %v, want %v", owed, !tc.wantDropped)
+			}
 		})
 	}
 }
 
-func TestReconcileKeepsAnImageDriftedMainWhileTheRegistryRefusesItsSnapshotDrop(t *testing.T) {
-	cs := reclaimOwedSet(t, 0)
-	cs.Finalizers = []string{finalizerName}
-	cs.Spec.Agent.Image = "ghcr.io/cocoonstack/cocoon/ubuntu:26.04"
-	main := readyAt(t, 0, 1)
-	cli := relClient(t, cs, main)
-	r := &Reconciler{Client: cli, APIReader: cli, Scheme: testScheme(t), Registry: &fakeRegistry{probeErr: errors.New("registry down")}}
+func TestReconcileRecreatesAnImageDriftedMainOnlyOnceItsSnapshotIsDropped(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		probeErr  error
+		deleteErr error
+	}{
+		{name: "registry down", probeErr: errors.New("registry down")},
+		{name: "delete refused", deleteErr: errors.New("delete refused")},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			cs := reclaimOwedSet(t, 0)
+			cs.Finalizers = []string{finalizerName}
+			cs.Spec.Agent.Image = "ghcr.io/cocoonstack/cocoon/ubuntu:26.04"
+			reg := &fakeRegistry{
+				present:   map[string]bool{relHibernateTagKey: true},
+				images:    map[string]string{relHibernateTagKey: "ghcr.io/cocoonstack/cocoon/ubuntu:24.04"},
+				probeErr:  tc.probeErr,
+				deleteErr: tc.deleteErr,
+			}
+			cli := relClient(t, cs)
+			r := &Reconciler{Client: cli, APIReader: cli, Scheme: testScheme(t), Registry: reg}
 
-	if _, err := r.Reconcile(t.Context(), reqFor(cs)); err == nil {
-		t.Fatal("a refused snapshot drop must fail the pass so it retries with backoff")
-	}
-	if err := cli.Get(t.Context(), client.ObjectKeyFromObject(main), &corev1.Pod{}); err != nil {
-		t.Errorf("the main must survive until its snapshot is dropped: %v", err)
-	}
-	if got := readHibernateReclaim(new(mustGetCS(t, cli))).VMs; !slices.Equal(got, slotNames([]int32{0}, "")) {
-		t.Errorf("still owed %v, want the main kept recorded", got)
+			if _, err := r.Reconcile(t.Context(), reqFor(cs)); err == nil {
+				t.Fatal("a refused snapshot drop must fail the pass so it retries with backoff")
+			}
+			if err := cli.Get(t.Context(), types.NamespacedName{Namespace: "ns", Name: "demo-0"}, &corev1.Pod{}); !apierrors.IsNotFound(err) {
+				t.Errorf("no main may be created over a snapshot it cannot restore, got err=%v", err)
+			}
+			if got := readHibernateReclaim(new(mustGetCS(t, cli))).VMs; !slices.Equal(got, slotNames([]int32{0}, "")) {
+				t.Errorf("still owed %v, want the main kept recorded", got)
+			}
+
+			reg.probeErr, reg.deleteErr = nil, nil
+			if _, err := r.Reconcile(t.Context(), reqFor(cs)); err != nil {
+				t.Fatalf("retry: %v", err)
+			}
+			var fresh corev1.Pod
+			if err := cli.Get(t.Context(), types.NamespacedName{Namespace: "ns", Name: "demo-0"}, &fresh); err != nil || meta.ReadRestoreFromHibernate(&fresh) {
+				t.Errorf("the retry must boot the main fresh, err=%v restore=%v", err, meta.ReadRestoreFromHibernate(&fresh))
+			}
+			if _, owed := mustGetCS(t, cli).Annotations[annotationHibernateReclaim]; owed {
+				t.Error("the dropped VM must leave the reclaim record")
+			}
+		})
 	}
 }
 
-func TestEnsureToolboxesDropsTheOwedSnapshotBeforeAnImageRebuild(t *testing.T) {
-	tb := cocoonv1.ToolboxSpec{Name: "tb", Image: "ghcr.io/cocoonstack/cocoon/toolbox:1", Mode: cocoonv1.ToolboxModeRun}
-	pod := mustBuildToolboxPod(t, newCocoonSet("demo"), tb, testScheme(t))
-	tagKey := meta.VMNameForPod("ns", pod.Name) + ":" + meta.HibernateSnapshotTag
-	owed := encodeReclaim(t, hibernateReclaim{Generation: 2, VMs: []string{meta.VMNameForPod("ns", pod.Name)}})
-	tb.Image = "ghcr.io/cocoonstack/cocoon/toolbox:2"
+func TestReconcileSuspendRecreatesAMissingMainFreshOverASnapshotFromAnotherImage(t *testing.T) {
 	cs := newCocoonSet("demo", func(cs *cocoonv1.CocoonSet) {
+		cs.Finalizers = []string{finalizerName}
 		cs.Generation = 2
-		cs.Annotations = map[string]string{annotationHibernateReclaim: owed}
-		cs.Spec.Toolboxes = []cocoonv1.ToolboxSpec{tb}
+		cs.Spec.Suspend = true
+		cs.Spec.Agent.Image = "ghcr.io/cocoonstack/cocoon/ubuntu:26.04"
+		cs.Status.Phase = cocoonv1.CocoonSetPhaseSuspended
 	})
-	reg := &fakeRegistry{present: map[string]bool{tagKey: true}}
-	cli := relClient(t, cs, pod)
+	reg := &fakeRegistry{
+		present: map[string]bool{relHibernateTagKey: true},
+		images:  map[string]string{relHibernateTagKey: "ghcr.io/cocoonstack/cocoon/ubuntu:24.04"},
+	}
+	cli := relClient(t, cs)
 	r := &Reconciler{Client: cli, Scheme: testScheme(t), Registry: reg}
 
-	if _, _, err := r.ensureToolboxes(t.Context(), cs, classifyPods([]corev1.Pod{*pod}), r.newRestoreIntent(t.Context(), cs.Namespace)); err != nil {
-		t.Fatalf("ensureToolboxes: %v", err)
+	if _, err := r.Reconcile(t.Context(), reqFor(cs)); err != nil {
+		t.Fatalf("Reconcile: %v", err)
 	}
-	if err := cli.Get(t.Context(), client.ObjectKeyFromObject(pod), &corev1.Pod{}); !apierrors.IsNotFound(err) {
-		t.Fatalf("the drifted toolbox must be deleted for rebuild, got err=%v", err)
+	var got corev1.Pod
+	if err := cli.Get(t.Context(), types.NamespacedName{Namespace: "ns", Name: "demo-0"}, &got); err != nil {
+		t.Fatalf("the missing main must be recreated: %v", err)
 	}
-	if !slices.Contains(reg.deleted, tagKey) {
-		t.Errorf("the owed %s must be dropped before the rebuild, deleted %v", tagKey, reg.deleted)
+	if meta.ReadRestoreFromHibernate(&got) {
+		t.Error("a main whose snapshot came from another image must boot fresh, since vk-cocoon refuses the restore")
 	}
-	if _, owed := mustGetCS(t, cli).Annotations[annotationHibernateReclaim]; owed {
-		t.Errorf("the dropped VM must leave the reclaim record")
+	if !slices.Contains(reg.deleted, relHibernateTagKey) {
+		t.Errorf("the snapshot from another image must be dropped, deleted %v", reg.deleted)
+	}
+}
+
+func TestEnsureToolboxesCreatesAToolboxFreshOverASnapshotFromAnotherImage(t *testing.T) {
+	pushed := cocoonv1.ToolboxSpec{Name: "tb", Image: "ghcr.io/cocoonstack/cocoon/toolbox:1", Mode: cocoonv1.ToolboxModeRun}
+	vm := meta.VMNameForPod("ns", meta.ToolboxPodName("demo", pushed.Name))
+	tagKey := vm + ":" + meta.HibernateSnapshotTag
+	for _, tc := range []struct {
+		name        string
+		image       string
+		rebuilt     bool
+		owed        bool
+		wantDropped bool
+	}{
+		{name: "rebuilt for an image edit while owed a reclaim", image: "ghcr.io/cocoonstack/cocoon/toolbox:2", rebuilt: true, owed: true, wantDropped: true},
+		{name: "missing after an image edit", image: "ghcr.io/cocoonstack/cocoon/toolbox:2", wantDropped: true},
+		{name: "missing with a snapshot of its own image", image: pushed.Image},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			tb := pushed
+			tb.Image = tc.image
+			cs := newCocoonSet("demo", func(cs *cocoonv1.CocoonSet) {
+				cs.Generation = 2
+				cs.Spec.Toolboxes = []cocoonv1.ToolboxSpec{tb}
+				if tc.owed {
+					cs.Annotations = map[string]string{annotationHibernateReclaim: encodeReclaim(t, hibernateReclaim{Generation: 2, VMs: []string{vm}})}
+				}
+			})
+			var pods []corev1.Pod
+			objs := []client.Object{cs}
+			if tc.rebuilt {
+				pods = append(pods, *mustBuildToolboxPod(t, newCocoonSet("demo"), pushed, testScheme(t)))
+				objs = append(objs, &pods[0])
+			}
+			reg := &fakeRegistry{present: map[string]bool{tagKey: true}, images: map[string]string{tagKey: pushed.Image}}
+			cli := relClient(t, objs...)
+			r := &Reconciler{Client: cli, Scheme: testScheme(t), Registry: reg}
+
+			if _, _, err := r.ensureToolboxes(t.Context(), cs, classifyPods(pods), r.newRestoreIntent(t.Context(), cs.Namespace)); err != nil {
+				t.Fatalf("ensureToolboxes: %v", err)
+			}
+			if _, _, err := r.ensureToolboxes(t.Context(), cs, classifyPods(nil), r.newRestoreIntent(t.Context(), cs.Namespace)); err != nil {
+				t.Fatalf("ensureToolboxes recreate: %v", err)
+			}
+			var got corev1.Pod
+			if err := cli.Get(t.Context(), types.NamespacedName{Namespace: "ns", Name: meta.ToolboxPodName("demo", tb.Name)}, &got); err != nil {
+				t.Fatalf("the toolbox must be created: %v", err)
+			}
+			if dropped := slices.Contains(reg.deleted, tagKey); dropped != tc.wantDropped {
+				t.Errorf("%s dropped = %v, want %v", tagKey, dropped, tc.wantDropped)
+			}
+			if _, owed := mustGetCS(t, cli).Annotations[annotationHibernateReclaim]; tc.owed && owed == tc.wantDropped {
+				t.Errorf("reclaim record kept = %v, want %v", owed, !tc.wantDropped)
+			}
+		})
 	}
 }
 
@@ -474,7 +555,7 @@ func TestEnsureToolboxesIdempotentOnExistingToolbox(t *testing.T) {
 		WithScheme(scheme).
 		WithObjects(tbPod).
 		Build()
-	r := &Reconciler{Client: cli, Scheme: scheme}
+	r := &Reconciler{Client: cli, Scheme: scheme, Registry: &fakeRegistry{}}
 	classified := classifiedPods{
 		sub:       map[int32]*corev1.Pod{},
 		toolbox:   map[string]*corev1.Pod{},
@@ -834,6 +915,56 @@ func TestEnsureSubAgentsRestoresASlotOwedARestore(t *testing.T) {
 	}
 	if owed := readHibernateReclaim(new(mustGetCS(t, cli))); !slices.Contains(owed.VMs, vm1) {
 		t.Errorf("the restored VM must stay owed until it wakes, record %+v", owed)
+	}
+}
+
+func TestEnsureSubAgentsForksAMissingSlotFreshOverASnapshotFromAnotherImage(t *testing.T) {
+	const oldImage, newImage = "ghcr.io/cocoonstack/cocoon/ubuntu:24.04", "ghcr.io/cocoonstack/cocoon/ubuntu:26.04"
+	vm1 := slotNames([]int32{1}, "")[0]
+	vm1Tag := vm1 + ":" + meta.HibernateSnapshotTag
+	for _, tc := range []struct {
+		name        string
+		mainImage   string
+		subImage    string
+		wantRestore bool
+	}{
+		{name: "image edited at unsuspend", mainImage: oldImage, subImage: oldImage},
+		{name: "sub-agent hibernated on the old image beside a new-image main", mainImage: newImage, subImage: oldImage},
+		{name: "snapshot of the spec image", mainImage: newImage, subImage: newImage, wantRestore: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			cs := newCocoonSet("demo", func(cs *cocoonv1.CocoonSet) {
+				cs.Generation = 2
+				cs.Spec.Agent.Replicas = 1
+				cs.Spec.Agent.Image = tc.mainImage
+			})
+			main := rehibernated(mustBuildAgentPod(t, cs, 0, "", "", testScheme(t)))
+			cs.Spec.Agent.Image = newImage
+			reg := &fakeRegistry{present: map[string]bool{vm1Tag: true}, images: map[string]string{vm1Tag: tc.subImage}}
+			cli := relClient(t, cs, main)
+			r := &Reconciler{Client: cli, Scheme: testScheme(t), Registry: reg}
+
+			if err := r.applyUnsuspend(t.Context(), cs, singlePod(main)); err != nil {
+				t.Fatalf("applyUnsuspend: %v", err)
+			}
+			if _, _, err := r.ensureSubAgents(t.Context(), cs, singlePod(main), relVMName, "", r.newRestoreIntent(t.Context(), cs.Namespace)); err != nil {
+				t.Fatalf("ensureSubAgents: %v", err)
+			}
+			var sub corev1.Pod
+			if err := cli.Get(t.Context(), types.NamespacedName{Namespace: "ns", Name: "demo-1"}, &sub); err != nil {
+				t.Fatalf("the slot must be created: %v", err)
+			}
+			if restores := meta.ReadRestoreFromHibernate(&sub); restores != tc.wantRestore {
+				t.Errorf("sub-agent restores from :hibernate = %v, want %v", restores, tc.wantRestore)
+			}
+			if dropped := slices.Contains(reg.deleted, vm1Tag); dropped == tc.wantRestore {
+				t.Errorf("%s dropped = %v, want %v", vm1Tag, dropped, !tc.wantRestore)
+			}
+			owed := readHibernateReclaim(new(mustGetCS(t, cli)))
+			if slices.Contains(owed.VMs, vm1) != tc.wantRestore || slices.Contains(owed.Restore, vm1) != tc.wantRestore {
+				t.Errorf("record %+v, want %s owed a restore = %v", owed, vm1, tc.wantRestore)
+			}
+		})
 	}
 }
 
@@ -1596,6 +1727,7 @@ func slotNames(slots []int32, suffix string) []string {
 
 type fakeRegistry struct {
 	present   map[string]bool
+	images    map[string]string
 	probeErr  error
 	deleteErr error
 	delay     time.Duration
@@ -1605,6 +1737,21 @@ type fakeRegistry struct {
 	probed    []string
 	deletedMu sync.Mutex
 	deleted   []string
+}
+
+func (f *fakeRegistry) GetManifest(ctx context.Context, name, tag string) ([]byte, string, error) {
+	present, err := f.HasManifest(ctx, name, tag)
+	switch {
+	case err != nil:
+		return nil, "", err
+	case !present:
+		return nil, "", fmt.Errorf("get manifest %s:%s: %w", name, tag, commonsnapshot.ErrManifestNotFound)
+	}
+	f.deletedMu.Lock()
+	image := f.images[name+":"+tag]
+	f.deletedMu.Unlock()
+	raw, err := json.Marshal(manifest.OCIManifest{Annotations: map[string]string{manifest.AnnotationSnapshotBaseImage: image}})
+	return raw, manifest.MediaTypeOCIManifest, err
 }
 
 func (f *fakeRegistry) HasManifest(_ context.Context, name, tag string) (bool, error) {

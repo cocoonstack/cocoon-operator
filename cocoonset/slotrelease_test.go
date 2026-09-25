@@ -75,9 +75,6 @@ func TestSuspendReleaseDeletesVerifiedPodAndStashes(t *testing.T) {
 	if names := gotCS.Annotations[annotationDeleteVMNames]; !strings.Contains(names, relVMName) {
 		t.Errorf("must stash vm names for delete-time GC before releasing pods, got %q", names)
 	}
-	if image := gotCS.Annotations[annotationHibernatedImage]; image != cs.Spec.Agent.Image {
-		t.Errorf("must stash the image the main was released with, got %q", image)
-	}
 	if gotCS.Status.Phase != cocoonv1.CocoonSetPhaseSuspended {
 		t.Errorf("Suspended must land with the deletes, got %q", gotCS.Status.Phase)
 	}
@@ -395,7 +392,7 @@ func TestWakeDropsTagAndClearsHintWhenLive(t *testing.T) {
 	cs := relCocoonSet(func(cs *cocoonv1.CocoonSet) {
 		cs.Spec.Suspend = false
 		cs.Status.Phase = cocoonv1.CocoonSetPhaseWaking
-		cs.Annotations = map[string]string{meta.AnnotationHibernatedOnNode: "node-a", annotationHibernatedImage: cs.Spec.Agent.Image}
+		cs.Annotations = map[string]string{meta.AnnotationHibernatedOnNode: "node-a"}
 	})
 	main := migMainPod(t, cs, "node-c", "vmid-new", true)
 	reg := &fakeRegistry{present: map[string]bool{relHibernateTagKey: true}}
@@ -412,9 +409,6 @@ func TestWakeDropsTagAndClearsHintWhenLive(t *testing.T) {
 	gotCS := mustGetCS(t, cli)
 	if _, ok := gotCS.Annotations[meta.AnnotationHibernatedOnNode]; ok {
 		t.Error("node hint must be cleared once the wake completes")
-	}
-	if _, ok := gotCS.Annotations[annotationHibernatedImage]; ok {
-		t.Error("the released image must be cleared with the hint")
 	}
 }
 
@@ -553,12 +547,12 @@ func TestReconcileReleasedWakeDiscardsASnapshotTheNewImageCannotRestore(t *testi
 		{name: "image edited while a pinned set was released", node: "node-b", released: "ghcr.io/cocoonstack/cocoon/ubuntu:22.04", wantDropped: true},
 		{name: "same image", released: "ghcr.io/cocoonstack/cocoon/ubuntu:24.04"},
 		{name: "same image on a pinned set", node: "node-b", released: "ghcr.io/cocoonstack/cocoon/ubuntu:24.04"},
-		{name: "record without an image"},
+		{name: "snapshot without a recorded image"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			cs := releasedWakeSet(tc.released)
+			cs := releasedWakeSet()
 			cs.Spec.NodeName = tc.node
-			reg := &fakeRegistry{present: map[string]bool{relHibernateTagKey: true}}
+			reg := &fakeRegistry{present: map[string]bool{relHibernateTagKey: true}, images: map[string]string{relHibernateTagKey: tc.released}}
 			cli := relClient(t, cs)
 			r := &Reconciler{Client: cli, APIReader: cli, Scheme: testScheme(t), Registry: reg}
 
@@ -575,18 +569,20 @@ func TestReconcileReleasedWakeDiscardsASnapshotTheNewImageCannotRestore(t *testi
 			if dropped := slices.Contains(reg.deleted, relHibernateTagKey); dropped != tc.wantDropped {
 				t.Errorf("%s dropped = %v, want %v", relHibernateTagKey, dropped, tc.wantDropped)
 			}
-			gotCS := mustGetCS(t, cli)
-			_, hinted := gotCS.Annotations[meta.AnnotationHibernatedOnNode]
-			if _, recorded := gotCS.Annotations[annotationHibernatedImage]; tc.wantDropped && (hinted || recorded) {
-				t.Errorf("a discarded release must clear its record, hint=%v image=%v", hinted, recorded)
+			if _, hinted := mustGetCS(t, cli).Annotations[meta.AnnotationHibernatedOnNode]; tc.wantDropped && hinted {
+				t.Error("a discarded release must clear its node hint")
 			}
 		})
 	}
 }
 
 func TestReconcileReleasedWakeRetriesARefusedSnapshotDiscard(t *testing.T) {
-	cs := releasedWakeSet("ghcr.io/cocoonstack/cocoon/ubuntu:22.04")
-	reg := &fakeRegistry{present: map[string]bool{relHibernateTagKey: true}, deleteErr: errors.New("delete refused")}
+	cs := releasedWakeSet()
+	reg := &fakeRegistry{
+		present:   map[string]bool{relHibernateTagKey: true},
+		images:    map[string]string{relHibernateTagKey: "ghcr.io/cocoonstack/cocoon/ubuntu:22.04"},
+		deleteErr: errors.New("delete refused"),
+	}
 	cli := relClient(t, cs)
 	r := &Reconciler{Client: cli, APIReader: cli, Scheme: testScheme(t), Registry: reg}
 
@@ -596,8 +592,17 @@ func TestReconcileReleasedWakeRetriesARefusedSnapshotDiscard(t *testing.T) {
 	if err := cli.Get(t.Context(), types.NamespacedName{Namespace: "ns", Name: "demo-0"}, &corev1.Pod{}); !apierrors.IsNotFound(err) {
 		t.Errorf("no main may be created while the snapshot it cannot restore is still tagged, got err=%v", err)
 	}
-	if image := mustGetCS(t, cli).Annotations[annotationHibernatedImage]; image == "" {
-		t.Error("the release record must survive a refused discard")
+
+	reg.deleteErr = nil
+	if _, err := r.Reconcile(t.Context(), reqFor(cs)); err != nil {
+		t.Fatalf("retry: %v", err)
+	}
+	var got corev1.Pod
+	if err := cli.Get(t.Context(), types.NamespacedName{Namespace: "ns", Name: "demo-0"}, &got); err != nil || meta.ReadRestoreFromHibernate(&got) {
+		t.Errorf("the retry must boot the main fresh, err=%v restore=%v", err, meta.ReadRestoreFromHibernate(&got))
+	}
+	if !slices.Contains(reg.deleted, relHibernateTagKey) {
+		t.Errorf("the retry must drop %s, deleted %v", relHibernateTagKey, reg.deleted)
 	}
 }
 
@@ -609,15 +614,12 @@ func relCocoonSet(mods ...func(*cocoonv1.CocoonSet)) *cocoonv1.CocoonSet {
 	}}, mods...)...)
 }
 
-func releasedWakeSet(releasedImage string) *cocoonv1.CocoonSet {
+func releasedWakeSet() *cocoonv1.CocoonSet {
 	return relCocoonSet(func(cs *cocoonv1.CocoonSet) {
 		cs.Finalizers = []string{finalizerName}
 		cs.Spec.Suspend = false
 		cs.Status.Phase = cocoonv1.CocoonSetPhaseSuspended
 		cs.Annotations = map[string]string{meta.AnnotationHibernatedOnNode: "node-a"}
-		if releasedImage != "" {
-			cs.Annotations[annotationHibernatedImage] = releasedImage
-		}
 	})
 }
 

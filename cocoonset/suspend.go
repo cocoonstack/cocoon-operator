@@ -167,12 +167,11 @@ func (r *Reconciler) applyUnsuspend(ctx context.Context, cs *cocoonv1.CocoonSet,
 	if err != nil {
 		return err
 	}
-	sameImage := classified.main == nil || meta.ParseVMSpec(classified.main).Image == cs.Spec.Agent.Image
 	for _, vm := range restores {
 		if !slices.Contains(owed.VMs, vm) {
 			owed.VMs = append(owed.VMs, vm)
 		}
-		if sameImage && !slices.Contains(owed.Restore, vm) {
+		if !slices.Contains(owed.Restore, vm) {
 			owed.Restore = append(owed.Restore, vm)
 		}
 	}
@@ -225,13 +224,6 @@ func (r *Reconciler) reclaimWokenSnapshots(ctx context.Context, cs *cocoonv1.Coc
 	return r.reclaimSnapshots(ctx, cs, woken)
 }
 
-func (r *Reconciler) reclaimImageDriftedSnapshot(ctx context.Context, cs *cocoonv1.CocoonSet, pod *corev1.Pod, image string) error {
-	if spec := meta.ParseVMSpec(pod); spec.Image != image {
-		return r.reclaimSnapshots(ctx, cs, []string{spec.VMName})
-	}
-	return nil
-}
-
 func (r *Reconciler) reclaimSnapshots(ctx context.Context, cs *cocoonv1.CocoonSet, vms []string) error {
 	owed := readHibernateReclaim(cs)
 	var pending []string
@@ -252,6 +244,17 @@ func (r *Reconciler) reclaimSnapshots(ctx context.Context, cs *cocoonv1.CocoonSe
 		errs = append(errs, r.writeHibernateReclaim(ctx, cs, owed))
 	}
 	return errors.Join(errs...)
+}
+
+func (r *Reconciler) forgetReclaim(ctx context.Context, cs *cocoonv1.CocoonSet, vms []string) error {
+	owed := readHibernateReclaim(cs)
+	forget := func(vm string) bool { return slices.Contains(vms, vm) }
+	if !slices.ContainsFunc(owed.VMs, forget) {
+		return nil
+	}
+	owed.VMs = slices.DeleteFunc(owed.VMs, forget)
+	owed.Restore = slices.DeleteFunc(owed.Restore, forget)
+	return r.writeHibernateReclaim(ctx, cs, owed)
 }
 
 func (r *Reconciler) writeHibernateReclaim(ctx context.Context, cs *cocoonv1.CocoonSet, owed hibernateReclaim) error {

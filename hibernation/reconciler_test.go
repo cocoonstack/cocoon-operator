@@ -3,6 +3,7 @@ package hibernation
 import (
 	"context"
 	"errors"
+	"fmt"
 	"hash/maphash"
 	"sync"
 	"testing"
@@ -21,6 +22,7 @@ import (
 	cocoonv1 "github.com/cocoonstack/cocoon-common/apis/v1"
 	commonk8s "github.com/cocoonstack/cocoon-common/k8s"
 	"github.com/cocoonstack/cocoon-common/meta"
+	commonsnapshot "github.com/cocoonstack/cocoon-common/snapshot"
 )
 
 func TestReadyConditionMaps(t *testing.T) {
@@ -1425,6 +1427,11 @@ type vmLockProbe struct {
 	unlocked int
 }
 
+func (p *vmLockProbe) GetManifest(_ context.Context, name, tag string) ([]byte, string, error) {
+	p.observe(name)
+	return nil, "", fmt.Errorf("get manifest %s:%s: %w", name, tag, commonsnapshot.ErrManifestNotFound)
+}
+
 func (p *vmLockProbe) HasManifest(_ context.Context, name, _ string) (bool, error) {
 	p.observe(name)
 	return false, nil
@@ -1460,6 +1467,17 @@ type fakeRegistry struct {
 	manifestErr     error
 	deleteCalled    bool
 	deleteErr       error
+}
+
+func (f *fakeRegistry) GetManifest(ctx context.Context, name, tag string) ([]byte, string, error) {
+	present, err := f.HasManifest(ctx, name, tag)
+	switch {
+	case err != nil:
+		return nil, "", err
+	case !present:
+		return nil, "", fmt.Errorf("get manifest %s:%s: %w", name, tag, commonsnapshot.ErrManifestNotFound)
+	}
+	return []byte("{}"), "", nil
 }
 
 func (f *fakeRegistry) HasManifest(_ context.Context, _, _ string) (bool, error) {

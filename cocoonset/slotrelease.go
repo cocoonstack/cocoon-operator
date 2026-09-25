@@ -20,8 +20,6 @@ import (
 	"github.com/cocoonstack/cocoon-operator/snapshot"
 )
 
-const annotationHibernatedImage = "cocoonset.cocoonstack.io/hibernated-image"
-
 // reconcileSuspendRelease drains a release-policy CocoonSet to zero pods once every VM's :hibernate snapshot is verified.
 func (r *Reconciler) reconcileSuspendRelease(ctx context.Context, cs *cocoonv1.CocoonSet, classified classifiedPods) (ctrl.Result, error) {
 	logger := log.WithFunc("cocoonset.Reconciler.reconcileSuspendRelease")
@@ -49,14 +47,9 @@ func (r *Reconciler) reconcileSuspendRelease(ctx context.Context, cs *cocoonv1.C
 	if err := r.stashDeleteVMNames(ctx, cs, podsSlice(classified)); err != nil {
 		return ctrl.Result{}, fmt.Errorf("stash vm names before slot release: %w", err)
 	}
-	if main := classified.main; main != nil {
-		if err := r.patchAnnotation(ctx, cs, annotationHibernatedImage, meta.ParseVMSpec(main).Image); err != nil {
+	if main := classified.main; main != nil && main.Spec.NodeName != "" {
+		if err := r.patchAnnotation(ctx, cs, meta.AnnotationHibernatedOnNode, main.Spec.NodeName); err != nil {
 			return ctrl.Result{}, err
-		}
-		if main.Spec.NodeName != "" {
-			if err := r.patchAnnotation(ctx, cs, meta.AnnotationHibernatedOnNode, main.Spec.NodeName); err != nil {
-				return ctrl.Result{}, err
-			}
 		}
 	}
 
@@ -127,7 +120,7 @@ func (r *Reconciler) reconcileWake(ctx context.Context, cs *cocoonv1.CocoonSet, 
 				placement = "hint-node"
 			}
 			metrics.SlotReleaseWakeTotal.WithLabelValues(cs.Namespace, cs.Name, placement).Inc()
-			if err := r.clearReleaseRecord(ctx, cs); err != nil {
+			if err := r.patchAnnotation(ctx, cs, meta.AnnotationHibernatedOnNode, ""); err != nil {
 				return true, ctrl.Result{}, err
 			}
 		}
@@ -147,6 +140,13 @@ func (r *Reconciler) reconcileWake(ctx context.Context, cs *cocoonv1.CocoonSet, 
 // startReleasedWake recreates main with restore intent; handled=false only when no restorable snapshot exists.
 func (r *Reconciler) startReleasedWake(ctx context.Context, cs *cocoonv1.CocoonSet, classified classifiedPods) (bool, ctrl.Result, error) {
 	logger := log.WithFunc("cocoonset.Reconciler.startReleasedWake")
+	pod, err := buildAgentPod(cs, 0, "", "", r.Scheme)
+	if err != nil {
+		return true, ctrl.Result{}, fmt.Errorf("wake: build main: %w", err)
+	}
+	if _, err := r.discardImageConflict(ctx, cs, pod); err != nil {
+		return true, ctrl.Result{}, fmt.Errorf("wake: %w", err)
+	}
 	vmName := meta.VMNameForDeployment(cs.Namespace, cs.Name, 0)
 	present, probeErr := snapshot.HasHibernateSnapshot(ctx, r.Registry, vmName)
 	if probeErr != nil {
@@ -154,23 +154,17 @@ func (r *Reconciler) startReleasedWake(ctx context.Context, cs *cocoonv1.CocoonS
 		return true, ctrl.Result{}, fmt.Errorf("wake: %w", probeErr)
 	}
 	if !present {
-		// No snapshot means suspended before first boot; the normal flow fresh-boots
-		return false, ctrl.Result{}, nil
-	}
-	discarded, discardErr := r.discardReleasedSnapshotOnImageChange(ctx, cs, vmName)
-	if discardErr != nil {
-		return true, ctrl.Result{}, fmt.Errorf("wake: %w", discardErr)
-	}
-	if discarded {
+		// No snapshot means suspended before first boot or dropped for another image; the normal flow fresh-boots
+		if cs.Annotations[meta.AnnotationHibernatedOnNode] != "" {
+			if err := r.patchAnnotation(ctx, cs, meta.AnnotationHibernatedOnNode, ""); err != nil {
+				return true, ctrl.Result{}, err
+			}
+		}
 		return false, ctrl.Result{}, nil
 	}
 	// Persist Waking before the create so a crash between the two resumes here instead of fresh-booting
 	if err := r.patchStatus(ctx, cs, buildStatus(cs, classified, cocoonv1.CocoonSetPhaseWaking)); err != nil {
 		return true, ctrl.Result{}, err
-	}
-	pod, err := buildAgentPod(cs, 0, "", "", r.Scheme)
-	if err != nil {
-		return true, ctrl.Result{}, fmt.Errorf("wake: build main: %w", err)
 	}
 	meta.MarkRestoreFromHibernate(pod)
 	// Soft-prefer the hibernated-on seat; a spec.nodeName pin already set a required affinity and wins
@@ -198,29 +192,6 @@ func (r *Reconciler) confirmReleasedDelete(ctx context.Context, main *corev1.Pod
 	default:
 		return false, ctrl.Result{}, nil
 	}
-}
-
-func (r *Reconciler) discardReleasedSnapshotOnImageChange(ctx context.Context, cs *cocoonv1.CocoonSet, vmName string) (bool, error) {
-	released := cs.Annotations[annotationHibernatedImage]
-	if released == "" || released == cs.Spec.Agent.Image {
-		return false, nil
-	}
-	log.WithFunc("cocoonset.Reconciler.discardReleasedSnapshotOnImageChange").Infof(ctx,
-		"%s/%s: image changed from %s to %s since the release, dropping hibernate snapshot %s to boot fresh", cs.Namespace, cs.Name, released, cs.Spec.Agent.Image, vmName)
-	if err := r.Registry.DeleteManifest(ctx, vmName, meta.HibernateSnapshotTag); err != nil {
-		return false, fmt.Errorf("drop hibernate snapshot %s: %w", vmName, err)
-	}
-	return true, r.clearReleaseRecord(ctx, cs)
-}
-
-func (r *Reconciler) clearReleaseRecord(ctx context.Context, cs *cocoonv1.CocoonSet) error {
-	if err := commonk8s.Patch(ctx, r.Client, cs, func(c *cocoonv1.CocoonSet) {
-		delete(c.Annotations, meta.AnnotationHibernatedOnNode)
-		delete(c.Annotations, annotationHibernatedImage)
-	}); err != nil {
-		return fmt.Errorf("clear release record of %s/%s: %w", cs.Namespace, cs.Name, err)
-	}
-	return nil
 }
 
 func hasLivePod(c classifiedPods) bool {

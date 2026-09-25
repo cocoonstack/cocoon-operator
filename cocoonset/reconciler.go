@@ -170,9 +170,6 @@ func (r *Reconciler) rebuildDriftedMain(ctx context.Context, logger *log.Fields,
 	if classified.main == nil || podSpecMatchesAgent(classified.main, cs, 0) {
 		return false, ctrl.Result{}, nil
 	}
-	if err := r.reclaimImageDriftedSnapshot(ctx, cs, classified.main, cs.Spec.Agent.Image); err != nil {
-		return true, ctrl.Result{}, err
-	}
 	deleted, wait, err := r.triagePod(ctx, logger, cs, classified.main, false)
 	if err != nil {
 		return true, ctrl.Result{}, err
@@ -201,6 +198,9 @@ func (r *Reconciler) createMainAgent(ctx context.Context, cs *cocoonv1.CocoonSet
 	mainPod, err := buildAgentPod(cs, 0, "", "", r.Scheme)
 	if err != nil {
 		return ctrl.Result{}, fmt.Errorf("build main agent: %w", err)
+	}
+	if _, err := r.discardImageConflict(ctx, cs, mainPod); err != nil {
+		return ctrl.Result{}, err
 	}
 	if err := r.markRestoreFromIntent(ctx, mainPod, intent); err != nil {
 		return ctrl.Result{}, err

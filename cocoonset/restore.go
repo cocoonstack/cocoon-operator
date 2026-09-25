@@ -83,3 +83,28 @@ func (r *Reconciler) markRestoreIfHibernated(ctx context.Context, pod *corev1.Po
 	}
 	return nil
 }
+
+func (r *Reconciler) discardImageConflict(ctx context.Context, cs *cocoonv1.CocoonSet, pod *corev1.Pod) (bool, error) {
+	dropped, err := r.dropImageConflict(ctx, pod)
+	if err != nil || !dropped {
+		return false, err
+	}
+	return true, r.forgetReclaim(ctx, cs, []string{meta.ParseVMSpec(pod).VMName})
+}
+
+func (r *Reconciler) dropImageConflict(ctx context.Context, pod *corev1.Pod) (bool, error) {
+	logger := log.WithFunc("cocoonset.Reconciler.dropImageConflict")
+	spec := meta.ParseVMSpec(pod)
+	if !spec.Managed {
+		return false, nil
+	}
+	pushed, err := snapshot.HibernateSnapshotImage(ctx, r.Registry, spec.VMName)
+	if err != nil || pushed == "" || pushed == spec.Image {
+		return false, err
+	}
+	logger.Infof(ctx, "pod %s/%s: hibernate snapshot of %s was pushed from %s, dropping it to boot %s fresh", pod.Namespace, pod.Name, spec.VMName, pushed, spec.Image)
+	if err := r.Registry.DeleteManifest(ctx, spec.VMName, meta.HibernateSnapshotTag); err != nil {
+		return false, fmt.Errorf("drop hibernate snapshot %s: %w", spec.VMName, err)
+	}
+	return true, nil
+}

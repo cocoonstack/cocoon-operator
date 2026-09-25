@@ -112,6 +112,34 @@ func TestMigrationRecreatesOnTargetWithRestoreAnnotation(t *testing.T) {
 	}
 }
 
+func TestReconcileMigrationRecreatesTheMainFreshOverASnapshotFromAnotherImage(t *testing.T) {
+	cs := migCocoonSet("node-b")
+	cs.Finalizers = []string{finalizerName}
+	cs.Spec.Agent.Image = "ghcr.io/cocoonstack/cocoon/ubuntu:26.04"
+	cs.Status.Phase = cocoonv1.CocoonSetPhaseMigrating
+	tagKey := migVMName + ":" + meta.HibernateSnapshotTag
+	reg := &fakeRegistry{present: map[string]bool{tagKey: true}, images: map[string]string{tagKey: "ghcr.io/cocoonstack/cocoon/ubuntu:24.04"}}
+	cli := relClient(t, cs)
+	r := &Reconciler{Client: cli, Scheme: testScheme(t), Registry: reg}
+
+	if _, err := r.Reconcile(t.Context(), reqFor(cs)); err != nil {
+		t.Fatalf("Reconcile: %v", err)
+	}
+	var got corev1.Pod
+	if err := cli.Get(t.Context(), types.NamespacedName{Namespace: "ns", Name: "demo-0"}, &got); err != nil {
+		t.Fatalf("the main must be recreated: %v", err)
+	}
+	if meta.ReadRestoreFromHibernate(&got) {
+		t.Error("a main whose snapshot came from another image must boot fresh, since vk-cocoon refuses the restore")
+	}
+	if !slices.Contains(reg.deleted, tagKey) {
+		t.Errorf("the snapshot from another image must be dropped, deleted %v", reg.deleted)
+	}
+	if na := got.Spec.Affinity; na == nil || na.NodeAffinity.RequiredDuringSchedulingIgnoredDuringExecution.NodeSelectorTerms[0].MatchExpressions[0].Values[0] != "node-b" {
+		t.Errorf("the fresh main must still target node-b, got %+v", na)
+	}
+}
+
 func TestMigrationWaitsWhileRestoring(t *testing.T) {
 	cs := migCocoonSet("node-b")
 	cs.Status.Phase = cocoonv1.CocoonSetPhaseMigrating

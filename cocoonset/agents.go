@@ -2,6 +2,7 @@ package cocoonset
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"maps"
 	"slices"
@@ -78,16 +79,25 @@ func (r *Reconciler) createSubAgents(ctx context.Context, logger *log.Fields, cs
 		return false, nil
 	}
 	restoring := readHibernateReclaim(cs).Restore
+	discarded := make([]string, len(missing))
 	g, gctx := errgroup.WithContext(ctx)
 	g.SetLimit(subAgentCreateConcurrency)
 	var created atomic.Bool
-	for _, slot := range missing {
+	for i, slot := range missing {
 		g.Go(func() error {
 			subPod, err := buildAgentPod(cs, slot, mainVMName, mainNodeName, r.Scheme)
 			if err != nil {
 				return fmt.Errorf("build sub-agent slot %d: %w", slot, err)
 			}
-			if slices.Contains(restoring, meta.ParseVMSpec(subPod).VMName) {
+			vmName := meta.ParseVMSpec(subPod).VMName
+			dropped, err := r.dropImageConflict(gctx, subPod)
+			if err != nil {
+				return fmt.Errorf("sub-agent slot %d: %w", slot, err)
+			}
+			if dropped {
+				discarded[i] = vmName
+			}
+			if slices.Contains(restoring, vmName) {
 				err = r.markRestoreIfHibernated(gctx, subPod, true)
 			} else {
 				err = r.markRestoreFromIntent(gctx, subPod, intent)
@@ -107,7 +117,7 @@ func (r *Reconciler) createSubAgents(ctx context.Context, logger *log.Fields, cs
 		})
 	}
 	waitErr := g.Wait()
-	return created.Load(), waitErr
+	return created.Load(), errors.Join(waitErr, r.forgetReclaim(ctx, cs, discarded))
 }
 
 func (r *Reconciler) reclaimUnrestoredForks(ctx context.Context, cs *cocoonv1.CocoonSet, missing []int32, intent restoreIntent) error {
