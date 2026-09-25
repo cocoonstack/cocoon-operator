@@ -117,7 +117,10 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 		return res, err
 	}
 
-	if err := r.applyUnsuspend(ctx, cs.Namespace, classified); err != nil {
+	if err := r.applyUnsuspend(ctx, &cs, classified); err != nil {
+		return ctrl.Result{}, err
+	}
+	if err := r.reclaimWokenSnapshots(ctx, &cs, classified); err != nil {
 		return ctrl.Result{}, err
 	}
 
