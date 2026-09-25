@@ -81,6 +81,9 @@ func (r *Reconciler) advanceMigration(ctx context.Context, cs *cocoonv1.CocoonSe
 	case main != nil && desired != "" && main.Spec.NodeName != "" && main.Spec.NodeName != desired:
 		// A tag this controller never quiesced is a leftover that would roll the VM back; drop it first
 		if !meta.ReadHibernateState(main) {
+			if !meta.VMLive(main) {
+				return false, ctrl.Result{}, nil
+			}
 			owned, err := r.podsTrackedByHibernationCR(ctx, cs.Namespace)
 			if err != nil {
 				return true, ctrl.Result{}, fmt.Errorf("migrate: %w", err)

@@ -198,6 +198,46 @@ func TestMigrationDropsStaleTagInsteadOfDeletingLivePod(t *testing.T) {
 	}
 }
 
+func TestMigrationWaitsOutAWakeBeforeDroppingTheTagItReads(t *testing.T) {
+	cs := migCocoonSet("node-b")
+	main := migMainPod(t, cs, "node-a", "", false)
+	tagKey := migVMName + ":" + meta.HibernateSnapshotTag
+	reg := &fakeRegistry{present: map[string]bool{tagKey: true}}
+	cli := ctrlfake.NewClientBuilder().WithScheme(testScheme(t)).
+		WithObjects(cs, main).WithStatusSubresource(&cocoonv1.CocoonSet{}).Build()
+	r := &Reconciler{Client: cli, Scheme: testScheme(t), Registry: reg}
+
+	handled, _, err := r.reconcileMigration(t.Context(), cs, classifiedPods{main: main})
+	if err != nil {
+		t.Fatalf("reconcileMigration while waking: %v", err)
+	}
+	if handled {
+		t.Error("a main whose wake is in flight must be left to the normal flow")
+	}
+	if slices.Contains(reg.deleted, tagKey) {
+		t.Fatalf("the in-flight wake still reads %s, deleted=%v", tagKey, reg.deleted)
+	}
+
+	meta.VMRuntime{VMID: "vmid-woken"}.Apply(main)
+	main.Status.ContainerStatuses = []corev1.ContainerStatus{{State: corev1.ContainerState{Running: &corev1.ContainerStateRunning{}}}}
+	if handled, _, err = r.reconcileMigration(t.Context(), cs, classifiedPods{main: main}); err != nil || !handled {
+		t.Fatalf("woken main: handled=%v err=%v", handled, err)
+	}
+	if !slices.Contains(reg.deleted, tagKey) {
+		t.Fatalf("once the main runs, the leftover %s must be dropped, deleted=%v", tagKey, reg.deleted)
+	}
+	if handled, _, err = r.reconcileMigration(t.Context(), cs, classifiedPods{main: main}); err != nil || !handled {
+		t.Fatalf("migration start: handled=%v err=%v", handled, err)
+	}
+	var got corev1.Pod
+	if err := cli.Get(t.Context(), types.NamespacedName{Namespace: "ns", Name: "demo-0"}, &got); err != nil {
+		t.Fatalf("get main: %v", err)
+	}
+	if !meta.ReadHibernateState(&got) {
+		t.Error("with the tag gone the migration must quiesce the main")
+	}
+}
+
 func TestMigrationLeavesTheSnapshotAloneWhileACocoonHibernationWakes(t *testing.T) {
 	cs := migCocoonSet("node-b")
 	main := migMainPod(t, cs, "node-a", "vmid-1", true)
