@@ -180,7 +180,7 @@ func (r *Reconciler) rebuildDriftedMain(ctx context.Context, logger *log.Fields,
 	return false, ctrl.Result{}, nil
 }
 
-// handleFailedMainAgent clears a prior suspend's hibernate intent unless a migration is pending, and recreates a drifted terminal main, which would otherwise wait in Failed for a Ready it cannot reach.
+// handleFailedMainAgent recreates a drifted terminal main, which would otherwise wait in Failed for a Ready it cannot reach.
 func (r *Reconciler) handleFailedMainAgent(ctx context.Context, cs *cocoonv1.CocoonSet, classified classifiedPods, reason string) (ctrl.Result, error) {
 	if !mainOffTarget(cs, classified.main) {
 		if err := r.applyUnsuspend(ctx, cs, classified); err != nil {
