@@ -1074,6 +1074,36 @@ func TestReconcileUnsuspendClearsTheHibernateIntentOfAFailedMain(t *testing.T) {
 	}
 }
 
+func TestReconcileFailedMainKeepsTheQuiesceOfAPendingMigration(t *testing.T) {
+	cs := migCocoonSet("node-b")
+	cs.Finalizers = []string{finalizerName}
+	cs.Generation = 2
+	cs.Spec.Agent.OS = cocoonv1.OSMacos
+	cs.Status.Phase = cocoonv1.CocoonSetPhaseMigrating
+	main := rehibernated(migMainPod(t, cs, "node-a", "vm-macos", true))
+	meta.LifecycleStatus{State: meta.LifecycleStateFailed, ObservedGeneration: 2, Message: "macOS guest does not support hibernate"}.Apply(main)
+	cli := relClient(t, cs, main)
+	r := &Reconciler{Client: cli, Scheme: testScheme(t), Registry: &fakeRegistry{}}
+
+	if _, err := r.Reconcile(t.Context(), reqFor(cs)); err != nil {
+		t.Fatalf("Reconcile: %v", err)
+	}
+	var got corev1.Pod
+	if err := cli.Get(t.Context(), client.ObjectKeyFromObject(main), &got); err != nil {
+		t.Fatalf("get main: %v", err)
+	}
+	if !meta.ReadHibernateState(&got) {
+		t.Fatal("the failed path must keep the migration's quiesce, or vk-cocoon lifts the failure and the migration restarts forever")
+	}
+	gotCS := mustGetCS(t, cli)
+	if gotCS.Status.Phase != cocoonv1.CocoonSetPhaseFailed {
+		t.Errorf("phase = %q, want Failed", gotCS.Status.Phase)
+	}
+	if _, owed := gotCS.Annotations[annotationHibernateReclaim]; owed {
+		t.Error("a migration's quiesce owes no unsuspend reclaim")
+	}
+}
+
 func TestReconcileSuspendTimesOutAfterTheDeadline(t *testing.T) {
 	scheme := testScheme(t)
 	cs := newCocoonSet("demo", func(cs *cocoonv1.CocoonSet) {

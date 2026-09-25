@@ -48,7 +48,7 @@ func (r *Reconciler) reconcileMigration(ctx context.Context, cs *cocoonv1.Cocoon
 	}
 
 	if !snap {
-		if desired == "" || main == nil || main.Spec.NodeName == "" || main.Spec.NodeName == desired {
+		if !mainOffTarget(cs, main) {
 			// Settled, aborted, or fresh create: the normal flow takes it from here
 			return false, ctrl.Result{}, nil
 		}
@@ -78,7 +78,7 @@ func (r *Reconciler) advanceMigration(ctx context.Context, cs *cocoonv1.CocoonSe
 	main := classified.main
 
 	switch {
-	case main != nil && desired != "" && main.Spec.NodeName != "" && main.Spec.NodeName != desired:
+	case mainOffTarget(cs, main):
 		// A tag this controller never quiesced is a leftover that would roll the VM back; drop it first
 		if !meta.ReadHibernateState(main) {
 			if !meta.VMLive(main) {
@@ -168,4 +168,8 @@ func (r *Reconciler) markMigrating(ctx context.Context, cs *cocoonv1.CocoonSet, 
 		return true, ctrl.Result{}, fmt.Errorf("migrate: patch migrating status %s/%s: %w", cs.Namespace, cs.Name, err)
 	}
 	return true, ctrl.Result{RequeueAfter: requeueMigratePoll}, nil
+}
+
+func mainOffTarget(cs *cocoonv1.CocoonSet, main *corev1.Pod) bool {
+	return main != nil && cs.Spec.NodeName != "" && main.Spec.NodeName != "" && main.Spec.NodeName != cs.Spec.NodeName
 }
