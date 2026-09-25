@@ -395,7 +395,7 @@ func TestReconcilePlainUnsuspendOfAPinnedSetRestoresASubAgentDeletedWhileSuspend
 	cs.Generation = 2
 	cs.Spec.Agent.Replicas = 1
 	cs.Status.Phase = cocoonv1.CocoonSetPhaseSuspended
-	cs.Annotations = map[string]string{annotationHibernateReclaim: encodeReclaim(t, hibernateReclaim{VMs: slotNames([]int32{0, 1}, ""), Suspended: true})}
+	cs.Annotations = map[string]string{annotationHibernateReclaim: encodeReclaim(t, hibernateReclaim{VMs: slotNames([]int32{0, 1}, ""), Suspended: slotNames([]int32{0, 1}, "")})}
 	main := rehibernated(migMainPod(t, cs, "node-b", "", false))
 	reg := &fakeRegistry{present: map[string]bool{
 		migVMName + ":" + meta.HibernateSnapshotTag: true,

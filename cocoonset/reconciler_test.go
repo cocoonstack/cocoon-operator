@@ -184,8 +184,8 @@ func TestApplySuspendRecordsEveryVMBeforeItHibernates(t *testing.T) {
 	}
 	got := readHibernateReclaim(new(mustGetCS(t, cli)))
 	want := slices.Concat([]string{"vk-ns-old"}, slotNames([]int32{0, 1}, ""), []string{meta.VMNameForPod("ns", meta.ToolboxPodName("demo", tb.Name))})
-	if !got.Suspended || !slices.Equal(got.VMs, want) {
-		t.Errorf("record %+v, want the suspend marker and %v written before any hibernate annotation", got, want)
+	if !slices.Equal(got.VMs, want) || !slices.Equal(got.Suspended, want[1:]) {
+		t.Errorf("record %+v, want %v owed and %v marked suspended before any hibernate annotation", got, want, want[1:])
 	}
 }
 
@@ -248,17 +248,19 @@ func TestApplyUnsuspendRecordsARestoreForASubAgentMissingAtUnsuspend(t *testing.
 		name        string
 		subPresent  bool
 		recorded    []int32
+		suspended   []int32
 		wantRestore bool
 	}{
-		{name: "missing slot the suspend recorded", recorded: []int32{0, 1}, wantRestore: true},
-		{name: "missing slot the suspend never saw", recorded: []int32{0}},
-		{name: "every slot present", subPresent: true, recorded: []int32{0, 1}},
+		{name: "missing slot the suspend recorded", recorded: []int32{0, 1}, suspended: []int32{0, 1}, wantRestore: true},
+		{name: "missing slot the suspend never saw", recorded: []int32{0}, suspended: []int32{0}},
+		{name: "missing slot an earlier cycle left owed a reclaim", recorded: []int32{0, 1}, suspended: []int32{0}},
+		{name: "every slot present", subPresent: true, recorded: []int32{0, 1}, suspended: []int32{0, 1}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			cs := newCocoonSet("demo", func(cs *cocoonv1.CocoonSet) {
 				cs.Generation = 2
 				cs.Spec.Agent.Replicas = 1
-				cs.Annotations = map[string]string{annotationHibernateReclaim: encodeReclaim(t, hibernateReclaim{VMs: slotNames(tc.recorded, ""), Suspended: true})}
+				cs.Annotations = map[string]string{annotationHibernateReclaim: encodeReclaim(t, hibernateReclaim{VMs: slotNames(tc.recorded, ""), Suspended: slotNames(tc.suspended, "")})}
 			})
 			pods := []corev1.Pod{*rehibernated(mustBuildAgentPod(t, cs, 0, "", "", testScheme(t)))}
 			if tc.subPresent {
@@ -279,7 +281,7 @@ func TestApplyUnsuspendRecordsARestoreForASubAgentMissingAtUnsuspend(t *testing.
 			if restores := slices.Contains(owed.Restore, vm1) && slices.Contains(owed.VMs, vm1); restores != tc.wantRestore {
 				t.Errorf("record %+v owes a restore of %s = %v, want %v", owed, vm1, restores, tc.wantRestore)
 			}
-			if owed.Suspended || owed.Generation != 2 {
+			if len(owed.Suspended) > 0 || owed.Generation != 2 {
 				t.Errorf("record %+v, want generation 2 and the suspend marker cleared", owed)
 			}
 			if len(reg.probed) != 0 {
@@ -296,7 +298,7 @@ func TestUnsuspendReclaimsTheSnapshotOfAToolboxDeletedWhileSuspended(t *testing.
 	cs := newCocoonSet("demo", func(cs *cocoonv1.CocoonSet) {
 		cs.Generation = 2
 		cs.Spec.Toolboxes = []cocoonv1.ToolboxSpec{tb}
-		cs.Annotations = map[string]string{annotationHibernateReclaim: encodeReclaim(t, hibernateReclaim{VMs: []string{relVMName, tbVM}, Suspended: true})}
+		cs.Annotations = map[string]string{annotationHibernateReclaim: encodeReclaim(t, hibernateReclaim{VMs: []string{relVMName, tbVM}, Suspended: []string{relVMName, tbVM}})}
 	})
 	main := rehibernated(mustBuildAgentPod(t, cs, 0, "", "", testScheme(t)))
 	reg := &fakeRegistry{present: map[string]bool{tbTag: true}, images: map[string]string{tbTag: tb.Image}}
@@ -1084,7 +1086,7 @@ func TestEnsureSubAgentsForksAMissingSlotFreshOverASnapshotFromAnotherImage(t *t
 				cs.Generation = 2
 				cs.Spec.Agent.Replicas = 1
 				cs.Spec.Agent.Image = tc.mainImage
-				cs.Annotations = map[string]string{annotationHibernateReclaim: encodeReclaim(t, hibernateReclaim{VMs: slotNames([]int32{0, 1}, ""), Suspended: true})}
+				cs.Annotations = map[string]string{annotationHibernateReclaim: encodeReclaim(t, hibernateReclaim{VMs: slotNames([]int32{0, 1}, ""), Suspended: slotNames([]int32{0, 1}, "")})}
 			})
 			main := rehibernated(mustBuildAgentPod(t, cs, 0, "", "", testScheme(t)))
 			cs.Spec.Agent.Image = newImage

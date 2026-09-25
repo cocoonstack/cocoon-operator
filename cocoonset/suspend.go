@@ -30,7 +30,7 @@ type hibernateReclaim struct {
 	Generation int64    `json:"generation"`
 	VMs        []string `json:"vms"`
 	Restore    []string `json:"restore,omitempty"`
-	Suspended  bool     `json:"suspended,omitzero"`
+	Suspended  []string `json:"suspended,omitempty"`
 }
 
 // reconcileSuspend polls the registry and stays Suspending until every managed VM's snapshot lands.
@@ -127,9 +127,9 @@ func (r *Reconciler) allOwnedPodsHibernated(ctx context.Context, cs *cocoonv1.Co
 
 func (r *Reconciler) applySuspend(ctx context.Context, cs *cocoonv1.CocoonSet, classified classifiedPods) error {
 	owed := readHibernateReclaim(cs)
-	owed.Suspended = true
 	for _, name := range slices.Sorted(maps.Keys(classified.allByName)) {
 		owed.VMs = appendManagedVM(owed.VMs, classified.allByName[name])
+		owed.Suspended = appendManagedVM(owed.Suspended, classified.allByName[name])
 	}
 	if err := r.writeHibernateReclaim(ctx, cs, owed); err != nil {
 		return err
@@ -161,16 +161,16 @@ func (r *Reconciler) applyUnsuspend(ctx context.Context, cs *cocoonv1.CocoonSet,
 		})
 	}
 	owed := readHibernateReclaim(cs)
-	if len(hibernated) == 0 && !owed.Suspended {
+	if len(hibernated) == 0 && len(owed.Suspended) == 0 {
 		return nil
 	}
 	owed.Generation = cs.Generation
 	for _, pod := range hibernated {
 		owed.VMs = appendManagedVM(owed.VMs, pod)
 	}
-	if owed.Suspended {
-		owed.Restore = appendMissingVMs(owed.Restore, owed.VMs, classified)
-		owed.Suspended = len(hibernated) > 0
+	owed.Restore = appendMissingVMs(owed.Restore, owed.Suspended, classified)
+	if len(hibernated) == 0 {
+		owed.Suspended = nil
 	}
 	if err := r.writeHibernateReclaim(ctx, cs, owed); err != nil {
 		return err
@@ -183,7 +183,7 @@ func (r *Reconciler) applyUnsuspend(ctx context.Context, cs *cocoonv1.CocoonSet,
 			return fmt.Errorf("clear hibernate annotation on %s/%s: %w", pod.Namespace, pod.Name, err)
 		}
 	}
-	owed.Suspended = false
+	owed.Suspended = nil
 	return r.writeHibernateReclaim(ctx, cs, owed)
 }
 
@@ -231,6 +231,7 @@ func (r *Reconciler) forgetReclaim(ctx context.Context, cs *cocoonv1.CocoonSet, 
 	}
 	owed.VMs = slices.DeleteFunc(owed.VMs, forget)
 	owed.Restore = slices.DeleteFunc(owed.Restore, forget)
+	owed.Suspended = slices.DeleteFunc(owed.Suspended, forget)
 	return r.writeHibernateReclaim(ctx, cs, owed)
 }
 
