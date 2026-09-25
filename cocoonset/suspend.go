@@ -163,14 +163,16 @@ func (r *Reconciler) applyUnsuspend(ctx context.Context, cs *cocoonv1.CocoonSet,
 			owed.VMs = append(owed.VMs, spec.VMName)
 		}
 	}
-	restores, err := r.hibernatedMissingSubAgents(ctx, cs, classified, hibernatedByCR)
+	missing, restores, err := r.hibernatedMissingSlots(ctx, cs, classified, hibernatedByCR)
 	if err != nil {
 		return err
 	}
-	for _, vm := range restores {
+	for _, vm := range missing {
 		if !slices.Contains(owed.VMs, vm) {
 			owed.VMs = append(owed.VMs, vm)
 		}
+	}
+	for _, vm := range restores {
 		if !slices.Contains(owed.Restore, vm) {
 			owed.Restore = append(owed.Restore, vm)
 		}
@@ -189,25 +191,42 @@ func (r *Reconciler) applyUnsuspend(ctx context.Context, cs *cocoonv1.CocoonSet,
 	return nil
 }
 
-func (r *Reconciler) hibernatedMissingSubAgents(ctx context.Context, cs *cocoonv1.CocoonSet, classified classifiedPods, ownedByCR map[string]struct{}) ([]string, error) {
-	var vms []string
+func (r *Reconciler) hibernatedMissingSlots(ctx context.Context, cs *cocoonv1.CocoonSet, classified classifiedPods, ownedByCR map[string]struct{}) (owed, restores []string, err error) {
+	tagged := func(podName, vm string) (bool, error) {
+		if _, owned := ownedByCR[podName]; owned {
+			return false, nil
+		}
+		return snapshot.HasHibernateSnapshot(ctx, r.Registry, vm)
+	}
 	for slot := int32(1); slot <= cs.Spec.Agent.Replicas; slot++ {
 		if _, exists := classified.sub[slot]; exists {
 			continue
 		}
-		if _, owned := ownedByCR[agentPodName(cs.Name, slot)]; owned {
-			continue
-		}
 		vm := meta.VMNameForDeployment(cs.Namespace, cs.Name, int(slot))
-		present, err := snapshot.HasHibernateSnapshot(ctx, r.Registry, vm)
+		present, err := tagged(agentPodName(cs.Name, slot), vm)
 		if err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 		if present {
-			vms = append(vms, vm)
+			owed = append(owed, vm)
+			restores = append(restores, vm)
 		}
 	}
-	return vms, nil
+	for _, tb := range cs.Spec.Toolboxes {
+		if _, exists := classified.toolbox[tb.Name]; exists {
+			continue
+		}
+		podName := meta.ToolboxPodName(cs.Name, tb.Name)
+		vm := meta.VMNameForPod(cs.Namespace, podName)
+		present, err := tagged(podName, vm)
+		if err != nil {
+			return nil, nil, err
+		}
+		if present {
+			owed = append(owed, vm)
+		}
+	}
+	return owed, restores, nil
 }
 
 func (r *Reconciler) reclaimWokenSnapshots(ctx context.Context, cs *cocoonv1.CocoonSet, classified classifiedPods) error {

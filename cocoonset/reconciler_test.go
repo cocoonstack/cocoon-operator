@@ -251,6 +251,47 @@ func TestApplyUnsuspendRecordsARestoreForASubAgentMissingAtUnsuspend(t *testing.
 	}
 }
 
+func TestUnsuspendReclaimsTheSnapshotOfAToolboxDeletedWhileSuspended(t *testing.T) {
+	tb := cocoonv1.ToolboxSpec{Name: "tb", Image: "ghcr.io/cocoonstack/cocoon/toolbox:1", Mode: cocoonv1.ToolboxModeRun}
+	cs := newCocoonSet("demo", func(cs *cocoonv1.CocoonSet) {
+		cs.Generation = 2
+		cs.Spec.Toolboxes = []cocoonv1.ToolboxSpec{tb}
+	})
+	tbVM := meta.VMNameForPod("ns", meta.ToolboxPodName("demo", tb.Name))
+	tbTag := tbVM + ":" + meta.HibernateSnapshotTag
+	main := rehibernated(mustBuildAgentPod(t, cs, 0, "", "", testScheme(t)))
+	reg := &fakeRegistry{present: map[string]bool{tbTag: true}, images: map[string]string{tbTag: tb.Image}}
+	cli := relClient(t, cs, main)
+	r := &Reconciler{Client: cli, Scheme: testScheme(t), Registry: reg}
+
+	if err := r.applyUnsuspend(t.Context(), cs, singlePod(main)); err != nil {
+		t.Fatalf("applyUnsuspend: %v", err)
+	}
+	if owed := readHibernateReclaim(new(mustGetCS(t, cli))); !slices.Contains(owed.VMs, tbVM) || slices.Contains(owed.Restore, tbVM) {
+		t.Fatalf("record %+v, want %s owed a reclaim and no restore, since vk-cocoon restores an unmarked toolbox itself", owed, tbVM)
+	}
+
+	if _, _, err := r.ensureToolboxes(t.Context(), cs, singlePod(main), r.newRestoreIntent(t.Context(), cs.Namespace)); err != nil {
+		t.Fatalf("ensureToolboxes: %v", err)
+	}
+	var woken corev1.Pod
+	if err := cli.Get(t.Context(), types.NamespacedName{Namespace: "ns", Name: meta.ToolboxPodName("demo", tb.Name)}, &woken); err != nil {
+		t.Fatalf("the toolbox must be recreated: %v", err)
+	}
+	if meta.ReadRestoreFromHibernate(&woken) || slices.Contains(reg.deleted, tbTag) {
+		t.Fatalf("the toolbox must be created unmarked over its own snapshot, deleted %v", reg.deleted)
+	}
+	meta.LifecycleStatus{State: meta.LifecycleStateReady, ObservedGeneration: 2}.Apply(&woken)
+	meta.VMRuntime{VMID: "vm-woken"}.Apply(&woken)
+	woken.Status.ContainerStatuses = []corev1.ContainerStatus{{State: corev1.ContainerState{Running: &corev1.ContainerStateRunning{}}}}
+	if err := r.reclaimWokenSnapshots(t.Context(), cs, classifyPods([]corev1.Pod{woken})); err != nil {
+		t.Fatalf("reclaimWokenSnapshots: %v", err)
+	}
+	if !slices.Contains(reg.deleted, tbTag) {
+		t.Errorf("the woken toolbox's %s must be reclaimed, deleted %v", tbTag, reg.deleted)
+	}
+}
+
 func TestReclaimWokenSnapshotsDropsAWokenRestoreFromTheRecord(t *testing.T) {
 	cs := reclaimOwedSet(t, 0, 1)
 	cs.Annotations[annotationHibernateReclaim] = encodeReclaim(t, hibernateReclaim{Generation: 2, VMs: slotNames([]int32{0, 1}, ""), Restore: slotNames([]int32{1}, "")})
