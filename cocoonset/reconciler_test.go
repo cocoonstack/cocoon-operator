@@ -806,6 +806,55 @@ func TestReconcileMainLifecycleFailedHonorsSuspend(t *testing.T) {
 	}
 }
 
+func TestReconcileUnsuspendClearsTheHibernateIntentOfAFailedMain(t *testing.T) {
+	scheme := testScheme(t)
+	cs := newCocoonSet("demo", func(cs *cocoonv1.CocoonSet) {
+		cs.Finalizers = []string{finalizerName}
+		cs.Generation = 2
+		cs.Spec.Agent.OS = cocoonv1.OSMacos
+		cs.Status.Phase = cocoonv1.CocoonSetPhaseFailed
+	})
+	main := rehibernated(mustBuildAgentPod(t, cs, 0, "", "", scheme))
+	main.Status.Phase = corev1.PodRunning
+	meta.LifecycleStatus{State: meta.LifecycleStateFailed, ObservedGeneration: 2, Message: "macOS guest does not support hibernate"}.Apply(main)
+	cli := relClient(t, cs, main)
+	rec := record.NewFakeRecorder(8)
+	r := &Reconciler{Client: cli, Scheme: scheme, Registry: &fakeRegistry{}, Recorder: rec}
+
+	if _, err := r.Reconcile(t.Context(), reqFor(cs)); err != nil {
+		t.Fatalf("unsuspend pass: %v", err)
+	}
+	var got corev1.Pod
+	if err := cli.Get(t.Context(), client.ObjectKeyFromObject(main), &got); err != nil {
+		t.Fatalf("get main: %v", err)
+	}
+	if meta.ReadHibernateState(&got) {
+		t.Fatal("an unsuspend must clear the hibernate intent of a failed main so its next update carries hibernate=false")
+	}
+	if phase := mustGetCS(t, cli).Status.Phase; phase != cocoonv1.CocoonSetPhaseFailed {
+		t.Errorf("phase = %q, want Failed until vk-cocoon reports the main ready", phase)
+	}
+
+	meta.LifecycleStatus{State: meta.LifecycleStateReady, ObservedGeneration: 2}.Apply(&got)
+	meta.VMRuntime{VMID: "vm-macos"}.Apply(&got)
+	if err := cli.Update(t.Context(), &got); err != nil {
+		t.Fatalf("mark main ready: %v", err)
+	}
+	got.Status.ContainerStatuses = []corev1.ContainerStatus{{State: corev1.ContainerState{Running: &corev1.ContainerStateRunning{}}}}
+	if err := cli.Status().Update(t.Context(), readyPod(&got)); err != nil {
+		t.Fatalf("mark main running: %v", err)
+	}
+	if _, err := r.Reconcile(t.Context(), reqFor(cs)); err != nil {
+		t.Fatalf("recovery pass: %v", err)
+	}
+	if phase := mustGetCS(t, cli).Status.Phase; phase != cocoonv1.CocoonSetPhaseRunning {
+		t.Errorf("phase = %q, want Running once the main is ready again", phase)
+	}
+	if events := strings.Join(drainEvents(rec), "\n"); !strings.Contains(events, "RecoveredFromFailure") {
+		t.Errorf("events = %q, want RecoveredFromFailure", events)
+	}
+}
+
 func TestReconcileSuspendTimesOutAfterTheDeadline(t *testing.T) {
 	scheme := testScheme(t)
 	cs := newCocoonSet("demo", func(cs *cocoonv1.CocoonSet) {
@@ -1358,6 +1407,18 @@ func TestEnsureToolboxesStashesRemovedToolboxVMName(t *testing.T) {
 	}
 	if names := stashedVMNames(t, cli); !slices.Contains(names, "vk-ns-demo-tb-7f9787") {
 		t.Errorf("delete-vm-names = %v, want vk-ns-demo-tb-7f9787 stashed for teardown GC", names)
+	}
+}
+
+func drainEvents(rec *record.FakeRecorder) []string {
+	var out []string
+	for {
+		select {
+		case ev := <-rec.Events:
+			out = append(out, ev)
+		default:
+			return out
+		}
 	}
 }
 
