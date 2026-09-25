@@ -1503,6 +1503,7 @@ func slotNames(slots []int32, suffix string) []string {
 type fakeRegistry struct {
 	present   map[string]bool
 	probeErr  error
+	deleteErr error
 	delay     time.Duration
 	block     map[string]chan struct{}
 	entered   chan string
@@ -1534,6 +1535,9 @@ func (f *fakeRegistry) HasManifest(_ context.Context, name, tag string) (bool, e
 func (f *fakeRegistry) DeleteManifest(_ context.Context, name, tag string) error {
 	f.deletedMu.Lock()
 	defer f.deletedMu.Unlock()
+	if f.deleteErr != nil {
+		return f.deleteErr
+	}
 	f.deleted = append(f.deleted, name+":"+tag)
 	delete(f.present, name+":"+tag)
 	return nil
