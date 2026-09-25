@@ -172,6 +172,7 @@ func TestReclaimWokenSnapshotsReclaimsEachVMOnceItWakes(t *testing.T) {
 		pods        []*corev1.Pod
 		wantDeleted []int32
 		wantOwed    []int32
+		wantErr     bool
 	}{
 		{name: "woken at the unsuspend generation", pods: []*corev1.Pod{wokenPod(t, 0, 2)}, wantDeleted: []int32{0}},
 		{name: "still hibernated", pods: []*corev1.Pod{rehibernated(wokenPod(t, 0, 2))}, wantOwed: []int32{0}},
@@ -181,7 +182,7 @@ func TestReclaimWokenSnapshotsReclaimsEachVMOnceItWakes(t *testing.T) {
 		{name: "rebuilt mid-wake", wantOwed: []int32{0}},
 		{name: "a spec edit after the wake", generation: 3, pods: []*corev1.Pod{wokenPod(t, 0, 2)}, wantDeleted: []int32{0}},
 		{name: "one woken, one not", owed: []int32{0, 1}, pods: []*corev1.Pod{rehibernated(wokenPod(t, 0, 2)), wokenPod(t, 1, 2)}, wantDeleted: []int32{1}, wantOwed: []int32{0}},
-		{name: "registry refuses", probeErr: errors.New("registry down"), pods: []*corev1.Pod{wokenPod(t, 0, 2)}, wantOwed: []int32{0}},
+		{name: "registry refuses", probeErr: errors.New("registry down"), pods: []*corev1.Pod{wokenPod(t, 0, 2)}, wantOwed: []int32{0}, wantErr: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			owed := tc.owed
@@ -202,8 +203,8 @@ func TestReclaimWokenSnapshotsReclaimsEachVMOnceItWakes(t *testing.T) {
 			}
 			r := &Reconciler{Client: relClient(t, objs...), Scheme: testScheme(t), Registry: reg}
 
-			if err := r.reclaimWokenSnapshots(t.Context(), cs, classified); err != nil {
-				t.Fatalf("reclaimWokenSnapshots: %v", err)
+			if err := r.reclaimWokenSnapshots(t.Context(), cs, classified); (err != nil) != tc.wantErr {
+				t.Fatalf("reclaimWokenSnapshots error %v, want error %v", err, tc.wantErr)
 			}
 			if want := slotNames(tc.wantDeleted, ":"+meta.HibernateSnapshotTag); !slices.Equal(reg.deleted, want) {
 				t.Errorf("deleted %v, want %v", reg.deleted, want)

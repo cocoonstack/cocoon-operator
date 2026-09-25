@@ -3,12 +3,12 @@ package cocoonset
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"maps"
 	"slices"
 	"time"
 
-	"github.com/projecteru2/core/log"
 	corev1 "k8s.io/api/core/v1"
 	ctrl "sigs.k8s.io/controller-runtime"
 
@@ -187,23 +187,23 @@ func (r *Reconciler) reclaimWokenSnapshots(ctx context.Context, cs *cocoonv1.Coc
 			woken[meta.ParseVMSpec(pod).VMName] = true
 		}
 	}
-	logger := log.WithFunc("cocoonset.Reconciler.reclaimWokenSnapshots")
 	var pending []string
+	var errs []error
 	for _, vm := range owed.VMs {
 		if woken[vm] {
 			err := snapshot.DeleteManifestIfPresent(ctx, r.Registry, vm, meta.HibernateSnapshotTag)
 			if err == nil {
 				continue
 			}
-			logger.Errorf(ctx, err, "reclaim %s:%s; it stays owed", vm, meta.HibernateSnapshotTag)
+			errs = append(errs, fmt.Errorf("reclaim %s:%s: %w", vm, meta.HibernateSnapshotTag, err))
 		}
 		pending = append(pending, vm)
 	}
-	if len(pending) == len(owed.VMs) {
-		return nil
+	if len(pending) < len(owed.VMs) {
+		owed.VMs = pending
+		errs = append(errs, r.writeHibernateReclaim(ctx, cs, owed))
 	}
-	owed.VMs = pending
-	return r.writeHibernateReclaim(ctx, cs, owed)
+	return errors.Join(errs...)
 }
 
 func (r *Reconciler) writeHibernateReclaim(ctx context.Context, cs *cocoonv1.CocoonSet, owed hibernateReclaim) error {
