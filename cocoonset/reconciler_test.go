@@ -657,75 +657,35 @@ func TestEnsureToolboxesCreatesAToolboxFreshOverASnapshotFromAnotherImage(t *tes
 	}
 }
 
-func TestEnsureToolboxesCollisionReturnsError(t *testing.T) {
-	scheme := testScheme(t)
-	cs := newCocoonSet("demo", func(cs *cocoonv1.CocoonSet) {
-		cs.Spec.Toolboxes = []cocoonv1.ToolboxSpec{
-			{Name: "0", Image: "ghcr.io/cocoonstack/cocoon/toolbox:latest"},
-		}
-	})
+func TestEnsureToolboxesRejectsAnInvalidSpec(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		toolboxes []cocoonv1.ToolboxSpec
+		squatter  bool
+		want      string
+	}{
+		{name: "name taken by a pod that is not the toolbox", toolboxes: []cocoonv1.ToolboxSpec{{Name: "tb"}}, squatter: true, want: "name collision"},
+		{name: "integer name", toolboxes: []cocoonv1.ToolboxSpec{{Name: "1"}}, want: "must not be an integer"},
+		{name: "duplicate names", toolboxes: []cocoonv1.ToolboxSpec{{Name: "tb"}, {Name: "tb", Image: "ghcr.io/cocoonstack/cocoon/toolbox:other"}}, want: "duplicate toolbox name"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			scheme := testScheme(t)
+			cs := newCocoonSet("demo", func(cs *cocoonv1.CocoonSet) { cs.Spec.Toolboxes = tc.toolboxes })
+			classified := classifiedPods{sub: map[int32]*corev1.Pod{}, toolbox: map[string]*corev1.Pod{}, allByName: map[string]*corev1.Pod{}}
+			builder := ctrlfake.NewClientBuilder().WithScheme(scheme)
+			if tc.squatter {
+				pod := mustBuildAgentPod(t, cs, 0, "", "", scheme)
+				pod.Name = meta.ToolboxPodName(cs.Name, "tb")
+				classified.allByName[pod.Name] = pod
+				builder = builder.WithObjects(pod)
+			}
+			r := &Reconciler{Client: builder.Build(), Scheme: scheme}
 
-	agentPod := mustBuildAgentPod(t, cs, 0, "", "", scheme)
-	cli := ctrlfake.NewClientBuilder().
-		WithScheme(scheme).
-		WithObjects(agentPod).
-		Build()
-	r := &Reconciler{Client: cli, Scheme: scheme}
-	classified := classifiedPods{
-		main:      agentPod,
-		sub:       map[int32]*corev1.Pod{},
-		toolbox:   map[string]*corev1.Pod{},
-		allByName: map[string]*corev1.Pod{agentPod.Name: agentPod},
-	}
-
-	_, _, err := r.ensureToolboxes(t.Context(), cs, classified, r.newRestoreIntent(t.Context(), cs.Namespace))
-	if err == nil {
-		t.Fatal("ensureToolboxes should return error on name collision with agent pod")
-	}
-}
-
-func TestEnsureToolboxesRejectsIntegerName(t *testing.T) {
-	scheme := testScheme(t)
-	cs := newCocoonSet("demo", func(cs *cocoonv1.CocoonSet) {
-		cs.Spec.Toolboxes = []cocoonv1.ToolboxSpec{
-			{Name: "1", Image: "ghcr.io/cocoonstack/cocoon/toolbox:latest"},
-		}
-	})
-
-	cli := ctrlfake.NewClientBuilder().WithScheme(scheme).Build()
-	r := &Reconciler{Client: cli, Scheme: scheme}
-	classified := classifiedPods{
-		sub:       map[int32]*corev1.Pod{},
-		toolbox:   map[string]*corev1.Pod{},
-		allByName: map[string]*corev1.Pod{},
-	}
-
-	_, _, err := r.ensureToolboxes(t.Context(), cs, classified, r.newRestoreIntent(t.Context(), cs.Namespace))
-	if err == nil {
-		t.Fatal("ensureToolboxes must reject a toolbox name that collides with agent slot pod naming")
-	}
-}
-
-func TestEnsureToolboxesRejectsDuplicateNames(t *testing.T) {
-	scheme := testScheme(t)
-	cs := newCocoonSet("demo", func(cs *cocoonv1.CocoonSet) {
-		cs.Spec.Toolboxes = []cocoonv1.ToolboxSpec{
-			{Name: "tb", Image: "ghcr.io/cocoonstack/cocoon/toolbox:latest"},
-			{Name: "tb", Image: "ghcr.io/cocoonstack/cocoon/toolbox:other"},
-		}
-	})
-
-	cli := ctrlfake.NewClientBuilder().WithScheme(scheme).Build()
-	r := &Reconciler{Client: cli, Scheme: scheme}
-	classified := classifiedPods{
-		sub:       map[int32]*corev1.Pod{},
-		toolbox:   map[string]*corev1.Pod{},
-		allByName: map[string]*corev1.Pod{},
-	}
-
-	_, _, err := r.ensureToolboxes(t.Context(), cs, classified, r.newRestoreIntent(t.Context(), cs.Namespace))
-	if err == nil {
-		t.Fatal("ensureToolboxes must reject a spec with duplicate toolbox names")
+			_, _, err := r.ensureToolboxes(t.Context(), cs, classified, r.newRestoreIntent(t.Context(), cs.Namespace))
+			if err == nil || !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("ensureToolboxes err = %v, want one containing %q", err, tc.want)
+			}
+		})
 	}
 }
 

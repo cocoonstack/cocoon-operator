@@ -50,32 +50,23 @@ func TestReadyConditionMaps(t *testing.T) {
 	}
 }
 
-func TestFakeRegistryGetMissing(t *testing.T) {
-	r := &fakeRegistry{}
-	present, err := r.HasManifest(t.Context(), "x", "hibernate")
-	if err != nil {
-		t.Fatalf("has: %v", err)
-	}
-	if present {
-		t.Errorf("expected manifest absent")
-	}
-}
-
-func TestFakeRegistryGetPresent(t *testing.T) {
-	r := &fakeRegistry{manifestPresent: true}
-	present, err := r.HasManifest(t.Context(), "x", "hibernate")
-	if err != nil {
-		t.Fatalf("has: %v", err)
-	}
-	if !present {
-		t.Errorf("expected manifest present")
-	}
-}
-
-func TestFakeRegistryGetErrorPropagates(t *testing.T) {
-	r := &fakeRegistry{manifestErr: errors.New("transport boom")}
-	if _, err := r.HasManifest(t.Context(), "x", "hibernate"); err == nil {
-		t.Errorf("expected transport error to surface")
+func TestFakeRegistryHasManifest(t *testing.T) {
+	for _, tc := range []struct {
+		name        string
+		reg         *fakeRegistry
+		wantPresent bool
+		wantErr     bool
+	}{
+		{name: "missing", reg: &fakeRegistry{}},
+		{name: "present", reg: &fakeRegistry{manifestPresent: true}, wantPresent: true},
+		{name: "transport error surfaces", reg: &fakeRegistry{manifestErr: errors.New("transport boom")}, wantErr: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			present, err := tc.reg.HasManifest(t.Context(), "x", "hibernate")
+			if (err != nil) != tc.wantErr || present != tc.wantPresent {
+				t.Errorf("HasManifest = %v, %v; want present %v, error %v", present, err, tc.wantPresent, tc.wantErr)
+			}
+		})
 	}
 }
 
@@ -1407,20 +1398,6 @@ func TestPodWatchPredicateIgnoresStatusOnlyUpdates(t *testing.T) {
 	}
 }
 
-func wakeLivePod() *corev1.Pod {
-	pod := &corev1.Pod{
-		ObjectMeta: metav1.ObjectMeta{Name: "demo-0", Namespace: "ns"},
-		Status: corev1.PodStatus{
-			ContainerStatuses: []corev1.ContainerStatus{{
-				State: corev1.ContainerState{Running: &corev1.ContainerStateRunning{}},
-			}},
-		},
-	}
-	(&meta.VMSpec{VMName: "vk-ns-demo-0-505043", Managed: true}).Apply(pod)
-	(&meta.VMRuntime{VMID: "vmid-live"}).Apply(pod)
-	return pod
-}
-
 type vmLockProbe struct {
 	locks    *[vmLockStripes]sync.Mutex
 	calls    int
@@ -1448,18 +1425,6 @@ func (p *vmLockProbe) observe(name string) {
 		mu.Unlock()
 		p.unlocked++
 	}
-}
-
-func testScheme(t *testing.T) *runtime.Scheme {
-	t.Helper()
-	sch := runtime.NewScheme()
-	if err := clientgoscheme.AddToScheme(sch); err != nil {
-		t.Fatalf("add client-go scheme: %v", err)
-	}
-	if err := cocoonv1.AddToScheme(sch); err != nil {
-		t.Fatalf("add cocoonv1 scheme: %v", err)
-	}
-	return sch
 }
 
 type fakeRegistry struct {
@@ -1490,4 +1455,30 @@ func (f *fakeRegistry) HasManifest(_ context.Context, _, _ string) (bool, error)
 func (f *fakeRegistry) DeleteManifest(_ context.Context, _, _ string) error {
 	f.deleteCalled = true
 	return f.deleteErr
+}
+
+func wakeLivePod() *corev1.Pod {
+	pod := &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{Name: "demo-0", Namespace: "ns"},
+		Status: corev1.PodStatus{
+			ContainerStatuses: []corev1.ContainerStatus{{
+				State: corev1.ContainerState{Running: &corev1.ContainerStateRunning{}},
+			}},
+		},
+	}
+	(&meta.VMSpec{VMName: "vk-ns-demo-0-505043", Managed: true}).Apply(pod)
+	(&meta.VMRuntime{VMID: "vmid-live"}).Apply(pod)
+	return pod
+}
+
+func testScheme(t *testing.T) *runtime.Scheme {
+	t.Helper()
+	sch := runtime.NewScheme()
+	if err := clientgoscheme.AddToScheme(sch); err != nil {
+		t.Fatalf("add client-go scheme: %v", err)
+	}
+	if err := cocoonv1.AddToScheme(sch); err != nil {
+		t.Fatalf("add cocoonv1 scheme: %v", err)
+	}
+	return sch
 }
