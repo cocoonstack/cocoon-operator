@@ -3,6 +3,7 @@ package cocoonset
 import (
 	"context"
 	"fmt"
+	"slices"
 	"sync"
 
 	"github.com/projecteru2/core/log"
@@ -57,12 +58,15 @@ func (r *Reconciler) podsRestorableByCR(ctx context.Context, namespace string) (
 	})
 }
 
-func (r *Reconciler) markRestoreFromIntent(ctx context.Context, pod *corev1.Pod, intent restoreIntent) error {
-	restorable, err := intent()
-	if err != nil {
-		return err
+func (r *Reconciler) markRestoreFromIntent(ctx context.Context, cs *cocoonv1.CocoonSet, pod *corev1.Pod, intent restoreIntent) error {
+	want := slices.Contains(readHibernateReclaim(cs).Restore, meta.ParseVMSpec(pod).VMName)
+	if !want {
+		restorable, err := intent()
+		if err != nil {
+			return err
+		}
+		_, want = restorable[pod.Name]
 	}
-	_, want := restorable[pod.Name]
 	return r.markRestoreIfHibernated(ctx, pod, want)
 }
 

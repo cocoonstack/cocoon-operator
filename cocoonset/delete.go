@@ -73,7 +73,7 @@ func (r *Reconciler) reconcileDelete(ctx context.Context, cs *cocoonv1.CocoonSet
 
 func (r *Reconciler) stashDeleteVMNames(ctx context.Context, cs *cocoonv1.CocoonSet, owned []corev1.Pod) error {
 	have := make(map[string]struct{})
-	for _, n := range slices.Concat(statusVMNames(cs), parseVMNamesAnnotation(cs.Annotations[annotationDeleteVMNames])) {
+	for _, n := range slices.Concat(statusVMNames(cs), parseVMNamesAnnotation(cs.Annotations[annotationDeleteVMNames]), readHibernateReclaim(cs).VMs) {
 		have[n] = struct{}{}
 	}
 	for i := range owned {

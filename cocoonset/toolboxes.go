@@ -60,7 +60,7 @@ func (r *Reconciler) ensureToolboxes(ctx context.Context, cs *cocoonv1.CocoonSet
 		if _, err := r.discardImageConflict(ctx, cs, tbPod); err != nil {
 			return changed, requeueAfter, fmt.Errorf("toolbox %s: %w", tb.Name, err)
 		}
-		if err := r.markRestoreFromIntent(ctx, tbPod, intent); err != nil {
+		if err := r.markRestoreFromIntent(ctx, cs, tbPod, intent); err != nil {
 			return changed, requeueAfter, fmt.Errorf("mark restore toolbox %s: %w", tb.Name, err)
 		}
 		if err := r.Create(ctx, tbPod); err != nil {

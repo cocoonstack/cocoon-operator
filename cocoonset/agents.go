@@ -78,7 +78,6 @@ func (r *Reconciler) createSubAgents(ctx context.Context, logger *log.Fields, cs
 	if len(missing) == 0 {
 		return false, nil
 	}
-	restoring := readHibernateReclaim(cs).Restore
 	discarded := make([]string, len(missing))
 	g, gctx := errgroup.WithContext(ctx)
 	g.SetLimit(subAgentCreateConcurrency)
@@ -89,20 +88,14 @@ func (r *Reconciler) createSubAgents(ctx context.Context, logger *log.Fields, cs
 			if err != nil {
 				return fmt.Errorf("build sub-agent slot %d: %w", slot, err)
 			}
-			vmName := meta.ParseVMSpec(subPod).VMName
 			dropped, err := r.dropImageConflict(gctx, subPod)
 			if err != nil {
 				return fmt.Errorf("sub-agent slot %d: %w", slot, err)
 			}
 			if dropped {
-				discarded[i] = vmName
+				discarded[i] = meta.ParseVMSpec(subPod).VMName
 			}
-			if slices.Contains(restoring, vmName) {
-				err = r.markRestoreIfHibernated(gctx, subPod, true)
-			} else {
-				err = r.markRestoreFromIntent(gctx, subPod, intent)
-			}
-			if err != nil {
+			if err := r.markRestoreFromIntent(gctx, cs, subPod, intent); err != nil {
 				return fmt.Errorf("mark restore sub-agent slot %d: %w", slot, err)
 			}
 			if err := r.Create(gctx, subPod); err != nil {

@@ -32,7 +32,7 @@ func (r *Reconciler) reconcileSuspendRelease(ctx context.Context, cs *cocoonv1.C
 		return ctrl.Result{}, r.patchStatus(ctx, cs, buildStatus(cs, classified, cocoonv1.CocoonSetPhaseSuspended))
 	}
 
-	if err := r.applySuspend(ctx, classified); err != nil {
+	if err := r.applySuspend(ctx, cs, classified); err != nil {
 		return ctrl.Result{}, err
 	}
 	allHibernated, err := r.allOwnedPodsHibernated(ctx, cs, classified)

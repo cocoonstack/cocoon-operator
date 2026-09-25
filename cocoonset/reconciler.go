@@ -204,7 +204,7 @@ func (r *Reconciler) createMainAgent(ctx context.Context, cs *cocoonv1.CocoonSet
 	if _, err := r.discardImageConflict(ctx, cs, mainPod); err != nil {
 		return ctrl.Result{}, err
 	}
-	if err := r.markRestoreFromIntent(ctx, mainPod, intent); err != nil {
+	if err := r.markRestoreFromIntent(ctx, cs, mainPod, intent); err != nil {
 		return ctrl.Result{}, err
 	}
 	if err := r.Create(ctx, mainPod); err != nil {
