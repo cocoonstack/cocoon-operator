@@ -11,6 +11,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/tools/record"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 	ctrlfake "sigs.k8s.io/controller-runtime/pkg/client/fake"
 
 	cocoonv1 "github.com/cocoonstack/cocoon-common/apis/v1"
@@ -363,6 +364,7 @@ func TestMigrationWaitsWhileAHibernationSpecIsUnobserved(t *testing.T) {
 
 func TestMigrationWakesInPlaceOnRetargetBack(t *testing.T) {
 	cs := migCocoonSet("node-b")
+	cs.Status.Phase = cocoonv1.CocoonSetPhaseMigrating
 	main := migMainPod(t, cs, "node-b", "", false)
 	meta.HibernateState(true).Apply(main)
 	reg := &fakeRegistry{present: map[string]bool{migVMName + ":" + meta.HibernateSnapshotTag: true}}
@@ -383,6 +385,57 @@ func TestMigrationWakesInPlaceOnRetargetBack(t *testing.T) {
 	}
 	if len(reg.deleted) != 0 {
 		t.Errorf("tag must survive until the VM runs again: %v", reg.deleted)
+	}
+}
+
+func TestReconcilePlainUnsuspendOfAPinnedSetRestoresASubAgentDeletedWhileSuspended(t *testing.T) {
+	vm1 := slotNames([]int32{1}, "")[0]
+	cs := migCocoonSet("node-b")
+	cs.Finalizers = []string{finalizerName}
+	cs.Generation = 2
+	cs.Spec.Agent.Replicas = 1
+	cs.Status.Phase = cocoonv1.CocoonSetPhaseSuspended
+	main := rehibernated(migMainPod(t, cs, "node-b", "", false))
+	reg := &fakeRegistry{present: map[string]bool{
+		migVMName + ":" + meta.HibernateSnapshotTag: true,
+		vm1 + ":" + meta.HibernateSnapshotTag:       true,
+	}}
+	cli := relClient(t, cs, main)
+	r := &Reconciler{Client: cli, Scheme: testScheme(t), Registry: reg}
+
+	if _, err := r.Reconcile(t.Context(), reqFor(cs)); err != nil {
+		t.Fatalf("unsuspend pass: %v", err)
+	}
+	gotCS := mustGetCS(t, cli)
+	if owed := readHibernateReclaim(&gotCS); !slices.Contains(owed.Restore, vm1) {
+		t.Fatalf("the unsuspend must record the deleted sub-agent as owed a restore, record %+v", owed)
+	}
+	if gotCS.Status.Phase == cocoonv1.CocoonSetPhaseMigrating {
+		t.Error("a plain unsuspend of a pinned set is not a migration")
+	}
+
+	var woken corev1.Pod
+	if err := cli.Get(t.Context(), client.ObjectKeyFromObject(main), &woken); err != nil {
+		t.Fatalf("get main: %v", err)
+	}
+	meta.LifecycleStatus{State: meta.LifecycleStateReady, ObservedGeneration: 2}.Apply(&woken)
+	meta.VMRuntime{VMID: "vmid-woken"}.Apply(&woken)
+	if err := cli.Update(t.Context(), &woken); err != nil {
+		t.Fatalf("mark main woken: %v", err)
+	}
+	woken.Status.ContainerStatuses = []corev1.ContainerStatus{{State: corev1.ContainerState{Running: &corev1.ContainerStateRunning{}}}}
+	if err := cli.Status().Update(t.Context(), readyPod(&woken)); err != nil {
+		t.Fatalf("mark main ready: %v", err)
+	}
+	if _, err := r.Reconcile(t.Context(), reqFor(cs)); err != nil {
+		t.Fatalf("scale pass: %v", err)
+	}
+	var sub corev1.Pod
+	if err := cli.Get(t.Context(), types.NamespacedName{Namespace: "ns", Name: "demo-1"}, &sub); err != nil {
+		t.Fatalf("the deleted sub-agent must be recreated: %v", err)
+	}
+	if !meta.ReadRestoreFromHibernate(&sub) {
+		t.Error("the recreated sub-agent must restore its snapshot, since vk-cocoon refuses a fork-from pod while the tag exists")
 	}
 }
 

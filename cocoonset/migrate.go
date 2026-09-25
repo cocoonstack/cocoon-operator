@@ -132,7 +132,10 @@ func (r *Reconciler) advanceMigration(ctx context.Context, cs *cocoonv1.CocoonSe
 		return r.markMigrating(ctx, cs, classified)
 
 	case bool(meta.ReadHibernateState(main)) && (desired == "" || main.Spec.NodeName == desired):
-		// Quiesced on the target: a re-target back or an unsuspend racing the tag
+		// Quiesced on the target is a re-target back only mid-migration; otherwise applyUnsuspend owns the unsuspend
+		if cs.Status.Phase != cocoonv1.CocoonSetPhaseMigrating {
+			return false, ctrl.Result{}, nil
+		}
 		logger.Infof(ctx, "migrate %s/%s: waking %s in place", cs.Namespace, cs.Name, main.Name)
 		if err := podpatch.HibernateState(ctx, r.Client, main, false); err != nil {
 			return true, ctrl.Result{}, fmt.Errorf("migrate: clear hibernate on %s/%s: %w", main.Namespace, main.Name, err)
