@@ -3,8 +3,8 @@ package hibernation
 import (
 	"context"
 	"errors"
+	"hash/maphash"
 	"sync"
-	"sync/atomic"
 	"testing"
 	"time"
 
@@ -1177,80 +1177,36 @@ func TestReconcileSerializesCRsTargetingOnePod(t *testing.T) {
 			{State: corev1.ContainerState{Running: &corev1.ContainerStateRunning{}}},
 		}},
 	}
+	meta.LifecycleStatus{State: meta.LifecycleStateHibernated}.Apply(pod)
 	scheme := testScheme(t)
 	cli := ctrlfake.NewClientBuilder().
 		WithScheme(scheme).
 		WithObjects(hib("a", cocoonv1.HibernationDesireHibernate), hib("b", cocoonv1.HibernationDesireWake), pod).
 		WithStatusSubresource(&cocoonv1.CocoonHibernation{}).
 		Build()
-	reg := &concurrencyProbe{}
-	r := &Reconciler{Client: cli, Scheme: scheme, Registry: reg}
+	r := &Reconciler{Client: cli, Scheme: scheme}
+	reg := &vmLockProbe{locks: &r.vmLocks}
+	r.Registry = reg
 
-	var wg sync.WaitGroup
 	for _, name := range []string{"a", "b"} {
-		wg.Go(func() {
-			_, _ = r.Reconcile(t.Context(), ctrl.Request{
-				NamespacedName: types.NamespacedName{Namespace: "ns", Name: name},
-			})
-		})
+		if _, err := r.Reconcile(t.Context(), ctrl.Request{
+			NamespacedName: types.NamespacedName{Namespace: "ns", Name: name},
+		}); err != nil {
+			t.Fatalf("Reconcile %s: %v", name, err)
+		}
 	}
-	wg.Wait()
-	if reg.maxInFlight.Load() > 1 {
-		t.Errorf("CRs targeting one pod ran %d registry calls in flight, want serialized", reg.maxInFlight.Load())
+	if reg.calls < 2 {
+		t.Fatalf("registry calls = %d, want at least one per CR", reg.calls)
 	}
-}
-
-func TestReconcileSerializesDeletingCRAgainstLiveCR(t *testing.T) {
-	deleting := &cocoonv1.CocoonHibernation{
-		ObjectMeta: metav1.ObjectMeta{
-			Name: "a", Namespace: "ns",
-			Finalizers:        []string{finalizerName},
-			DeletionTimestamp: &metav1.Time{Time: time.Now()},
-		},
-		Spec: cocoonv1.CocoonHibernationSpec{
-			Desire: cocoonv1.HibernationDesireHibernate,
-			PodRef: cocoonv1.HibernationPodRef{Name: "demo-0"},
-		},
-		Status: cocoonv1.CocoonHibernationStatus{VMName: "vk-ns-demo-0-505043"},
-	}
-	live := &cocoonv1.CocoonHibernation{
-		ObjectMeta: metav1.ObjectMeta{Name: "b", Namespace: "ns", Finalizers: []string{finalizerName}},
-		Spec: cocoonv1.CocoonHibernationSpec{
-			Desire: cocoonv1.HibernationDesireHibernate,
-			PodRef: cocoonv1.HibernationPodRef{Name: "demo-0"},
-		},
-	}
-	pod := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{
-		Name: "demo-0", Namespace: "ns",
-		Annotations: map[string]string{meta.AnnotationVMName: "vk-ns-demo-0-505043"},
-	}}
-	scheme := testScheme(t)
-	cli := ctrlfake.NewClientBuilder().
-		WithScheme(scheme).
-		WithObjects(deleting, live, pod).
-		WithStatusSubresource(&cocoonv1.CocoonHibernation{}).
-		Build()
-	reg := &concurrencyProbe{}
-	r := &Reconciler{Client: cli, Scheme: scheme, Registry: reg}
-
-	var wg sync.WaitGroup
-	for _, name := range []string{"a", "b"} {
-		wg.Go(func() {
-			_, _ = r.Reconcile(t.Context(), ctrl.Request{
-				NamespacedName: types.NamespacedName{Namespace: "ns", Name: name},
-			})
-		})
-	}
-	wg.Wait()
-	if reg.maxInFlight.Load() > 1 {
-		t.Errorf("deleting CR ran %d registry calls in flight with a live CR on the same pod, want serialized", reg.maxInFlight.Load())
+	if reg.unlocked != 0 {
+		t.Errorf("%d of %d registry calls for CRs targeting one pod ran outside the VM lock, want serialized", reg.unlocked, reg.calls)
 	}
 }
 
 func TestReconcileSerializesRetargetedCRAgainstItsStaleVM(t *testing.T) {
 	retargeted := &cocoonv1.CocoonHibernation{
 		ObjectMeta: metav1.ObjectMeta{
-			Name: "a", Namespace: "ns",
+			Name: "a", Namespace: "ns", UID: "uid-a",
 			Finalizers:        []string{finalizerName},
 			DeletionTimestamp: &metav1.Time{Time: time.Now()},
 		},
@@ -1261,7 +1217,7 @@ func TestReconcileSerializesRetargetedCRAgainstItsStaleVM(t *testing.T) {
 		Status: cocoonv1.CocoonHibernationStatus{VMName: "vk-ns-demo-0-505043"},
 	}
 	live := &cocoonv1.CocoonHibernation{
-		ObjectMeta: metav1.ObjectMeta{Name: "b", Namespace: "ns", Finalizers: []string{finalizerName}},
+		ObjectMeta: metav1.ObjectMeta{Name: "b", Namespace: "ns", UID: "uid-b", Finalizers: []string{finalizerName}},
 		Spec: cocoonv1.CocoonHibernationSpec{
 			Desire: cocoonv1.HibernationDesireHibernate,
 			PodRef: cocoonv1.HibernationPodRef{Name: "demo-0"},
@@ -1271,26 +1227,29 @@ func TestReconcileSerializesRetargetedCRAgainstItsStaleVM(t *testing.T) {
 		Name: "demo-0", Namespace: "ns",
 		Annotations: map[string]string{meta.AnnotationVMName: "vk-ns-demo-0-505043"},
 	}}
+	meta.LifecycleStatus{State: meta.LifecycleStateHibernated}.Apply(pod)
 	scheme := testScheme(t)
 	cli := ctrlfake.NewClientBuilder().
 		WithScheme(scheme).
 		WithObjects(retargeted, live, pod).
 		WithStatusSubresource(&cocoonv1.CocoonHibernation{}).
 		Build()
-	reg := &concurrencyProbe{}
-	r := &Reconciler{Client: cli, Scheme: scheme, Registry: reg}
+	r := &Reconciler{Client: cli, Scheme: scheme}
+	reg := &vmLockProbe{locks: &r.vmLocks}
+	r.Registry = reg
 
-	var wg sync.WaitGroup
 	for _, name := range []string{"a", "b"} {
-		wg.Go(func() {
-			_, _ = r.Reconcile(t.Context(), ctrl.Request{
-				NamespacedName: types.NamespacedName{Namespace: "ns", Name: name},
-			})
-		})
+		if _, err := r.Reconcile(t.Context(), ctrl.Request{
+			NamespacedName: types.NamespacedName{Namespace: "ns", Name: name},
+		}); err != nil {
+			t.Fatalf("Reconcile %s: %v", name, err)
+		}
 	}
-	wg.Wait()
-	if reg.maxInFlight.Load() > 1 {
-		t.Errorf("retargeted CR ran %d registry calls in flight against its stale VM, want serialized", reg.maxInFlight.Load())
+	if reg.calls < 2 {
+		t.Fatalf("registry calls = %d, want at least one per CR", reg.calls)
+	}
+	if reg.unlocked != 0 {
+		t.Errorf("%d of %d registry calls ran outside the stale VM's lock, want the retargeted CR serialized against it", reg.unlocked, reg.calls)
 	}
 }
 
@@ -1460,32 +1419,27 @@ func wakeLivePod() *corev1.Pod {
 	return pod
 }
 
-type concurrencyProbe struct {
-	inFlight    atomic.Int32
-	maxInFlight atomic.Int32
+type vmLockProbe struct {
+	locks    *[vmLockStripes]sync.Mutex
+	calls    int
+	unlocked int
 }
 
-func (c *concurrencyProbe) HasManifest(context.Context, string, string) (bool, error) {
-	c.enter()
-	defer c.inFlight.Add(-1)
-	time.Sleep(20 * time.Millisecond)
+func (p *vmLockProbe) HasManifest(_ context.Context, name, _ string) (bool, error) {
+	p.observe(name)
 	return false, nil
 }
 
-func (c *concurrencyProbe) DeleteManifest(context.Context, string, string) error {
-	c.enter()
-	defer c.inFlight.Add(-1)
-	time.Sleep(20 * time.Millisecond)
+func (p *vmLockProbe) DeleteManifest(_ context.Context, name, _ string) error {
+	p.observe(name)
 	return nil
 }
 
-func (c *concurrencyProbe) enter() {
-	n := c.inFlight.Add(1)
-	for {
-		peak := c.maxInFlight.Load()
-		if n <= peak || c.maxInFlight.CompareAndSwap(peak, n) {
-			return
-		}
+func (p *vmLockProbe) observe(name string) {
+	p.calls++
+	if mu := &p.locks[maphash.String(vmLockSeed, name)%vmLockStripes]; mu.TryLock() {
+		mu.Unlock()
+		p.unlocked++
 	}
 }
 
