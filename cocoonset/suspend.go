@@ -167,11 +167,12 @@ func (r *Reconciler) applyUnsuspend(ctx context.Context, cs *cocoonv1.CocoonSet,
 	if err != nil {
 		return err
 	}
+	sameImage := classified.main == nil || meta.ParseVMSpec(classified.main).Image == cs.Spec.Agent.Image
 	for _, vm := range restores {
 		if !slices.Contains(owed.VMs, vm) {
 			owed.VMs = append(owed.VMs, vm)
 		}
-		if !slices.Contains(owed.Restore, vm) {
+		if sameImage && !slices.Contains(owed.Restore, vm) {
 			owed.Restore = append(owed.Restore, vm)
 		}
 	}

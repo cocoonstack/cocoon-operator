@@ -211,11 +211,14 @@ func TestApplyUnsuspendRecordsARestoreForASubAgentMissingAtUnsuspend(t *testing.
 		name        string
 		subPresent  bool
 		tagged      bool
+		imageEdited bool
+		wantOwed    bool
 		wantRestore bool
 	}{
-		{name: "missing slot with a snapshot", tagged: true, wantRestore: true},
+		{name: "missing slot with a snapshot", tagged: true, wantOwed: true, wantRestore: true},
 		{name: "missing slot without a snapshot"},
-		{name: "every slot present", subPresent: true, tagged: true},
+		{name: "every slot present", subPresent: true, tagged: true, wantOwed: true},
+		{name: "missing slot after an image edit", tagged: true, imageEdited: true, wantOwed: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			cs := newCocoonSet("demo", func(cs *cocoonv1.CocoonSet) {
@@ -225,6 +228,9 @@ func TestApplyUnsuspendRecordsARestoreForASubAgentMissingAtUnsuspend(t *testing.
 			pods := []corev1.Pod{*rehibernated(mustBuildAgentPod(t, cs, 0, "", "", testScheme(t)))}
 			if tc.subPresent {
 				pods = append(pods, *rehibernated(mustBuildAgentPod(t, cs, 1, relVMName, "", testScheme(t))))
+			}
+			if tc.imageEdited {
+				cs.Spec.Agent.Image += "-edited"
 			}
 			objs := []client.Object{cs}
 			for i := range pods {
@@ -238,8 +244,8 @@ func TestApplyUnsuspendRecordsARestoreForASubAgentMissingAtUnsuspend(t *testing.
 				t.Fatalf("applyUnsuspend: %v", err)
 			}
 			owed := readHibernateReclaim(new(mustGetCS(t, cli)))
-			if restores := slices.Contains(owed.Restore, vm1) && slices.Contains(owed.VMs, vm1); restores != tc.wantRestore {
-				t.Errorf("record %+v owes a restore of %s = %v, want %v", owed, vm1, restores, tc.wantRestore)
+			if slices.Contains(owed.VMs, vm1) != tc.wantOwed || slices.Contains(owed.Restore, vm1) != tc.wantRestore {
+				t.Errorf("record %+v for %s, want owed %v and restore %v", owed, vm1, tc.wantOwed, tc.wantRestore)
 			}
 			if tc.subPresent && len(reg.probed) != 0 {
 				t.Errorf("an unsuspend with every slot present must not probe the registry, probed %v", reg.probed)
