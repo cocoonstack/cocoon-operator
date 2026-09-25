@@ -475,6 +475,53 @@ func TestReconcileUnsuspendIntoANewPinRestoresASubAgentDeletedWhileSuspended(t *
 	}
 }
 
+func TestReconcileRepinRecreatesAMainPendingUnderTheOldPin(t *testing.T) {
+	for _, tc := range []struct {
+		name        string
+		phase       cocoonv1.CocoonSetPhase
+		restoring   bool
+		wantRestore bool
+	}{
+		{name: "main pending its first boot"},
+		{name: "migration restore pending on a full node", phase: cocoonv1.CocoonSetPhaseMigrating, restoring: true, wantRestore: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			cs := migCocoonSet("node-a")
+			cs.Finalizers = []string{finalizerName}
+			cs.Generation = 4
+			cs.Status.Phase = tc.phase
+			pending := mustBuildAgentPod(t, cs, 0, "", "", testScheme(t))
+			if tc.restoring {
+				meta.MarkRestoreFromHibernate(pending)
+			}
+			pending.Status.Conditions = []corev1.PodCondition{{
+				Type: corev1.PodScheduled, Status: corev1.ConditionFalse, Reason: corev1.PodReasonUnschedulable, Message: "0/2 nodes are available: Insufficient memory.",
+			}}
+			cs.Spec.NodeName = "node-b"
+			cs.Generation = 5
+			reg := &fakeRegistry{present: map[string]bool{migVMName + ":" + meta.HibernateSnapshotTag: tc.restoring}}
+			cli := relClient(t, cs, pending)
+			r := &Reconciler{Client: cli, APIReader: cli, Scheme: testScheme(t), Registry: reg}
+
+			for i := range 2 {
+				if _, err := r.Reconcile(t.Context(), reqFor(cs)); err != nil {
+					t.Fatalf("pass %d: %v", i+1, err)
+				}
+			}
+			var got corev1.Pod
+			if err := cli.Get(t.Context(), client.ObjectKeyFromObject(pending), &got); err != nil {
+				t.Fatalf("the main must be recreated: %v", err)
+			}
+			if na := got.Spec.Affinity; na == nil || na.NodeAffinity.RequiredDuringSchedulingIgnoredDuringExecution.NodeSelectorTerms[0].MatchExpressions[0].Values[0] != "node-b" {
+				t.Errorf("the main must be recreated under the new pin node-b, got %+v", na)
+			}
+			if restores := meta.ReadRestoreFromHibernate(&got); restores != tc.wantRestore {
+				t.Errorf("recreated main restores from :hibernate = %v, want %v", restores, tc.wantRestore)
+			}
+		})
+	}
+}
+
 func TestMigrationLeavesCRHibernationAlone(t *testing.T) {
 	cs := migCocoonSet("node-b")
 	main := migMainPod(t, cs, "node-b", "", false)

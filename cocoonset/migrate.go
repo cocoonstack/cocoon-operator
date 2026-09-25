@@ -4,6 +4,7 @@ import (
 	"cmp"
 	"context"
 	"fmt"
+	"slices"
 
 	"github.com/projecteru2/core/log"
 	corev1 "k8s.io/api/core/v1"
@@ -22,10 +23,17 @@ import (
 func (r *Reconciler) reconcileMigration(ctx context.Context, cs *cocoonv1.CocoonSet, classified classifiedPods) (bool, ctrl.Result, error) {
 	desired := cs.Spec.NodeName
 	migrating := cs.Status.Phase == cocoonv1.CocoonSetPhaseMigrating
+	main := classified.main
+	if main != nil && pinnedElsewhere(main, desired) {
+		log.WithFunc("cocoonset.Reconciler.reconcileMigration").Infof(ctx, "migrate %s/%s: main %s waits for a node it is no longer pinned to, recreating it for %s", cs.Namespace, cs.Name, main.Name, cmp.Or(desired, "any node"))
+		if err := r.Delete(ctx, main); err != nil && !apierrors.IsNotFound(err) {
+			return true, ctrl.Result{}, fmt.Errorf("migrate: delete stale-pinned main %s/%s: %w", main.Namespace, main.Name, err)
+		}
+		return true, ctrl.Result{RequeueAfter: requeueAfterWrite}, nil
+	}
 	if desired == "" && !migrating {
 		return false, ctrl.Result{}, nil
 	}
-	main := classified.main
 	// A non-quiesced main on its target or still unscheduled skips the probe; safe because Migrating persists before the first side effect
 	if !migrating && main != nil && !bool(meta.ReadHibernateState(main)) && (main.Spec.NodeName == "" || main.Spec.NodeName == desired) {
 		return false, ctrl.Result{}, nil
@@ -172,4 +180,16 @@ func (r *Reconciler) markMigrating(ctx context.Context, cs *cocoonv1.CocoonSet, 
 
 func mainOffTarget(cs *cocoonv1.CocoonSet, main *corev1.Pod) bool {
 	return main != nil && cs.Spec.NodeName != "" && main.Spec.NodeName != "" && main.Spec.NodeName != cs.Spec.NodeName
+}
+
+func pinnedElsewhere(pod *corev1.Pod, nodeName string) bool {
+	aff := pod.Spec.Affinity
+	if pod.Spec.NodeName != "" || aff == nil || aff.NodeAffinity == nil || aff.NodeAffinity.RequiredDuringSchedulingIgnoredDuringExecution == nil {
+		return false
+	}
+	return slices.ContainsFunc(aff.NodeAffinity.RequiredDuringSchedulingIgnoredDuringExecution.NodeSelectorTerms, func(term corev1.NodeSelectorTerm) bool {
+		return slices.ContainsFunc(term.MatchExpressions, func(req corev1.NodeSelectorRequirement) bool {
+			return req.Key == corev1.LabelHostname && !slices.Equal(req.Values, []string{nodeName})
+		})
+	})
 }
