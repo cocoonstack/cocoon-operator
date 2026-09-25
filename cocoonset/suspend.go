@@ -29,6 +29,7 @@ const (
 type hibernateReclaim struct {
 	Generation int64    `json:"generation"`
 	VMs        []string `json:"vms"`
+	Restore    []string `json:"restore,omitempty"`
 }
 
 // reconcileSuspend polls the registry and stays Suspending until every managed VM's snapshot lands.
@@ -162,6 +163,18 @@ func (r *Reconciler) applyUnsuspend(ctx context.Context, cs *cocoonv1.CocoonSet,
 			owed.VMs = append(owed.VMs, spec.VMName)
 		}
 	}
+	restores, err := r.hibernatedMissingSubAgents(ctx, cs, classified, hibernatedByCR)
+	if err != nil {
+		return err
+	}
+	for _, vm := range restores {
+		if !slices.Contains(owed.VMs, vm) {
+			owed.VMs = append(owed.VMs, vm)
+		}
+		if !slices.Contains(owed.Restore, vm) {
+			owed.Restore = append(owed.Restore, vm)
+		}
+	}
 	if err := r.writeHibernateReclaim(ctx, cs, owed); err != nil {
 		return err
 	}
@@ -174,6 +187,27 @@ func (r *Reconciler) applyUnsuspend(ctx context.Context, cs *cocoonv1.CocoonSet,
 		}
 	}
 	return nil
+}
+
+func (r *Reconciler) hibernatedMissingSubAgents(ctx context.Context, cs *cocoonv1.CocoonSet, classified classifiedPods, ownedByCR map[string]struct{}) ([]string, error) {
+	var vms []string
+	for slot := int32(1); slot <= cs.Spec.Agent.Replicas; slot++ {
+		if _, exists := classified.sub[slot]; exists {
+			continue
+		}
+		if _, owned := ownedByCR[agentPodName(cs.Name, slot)]; owned {
+			continue
+		}
+		vm := meta.VMNameForDeployment(cs.Namespace, cs.Name, int(slot))
+		present, err := snapshot.HasHibernateSnapshot(ctx, r.Registry, vm)
+		if err != nil {
+			return nil, err
+		}
+		if present {
+			vms = append(vms, vm)
+		}
+	}
+	return vms, nil
 }
 
 func (r *Reconciler) reclaimWokenSnapshots(ctx context.Context, cs *cocoonv1.CocoonSet, classified classifiedPods) error {
@@ -212,6 +246,7 @@ func (r *Reconciler) reclaimSnapshots(ctx context.Context, cs *cocoonv1.CocoonSe
 		pending = append(pending, vm)
 	}
 	if len(pending) < len(owed.VMs) {
+		owed.Restore = slices.DeleteFunc(owed.Restore, func(vm string) bool { return !slices.Contains(pending, vm) })
 		owed.VMs = pending
 		errs = append(errs, r.writeHibernateReclaim(ctx, cs, owed))
 	}

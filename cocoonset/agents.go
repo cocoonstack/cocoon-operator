@@ -77,6 +77,7 @@ func (r *Reconciler) createSubAgents(ctx context.Context, logger *log.Fields, cs
 	if len(missing) == 0 {
 		return false, nil
 	}
+	restoring := readHibernateReclaim(cs).Restore
 	g, gctx := errgroup.WithContext(ctx)
 	g.SetLimit(subAgentCreateConcurrency)
 	var created atomic.Bool
@@ -86,7 +87,12 @@ func (r *Reconciler) createSubAgents(ctx context.Context, logger *log.Fields, cs
 			if err != nil {
 				return fmt.Errorf("build sub-agent slot %d: %w", slot, err)
 			}
-			if err := r.markRestoreFromIntent(gctx, subPod, intent); err != nil {
+			if slices.Contains(restoring, meta.ParseVMSpec(subPod).VMName) {
+				err = r.markRestoreIfHibernated(gctx, subPod, true)
+			} else {
+				err = r.markRestoreFromIntent(gctx, subPod, intent)
+			}
+			if err != nil {
 				return fmt.Errorf("mark restore sub-agent slot %d: %w", slot, err)
 			}
 			if err := r.Create(gctx, subPod); err != nil {
@@ -105,7 +111,8 @@ func (r *Reconciler) createSubAgents(ctx context.Context, logger *log.Fields, cs
 }
 
 func (r *Reconciler) reclaimUnrestoredForks(ctx context.Context, cs *cocoonv1.CocoonSet, missing []int32, intent restoreIntent) error {
-	if len(missing) == 0 || len(readHibernateReclaim(cs).VMs) == 0 {
+	owed := readHibernateReclaim(cs)
+	if len(missing) == 0 || len(owed.VMs) == 0 {
 		return nil
 	}
 	restorable, err := intent()
@@ -114,8 +121,9 @@ func (r *Reconciler) reclaimUnrestoredForks(ctx context.Context, cs *cocoonv1.Co
 	}
 	var forks []string
 	for _, slot := range missing {
-		if _, restores := restorable[agentPodName(cs.Name, slot)]; !restores {
-			forks = append(forks, meta.VMNameForDeployment(cs.Namespace, cs.Name, int(slot)))
+		vm := meta.VMNameForDeployment(cs.Namespace, cs.Name, int(slot))
+		if _, restores := restorable[agentPodName(cs.Name, slot)]; !restores && !slices.Contains(owed.Restore, vm) {
+			forks = append(forks, vm)
 		}
 	}
 	return r.reclaimSnapshots(ctx, cs, forks)

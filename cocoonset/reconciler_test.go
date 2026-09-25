@@ -205,6 +205,63 @@ func TestReclaimWokenSnapshotsReclaimsEachVMOnceItWakes(t *testing.T) {
 	}
 }
 
+func TestApplyUnsuspendRecordsARestoreForASubAgentMissingAtUnsuspend(t *testing.T) {
+	vm1 := slotNames([]int32{1}, "")[0]
+	for _, tc := range []struct {
+		name        string
+		subPresent  bool
+		tagged      bool
+		wantRestore bool
+	}{
+		{name: "missing slot with a snapshot", tagged: true, wantRestore: true},
+		{name: "missing slot without a snapshot"},
+		{name: "every slot present", subPresent: true, tagged: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			cs := newCocoonSet("demo", func(cs *cocoonv1.CocoonSet) {
+				cs.Generation = 2
+				cs.Spec.Agent.Replicas = 1
+			})
+			pods := []corev1.Pod{*rehibernated(mustBuildAgentPod(t, cs, 0, "", "", testScheme(t)))}
+			if tc.subPresent {
+				pods = append(pods, *rehibernated(mustBuildAgentPod(t, cs, 1, relVMName, "", testScheme(t))))
+			}
+			objs := []client.Object{cs}
+			for i := range pods {
+				objs = append(objs, &pods[i])
+			}
+			reg := &fakeRegistry{present: map[string]bool{vm1 + ":" + meta.HibernateSnapshotTag: tc.tagged}}
+			cli := relClient(t, objs...)
+			r := &Reconciler{Client: cli, Scheme: testScheme(t), Registry: reg}
+
+			if err := r.applyUnsuspend(t.Context(), cs, classifyPods(pods)); err != nil {
+				t.Fatalf("applyUnsuspend: %v", err)
+			}
+			owed := readHibernateReclaim(new(mustGetCS(t, cli)))
+			if restores := slices.Contains(owed.Restore, vm1) && slices.Contains(owed.VMs, vm1); restores != tc.wantRestore {
+				t.Errorf("record %+v owes a restore of %s = %v, want %v", owed, vm1, restores, tc.wantRestore)
+			}
+			if tc.subPresent && len(reg.probed) != 0 {
+				t.Errorf("an unsuspend with every slot present must not probe the registry, probed %v", reg.probed)
+			}
+		})
+	}
+}
+
+func TestReclaimWokenSnapshotsDropsAWokenRestoreFromTheRecord(t *testing.T) {
+	cs := reclaimOwedSet(t, 0, 1)
+	cs.Annotations[annotationHibernateReclaim] = encodeReclaim(t, hibernateReclaim{Generation: 2, VMs: slotNames([]int32{0, 1}, ""), Restore: slotNames([]int32{1}, "")})
+	woken := wokenPod(t, 1, 2)
+	r := &Reconciler{Client: relClient(t, cs, woken), Scheme: testScheme(t), Registry: &fakeRegistry{}}
+
+	if err := r.reclaimWokenSnapshots(t.Context(), cs, classifyPods([]corev1.Pod{*woken})); err != nil {
+		t.Fatalf("reclaimWokenSnapshots: %v", err)
+	}
+	if got := readHibernateReclaim(new(mustGetCS(t, r.Client))); !slices.Equal(got.VMs, slotNames([]int32{0}, "")) || len(got.Restore) != 0 {
+		t.Errorf("record %+v, want only slot 0 owed and no restore left", got)
+	}
+}
+
 func TestReconcileReclaimsTheTagAPlainUnsuspendWoke(t *testing.T) {
 	cs := reclaimOwedSet(t, 0)
 	cs.Finalizers = []string{finalizerName}
@@ -301,14 +358,11 @@ func TestEnsureToolboxesDropsTheOwedSnapshotBeforeAnImageRebuild(t *testing.T) {
 	tb := cocoonv1.ToolboxSpec{Name: "tb", Image: "ghcr.io/cocoonstack/cocoon/toolbox:1", Mode: cocoonv1.ToolboxModeRun}
 	pod := mustBuildToolboxPod(t, newCocoonSet("demo"), tb, testScheme(t))
 	tagKey := meta.VMNameForPod("ns", pod.Name) + ":" + meta.HibernateSnapshotTag
-	raw, err := json.Marshal(hibernateReclaim{Generation: 2, VMs: []string{meta.VMNameForPod("ns", pod.Name)}})
-	if err != nil {
-		t.Fatalf("encode owed reclaim: %v", err)
-	}
+	owed := encodeReclaim(t, hibernateReclaim{Generation: 2, VMs: []string{meta.VMNameForPod("ns", pod.Name)}})
 	tb.Image = "ghcr.io/cocoonstack/cocoon/toolbox:2"
 	cs := newCocoonSet("demo", func(cs *cocoonv1.CocoonSet) {
 		cs.Generation = 2
-		cs.Annotations = map[string]string{annotationHibernateReclaim: string(raw)}
+		cs.Annotations = map[string]string{annotationHibernateReclaim: owed}
 		cs.Spec.Toolboxes = []cocoonv1.ToolboxSpec{tb}
 	})
 	reg := &fakeRegistry{present: map[string]bool{tagKey: true}}
@@ -746,6 +800,34 @@ func TestEnsureSubAgentsDropsTheOwedSnapshotOfASlotThatReturnsAfterAScaleDown(t 
 	}
 	if _, owed := mustGetCS(t, cli).Annotations[annotationHibernateReclaim]; owed {
 		t.Errorf("the dropped VM must leave the reclaim record")
+	}
+}
+
+func TestEnsureSubAgentsRestoresASlotOwedARestore(t *testing.T) {
+	vm1 := slotNames([]int32{1}, "")[0]
+	vm1Tag := vm1 + ":" + meta.HibernateSnapshotTag
+	cs := reclaimOwedSet(t, 1)
+	cs.Spec.Agent.Replicas = 1
+	cs.Annotations[annotationHibernateReclaim] = encodeReclaim(t, hibernateReclaim{Generation: 2, VMs: []string{vm1}, Restore: []string{vm1}})
+	reg := &fakeRegistry{present: map[string]bool{vm1Tag: true}}
+	cli := relClient(t, cs)
+	r := &Reconciler{Client: cli, Scheme: testScheme(t), Registry: reg}
+
+	if _, _, err := r.ensureSubAgents(t.Context(), cs, classifyPods(nil), relVMName, "node-a", r.newRestoreIntent(t.Context(), cs.Namespace)); err != nil {
+		t.Fatalf("ensureSubAgents: %v", err)
+	}
+	var sub corev1.Pod
+	if err := cli.Get(t.Context(), types.NamespacedName{Namespace: "ns", Name: "demo-1"}, &sub); err != nil {
+		t.Fatalf("the slot must be created: %v", err)
+	}
+	if !meta.ReadRestoreFromHibernate(&sub) {
+		t.Error("a slot hibernated at suspend must restore its snapshot, not fork fresh")
+	}
+	if slices.Contains(reg.deleted, vm1Tag) {
+		t.Errorf("the snapshot the slot restores from must be kept, deleted %v", reg.deleted)
+	}
+	if owed := readHibernateReclaim(new(mustGetCS(t, cli))); !slices.Contains(owed.VMs, vm1) {
+		t.Errorf("the restored VM must stay owed until it wakes, record %+v", owed)
 	}
 }
 
@@ -1455,14 +1537,20 @@ func lifecycleHibernated(p *corev1.Pod) *corev1.Pod {
 
 func reclaimOwedSet(t *testing.T, slots ...int32) *cocoonv1.CocoonSet {
 	t.Helper()
-	raw, err := json.Marshal(hibernateReclaim{Generation: 2, VMs: slotNames(slots, "")})
+	raw := encodeReclaim(t, hibernateReclaim{Generation: 2, VMs: slotNames(slots, "")})
+	return newCocoonSet("demo", func(cs *cocoonv1.CocoonSet) {
+		cs.Generation = 2
+		cs.Annotations = map[string]string{annotationHibernateReclaim: raw}
+	})
+}
+
+func encodeReclaim(t *testing.T, owed hibernateReclaim) string {
+	t.Helper()
+	raw, err := json.Marshal(owed)
 	if err != nil {
 		t.Fatalf("encode owed reclaim: %v", err)
 	}
-	return newCocoonSet("demo", func(cs *cocoonv1.CocoonSet) {
-		cs.Generation = 2
-		cs.Annotations = map[string]string{annotationHibernateReclaim: string(raw)}
-	})
+	return string(raw)
 }
 
 func readyAt(t *testing.T, slot int32, generation int64) *corev1.Pod {
