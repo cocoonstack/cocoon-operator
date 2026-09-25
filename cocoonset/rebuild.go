@@ -147,7 +147,7 @@ func (r *Reconciler) patchAnnotation(ctx context.Context, obj client.Object, key
 func readRebuildHistory(cs *cocoonv1.CocoonSet) map[string]rebuildEntry {
 	m := map[string]rebuildEntry{}
 	if raw := cs.Annotations[annotationRebuildHistory]; raw != "" {
-		// json "null" leaves m nil; callers write to it
+		// A JSON null leaves m nil, which callers would write to.
 		if err := json.Unmarshal([]byte(raw), &m); err != nil || m == nil {
 			return map[string]rebuildEntry{}
 		}

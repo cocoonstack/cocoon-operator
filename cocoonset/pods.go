@@ -41,7 +41,7 @@ func classifyPods(pods []corev1.Pod) classifiedPods {
 	}
 	for i := range pods {
 		p := &pods[i]
-		// skip pods already being deleted to prevent re-delete loops
+		// Skip pods already being deleted to prevent re-delete loops
 		if !p.DeletionTimestamp.IsZero() {
 			continue
 		}
@@ -99,7 +99,7 @@ func buildAgentPod(cs *cocoonv1.CocoonSet, slot int32, mainVMName, bindNodeName 
 	if bindNodeName != "" {
 		pod.Spec.NodeName = bindNodeName
 	} else if slot == 0 && cs.Spec.NodeName != "" {
-		// scheduler affinity, not a hard NodeName bind: the main stays Pending unless the node fits and is schedulable
+		// Scheduler affinity, not a hard NodeName bind: the main stays Pending unless the node fits and is schedulable
 		pod.Spec.Affinity = hostnameAffinity(cs.Spec.NodeName)
 	}
 	return pod, nil
@@ -202,7 +202,7 @@ func newManagedPod(cs *cocoonv1.CocoonSet, podName, role, slotLabel string, sche
 
 func podSpecMatchesAgent(pod *corev1.Pod, cs *cocoonv1.CocoonSet, slot int32) bool {
 	current := meta.ParseVMSpec(pod)
-	// sub-agents inherit ForkFrom; main agents leave it empty so a manual edit drifts
+	// Sub-agents inherit ForkFrom; main agents leave it empty so a manual edit drifts
 	forkFrom := ""
 	if slot > 0 {
 		forkFrom = current.ForkFrom
@@ -237,7 +237,7 @@ func podSpecMatchesToolbox(pod *corev1.Pod, cs *cocoonv1.CocoonSet, tb cocoonv1.
 
 func resourcesMatch(pod *corev1.Pod, want corev1.ResourceRequirements) bool {
 	got := pod.Spec.Containers[0].Resources
-	// only CPU and memory: K8s defaulting injects ephemeral-storage into both lists, which a spec never carries
+	// Only CPU and memory: K8s defaulting injects ephemeral-storage into both lists, which a spec never carries
 	for _, res := range []corev1.ResourceName{corev1.ResourceCPU, corev1.ResourceMemory} {
 		if !quantityEqual(got.Limits, want.Limits, res) {
 			return false
@@ -281,7 +281,7 @@ func applyStorageRequest(pod *corev1.Pod, storage *resource.Quantity) {
 	if c.Resources.Limits == nil {
 		c.Resources.Limits = corev1.ResourceList{}
 	}
-	// set both so Guaranteed QoS defaulting preserves the value
+	// Set both so Guaranteed QoS defaulting preserves the value
 	c.Resources.Requests[corev1.ResourceEphemeralStorage] = *storage
 	c.Resources.Limits[corev1.ResourceEphemeralStorage] = *storage
 }
