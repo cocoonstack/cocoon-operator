@@ -60,25 +60,14 @@ func TestApplyUnsuspendClearsHibernateAnnotation(t *testing.T) {
 		t.Fatalf("applyUnsuspend: %v", err)
 	}
 
-	for _, tc := range []struct {
-		name        string
-		wantCleared bool
-	}{
-		{"demo-0", true},
-		{"demo-1", true},
-		{"demo-tb", false},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
+	for _, name := range []string{"demo-0", "demo-1", "demo-tb"} {
+		t.Run(name, func(t *testing.T) {
 			var got corev1.Pod
-			if err := cli.Get(t.Context(), types.NamespacedName{Namespace: "ns", Name: tc.name}, &got); err != nil {
-				t.Fatalf("get %s: %v", tc.name, err)
+			if err := cli.Get(t.Context(), types.NamespacedName{Namespace: "ns", Name: name}, &got); err != nil {
+				t.Fatalf("get %s: %v", name, err)
 			}
-			hibernated := bool(meta.ReadHibernateState(&got))
-			if tc.wantCleared && hibernated {
-				t.Errorf("%s: hibernate annotation should be cleared", tc.name)
-			}
-			if !tc.wantCleared && hibernated {
-				t.Errorf("%s: hibernate annotation unexpectedly set", tc.name)
+			if meta.ReadHibernateState(&got) {
+				t.Errorf("%s: hibernate annotation must be clear", name)
 			}
 		})
 	}
@@ -568,10 +557,7 @@ func TestEnsureSubAgentsDeadLetterStaysUntilSpecEdit(t *testing.T) {
 	if err := cli.Get(t.Context(), types.NamespacedName{Namespace: subPod.Namespace, Name: subPod.Name}, &corev1.Pod{}); err == nil {
 		t.Error("dead-lettered drifted pod should have been deleted")
 	}
-	var out cocoonv1.CocoonSet
-	if err := cli.Get(t.Context(), types.NamespacedName{Namespace: cs.Namespace, Name: cs.Name}, &out); err != nil {
-		t.Fatalf("get CocoonSet: %v", err)
-	}
+	out := mustGetCS(t, cli)
 	if _, ok := readRebuildHistory(&out)[subPod.Name]; ok {
 		t.Error("rebuild history for the slot must be reset so the new spec gets a fresh budget")
 	}
@@ -609,10 +595,7 @@ func TestReconcileMainLifecycleFailedTransitionsToFailed(t *testing.T) {
 	if _, err := r.Reconcile(t.Context(), reqFor(cs)); err != nil {
 		t.Fatalf("Reconcile: %v", err)
 	}
-	var out cocoonv1.CocoonSet
-	if err := cli.Get(t.Context(), types.NamespacedName{Namespace: cs.Namespace, Name: cs.Name}, &out); err != nil {
-		t.Fatalf("get CocoonSet: %v", err)
-	}
+	out := mustGetCS(t, cli)
 	if out.Status.Phase != cocoonv1.CocoonSetPhaseFailed {
 		t.Errorf("CocoonSet phase = %q, want Failed", out.Status.Phase)
 	}
@@ -624,10 +607,7 @@ func TestReconcileMainLifecycleFailedHonorsSuspend(t *testing.T) {
 	if _, err := r.Reconcile(t.Context(), reqFor(cs)); err != nil {
 		t.Fatalf("Reconcile: %v", err)
 	}
-	var out cocoonv1.CocoonSet
-	if err := cli.Get(t.Context(), types.NamespacedName{Namespace: cs.Namespace, Name: cs.Name}, &out); err != nil {
-		t.Fatalf("get CocoonSet: %v", err)
-	}
+	out := mustGetCS(t, cli)
 	if out.Status.Phase != cocoonv1.CocoonSetPhaseSuspending {
 		t.Errorf("CocoonSet phase = %q, want Suspending until the failed main's VM is hibernated", out.Status.Phase)
 	}
@@ -658,10 +638,7 @@ func TestReconcileSuspendTimesOutAfterTheDeadline(t *testing.T) {
 	if _, err := r.Reconcile(t.Context(), reqFor(cs)); err != nil {
 		t.Fatalf("Reconcile: %v", err)
 	}
-	var out cocoonv1.CocoonSet
-	if err := cli.Get(t.Context(), types.NamespacedName{Namespace: cs.Namespace, Name: cs.Name}, &out); err != nil {
-		t.Fatalf("get CocoonSet: %v", err)
-	}
+	out := mustGetCS(t, cli)
 	if out.Status.Phase != cocoonv1.CocoonSetPhaseFailed {
 		t.Fatalf("phase = %q, want Failed after %s in Suspending", out.Status.Phase, suspendTimeout)
 	}
@@ -677,9 +654,7 @@ func TestReconcileSuspendTimesOutAfterTheDeadline(t *testing.T) {
 	if _, err := r.Reconcile(t.Context(), reqFor(cs)); err != nil {
 		t.Fatalf("second Reconcile: %v", err)
 	}
-	if err := cli.Get(t.Context(), types.NamespacedName{Namespace: cs.Namespace, Name: cs.Name}, &out); err != nil {
-		t.Fatalf("get CocoonSet: %v", err)
-	}
+	out = mustGetCS(t, cli)
 	since, err := time.Parse(time.RFC3339, out.Annotations[annotationSuspendingSince])
 	if out.Status.Phase != cocoonv1.CocoonSetPhaseSuspending || err != nil || time.Since(since) > time.Minute {
 		t.Fatalf("phase = %q since = %q (%v), want Suspending again with a fresh deadline", out.Status.Phase, out.Annotations[annotationSuspendingSince], err)
@@ -703,10 +678,7 @@ func TestReconcileSuspendTimesOutWhenTheRegistryProbeKeepsFailing(t *testing.T) 
 	if _, err := r.Reconcile(t.Context(), reqFor(cs)); err != nil {
 		t.Fatalf("Reconcile past the deadline must report Failed instead of returning the probe error: %v", err)
 	}
-	var out cocoonv1.CocoonSet
-	if err := cli.Get(t.Context(), types.NamespacedName{Namespace: cs.Namespace, Name: cs.Name}, &out); err != nil {
-		t.Fatalf("get CocoonSet: %v", err)
-	}
+	out := mustGetCS(t, cli)
 	if out.Status.Phase != cocoonv1.CocoonSetPhaseFailed {
 		t.Fatalf("phase = %q, want Failed", out.Status.Phase)
 	}
@@ -722,9 +694,7 @@ func TestReconcileSuspendTimesOutWhenTheRegistryProbeKeepsFailing(t *testing.T) 
 	if _, err := r.Reconcile(t.Context(), reqFor(cs)); err == nil {
 		t.Fatal("inside a fresh deadline the probe error must still be returned")
 	}
-	if err := cli.Get(t.Context(), types.NamespacedName{Namespace: cs.Namespace, Name: cs.Name}, &out); err != nil {
-		t.Fatalf("get CocoonSet: %v", err)
-	}
+	out = mustGetCS(t, cli)
 	if out.Status.Phase != cocoonv1.CocoonSetPhaseSuspending {
 		t.Fatalf("phase = %q after the retry, want Suspending so the next deadline can fire", out.Status.Phase)
 	}
@@ -1207,11 +1177,7 @@ func TestEnsureToolboxesStashesRemovedToolboxVMName(t *testing.T) {
 
 func stashedVMNames(t *testing.T, cli client.Client) []string {
 	t.Helper()
-	var cs cocoonv1.CocoonSet
-	if err := cli.Get(t.Context(), types.NamespacedName{Namespace: "ns", Name: "demo"}, &cs); err != nil {
-		t.Fatalf("get cocoonset: %v", err)
-	}
-	return parseVMNamesAnnotation(cs.Annotations[annotationDeleteVMNames])
+	return parseVMNamesAnnotation(mustGetCS(t, cli).Annotations[annotationDeleteVMNames])
 }
 
 func newFailedMainSet(t *testing.T, suspend bool) (client.Client, *cocoonv1.CocoonSet, *corev1.Pod, *Reconciler) {

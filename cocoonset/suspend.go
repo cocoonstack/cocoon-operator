@@ -100,14 +100,14 @@ func (r *Reconciler) allOwnedPodsHibernated(ctx context.Context, cs *cocoonv1.Co
 		if !spec.Managed {
 			continue
 		}
-		// a kubelet-terminal pod has no VM to snapshot; waiting on it would park the set in Suspending forever
+		// A kubelet-terminal pod has no VM to snapshot, so waiting on it would park the set in Suspending forever.
 		if meta.IsPodTerminal(pod) {
 			continue
 		}
 		if spec.VMName == "" {
 			return false, nil
 		}
-		// vk flips hibernated with observed-generation only after this round's push; a stale tag or lagging informer cannot pass
+		// vk reports hibernated at this generation only after this round's push, so a stale tag cannot pass.
 		if st := meta.ReadLifecycleStatus(pod); st.State != meta.LifecycleStateHibernated ||
 			st.ObservedGeneration < cs.Generation {
 			return false, nil
