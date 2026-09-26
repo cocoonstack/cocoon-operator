@@ -31,7 +31,7 @@ func TestSetRelevantChangeAdmitsGenerationAndStatusChangesOnly(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			updated := base.DeepCopy()
 			tc.mutate(updated)
-			if got := (setRelevantChange{}).Update(event.UpdateEvent{ObjectOld: base, ObjectNew: updated}); got != tc.want {
+			if got := setRelevantChange.Update(event.UpdateEvent{ObjectOld: base, ObjectNew: updated}); got != tc.want {
 				t.Fatalf("Update = %v, want %v", got, tc.want)
 			}
 		})

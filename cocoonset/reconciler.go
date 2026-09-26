@@ -49,7 +49,7 @@ func (r *Reconciler) SetupWithManager(_ context.Context, mgr ctrl.Manager) error
 		return fmt.Errorf("cocoonset concurrency must be at least 1, got %d", r.Concurrency)
 	}
 	return ctrl.NewControllerManagedBy(mgr).
-		For(&cocoonv1.CocoonSet{}, builder.WithPredicates(setRelevantChange{})).
+		For(&cocoonv1.CocoonSet{}, builder.WithPredicates(setRelevantChange)).
 		Owns(&corev1.Pod{}, builder.WithPredicates(podRelevantChange{})).
 		WithOptions(controller.Options{MaxConcurrentReconciles: r.Concurrency}).
 		Complete(r)
