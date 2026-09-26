@@ -43,7 +43,7 @@ type Reconciler struct {
 	Concurrency int
 }
 
-// SetupWithManager registers the reconciler with predicates that drop status-only churn.
+// SetupWithManager registers the reconciler with predicates that drop annotation-only set updates and pod status churn.
 func (r *Reconciler) SetupWithManager(_ context.Context, mgr ctrl.Manager) error {
 	if r.Concurrency < 1 {
 		return fmt.Errorf("cocoonset concurrency must be at least 1, got %d", r.Concurrency)
