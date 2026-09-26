@@ -536,12 +536,91 @@ func TestWakeScoresPlacementOnceAcrossStaleStatusReentry(t *testing.T) {
 	}
 }
 
+func TestReconcileReleasedWakeDiscardsASnapshotTheNewImageCannotRestore(t *testing.T) {
+	for _, tc := range []struct {
+		name        string
+		node        string
+		released    string
+		wantDropped bool
+	}{
+		{name: "image edited while released", released: "ghcr.io/cocoonstack/cocoon/ubuntu:22.04", wantDropped: true},
+		{name: "image edited while a pinned set was released", node: "node-b", released: "ghcr.io/cocoonstack/cocoon/ubuntu:22.04", wantDropped: true},
+		{name: "same image", released: "ghcr.io/cocoonstack/cocoon/ubuntu:24.04"},
+		{name: "same image on a pinned set", node: "node-b", released: "ghcr.io/cocoonstack/cocoon/ubuntu:24.04"},
+		{name: "snapshot without a recorded image"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			cs := releasedWakeSet()
+			cs.Spec.NodeName = tc.node
+			reg := &fakeRegistry{present: map[string]bool{relHibernateTagKey: true}, images: map[string]string{relHibernateTagKey: tc.released}}
+			cli := relClient(t, cs)
+			r := &Reconciler{Client: cli, APIReader: cli, Scheme: testScheme(t), Registry: reg}
+
+			if _, err := r.Reconcile(t.Context(), reqFor(cs)); err != nil {
+				t.Fatalf("Reconcile: %v", err)
+			}
+			var got corev1.Pod
+			if err := cli.Get(t.Context(), types.NamespacedName{Namespace: "ns", Name: "demo-0"}, &got); err != nil {
+				t.Fatalf("the main must be recreated: %v", err)
+			}
+			if restores := meta.ReadRestoreFromHibernate(&got); restores == tc.wantDropped {
+				t.Errorf("recreated main restores from :hibernate = %v, want %v", restores, !tc.wantDropped)
+			}
+			if dropped := slices.Contains(reg.deleted, relHibernateTagKey); dropped != tc.wantDropped {
+				t.Errorf("%s dropped = %v, want %v", relHibernateTagKey, dropped, tc.wantDropped)
+			}
+			if _, hinted := mustGetCS(t, cli).Annotations[meta.AnnotationHibernatedOnNode]; tc.wantDropped && hinted {
+				t.Error("a discarded release must clear its node hint")
+			}
+		})
+	}
+}
+
+func TestReconcileReleasedWakeRetriesARefusedSnapshotDiscard(t *testing.T) {
+	cs := releasedWakeSet()
+	reg := &fakeRegistry{
+		present:   map[string]bool{relHibernateTagKey: true},
+		images:    map[string]string{relHibernateTagKey: "ghcr.io/cocoonstack/cocoon/ubuntu:22.04"},
+		deleteErr: errors.New("delete refused"),
+	}
+	cli := relClient(t, cs)
+	r := &Reconciler{Client: cli, APIReader: cli, Scheme: testScheme(t), Registry: reg}
+
+	if _, err := r.Reconcile(t.Context(), reqFor(cs)); err == nil {
+		t.Fatal("a refused discard must fail the pass so it retries with backoff")
+	}
+	if err := cli.Get(t.Context(), types.NamespacedName{Namespace: "ns", Name: "demo-0"}, &corev1.Pod{}); !apierrors.IsNotFound(err) {
+		t.Errorf("no main may be created while the snapshot it cannot restore is still tagged, got err=%v", err)
+	}
+
+	reg.deleteErr = nil
+	if _, err := r.Reconcile(t.Context(), reqFor(cs)); err != nil {
+		t.Fatalf("retry: %v", err)
+	}
+	var got corev1.Pod
+	if err := cli.Get(t.Context(), types.NamespacedName{Namespace: "ns", Name: "demo-0"}, &got); err != nil || meta.ReadRestoreFromHibernate(&got) {
+		t.Errorf("the retry must boot the main fresh, err=%v restore=%v", err, meta.ReadRestoreFromHibernate(&got))
+	}
+	if !slices.Contains(reg.deleted, relHibernateTagKey) {
+		t.Errorf("the retry must drop %s, deleted %v", relHibernateTagKey, reg.deleted)
+	}
+}
+
 func relCocoonSet(mods ...func(*cocoonv1.CocoonSet)) *cocoonv1.CocoonSet {
 	return newCocoonSet("demo", append([]func(*cocoonv1.CocoonSet){func(cs *cocoonv1.CocoonSet) {
 		cs.Generation = 1
 		cs.Spec.Suspend = true
 		cs.Spec.HibernatePolicy = cocoonv1.HibernatePolicyRelease
 	}}, mods...)...)
+}
+
+func releasedWakeSet() *cocoonv1.CocoonSet {
+	return relCocoonSet(func(cs *cocoonv1.CocoonSet) {
+		cs.Finalizers = []string{finalizerName}
+		cs.Spec.Suspend = false
+		cs.Status.Phase = cocoonv1.CocoonSetPhaseSuspended
+		cs.Annotations = map[string]string{meta.AnnotationHibernatedOnNode: "node-a"}
+	})
 }
 
 func relHibernatedPod(t *testing.T, cs *cocoonv1.CocoonSet, node string) *corev1.Pod {

@@ -16,7 +16,6 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
-	"sigs.k8s.io/controller-runtime/pkg/predicate"
 
 	cocoonv1 "github.com/cocoonstack/cocoon-common/apis/v1"
 	commonk8s "github.com/cocoonstack/cocoon-common/k8s"
@@ -44,13 +43,13 @@ type Reconciler struct {
 	Concurrency int
 }
 
-// SetupWithManager registers the reconciler with predicates that drop status-only churn.
+// SetupWithManager registers the reconciler with predicates that drop annotation-only set updates and pod status churn.
 func (r *Reconciler) SetupWithManager(_ context.Context, mgr ctrl.Manager) error {
 	if r.Concurrency < 1 {
 		return fmt.Errorf("cocoonset concurrency must be at least 1, got %d", r.Concurrency)
 	}
 	return ctrl.NewControllerManagedBy(mgr).
-		For(&cocoonv1.CocoonSet{}, builder.WithPredicates(predicate.GenerationChangedPredicate{})).
+		For(&cocoonv1.CocoonSet{}, builder.WithPredicates(setRelevantChange)).
 		Owns(&corev1.Pod{}, builder.WithPredicates(podRelevantChange{})).
 		WithOptions(controller.Options{MaxConcurrentReconciles: r.Concurrency}).
 		Complete(r)
@@ -182,6 +181,11 @@ func (r *Reconciler) rebuildDriftedMain(ctx context.Context, logger *log.Fields,
 
 // handleFailedMainAgent recreates a drifted terminal main, which would otherwise wait in Failed for a Ready it cannot reach.
 func (r *Reconciler) handleFailedMainAgent(ctx context.Context, cs *cocoonv1.CocoonSet, classified classifiedPods, reason string) (ctrl.Result, error) {
+	if !mainOffTarget(cs, classified.main) {
+		if err := r.applyUnsuspend(ctx, cs, classified); err != nil {
+			return ctrl.Result{}, err
+		}
+	}
 	if handled, res, err := r.rebuildDriftedMain(ctx, log.WithFunc("cocoonset.Reconciler.handleFailedMainAgent"), cs, classified); handled {
 		return res, err
 	}
@@ -196,7 +200,10 @@ func (r *Reconciler) createMainAgent(ctx context.Context, cs *cocoonv1.CocoonSet
 	if err != nil {
 		return ctrl.Result{}, fmt.Errorf("build main agent: %w", err)
 	}
-	if err := r.markRestoreFromIntent(ctx, mainPod, intent); err != nil {
+	if _, err := r.discardImageConflict(ctx, cs, mainPod); err != nil {
+		return ctrl.Result{}, err
+	}
+	if err := r.markRestoreFromIntent(ctx, cs, mainPod, intent); err != nil {
 		return ctrl.Result{}, err
 	}
 	if err := r.Create(ctx, mainPod); err != nil {

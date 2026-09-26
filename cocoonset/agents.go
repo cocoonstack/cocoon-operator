@@ -2,6 +2,7 @@ package cocoonset
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"maps"
 	"slices"
@@ -14,6 +15,7 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 
 	cocoonv1 "github.com/cocoonstack/cocoon-common/apis/v1"
+	"github.com/cocoonstack/cocoon-common/meta"
 )
 
 // subAgentCreateConcurrency caps parallel creates so a scale-up does not burst the apiserver.
@@ -43,6 +45,9 @@ func (r *Reconciler) ensureSubAgents(ctx context.Context, cs *cocoonv1.CocoonSet
 	}
 
 	missing = slices.DeleteFunc(missing, func(slot int32) bool { return budgetExhausted(cs, agentPodName(cs.Name, slot)) })
+	if err := r.reclaimUnrestoredForks(ctx, cs, missing, intent); err != nil {
+		return changed, requeueAfter, err
+	}
 	created, err := r.createSubAgents(ctx, logger, cs, missing, mainVMName, mainNodeName, intent)
 	changed = changed || created
 	if err != nil {
@@ -73,16 +78,24 @@ func (r *Reconciler) createSubAgents(ctx context.Context, logger *log.Fields, cs
 	if len(missing) == 0 {
 		return false, nil
 	}
+	discarded := make([]string, len(missing))
 	g, gctx := errgroup.WithContext(ctx)
 	g.SetLimit(subAgentCreateConcurrency)
 	var created atomic.Bool
-	for _, slot := range missing {
+	for i, slot := range missing {
 		g.Go(func() error {
 			subPod, err := buildAgentPod(cs, slot, mainVMName, mainNodeName, r.Scheme)
 			if err != nil {
 				return fmt.Errorf("build sub-agent slot %d: %w", slot, err)
 			}
-			if err := r.markRestoreFromIntent(gctx, subPod, intent); err != nil {
+			dropped, err := r.dropImageConflict(gctx, subPod)
+			if err != nil {
+				return fmt.Errorf("sub-agent slot %d: %w", slot, err)
+			}
+			if dropped {
+				discarded[i] = meta.ParseVMSpec(subPod).VMName
+			}
+			if err := r.markRestoreFromIntent(gctx, cs, subPod, intent); err != nil {
 				return fmt.Errorf("mark restore sub-agent slot %d: %w", slot, err)
 			}
 			if err := r.Create(gctx, subPod); err != nil {
@@ -97,5 +110,24 @@ func (r *Reconciler) createSubAgents(ctx context.Context, logger *log.Fields, cs
 		})
 	}
 	waitErr := g.Wait()
-	return created.Load(), waitErr
+	return created.Load(), errors.Join(waitErr, r.forgetReclaim(ctx, cs, discarded))
+}
+
+func (r *Reconciler) reclaimUnrestoredForks(ctx context.Context, cs *cocoonv1.CocoonSet, missing []int32, intent restoreIntent) error {
+	owed := readHibernateReclaim(cs)
+	if len(missing) == 0 || len(owed.VMs) == 0 {
+		return nil
+	}
+	restorable, err := intent()
+	if err != nil {
+		return err
+	}
+	var forks []string
+	for _, slot := range missing {
+		vm := meta.VMNameForDeployment(cs.Namespace, cs.Name, int(slot))
+		if _, restores := restorable[agentPodName(cs.Name, slot)]; !restores && !slices.Contains(owed.Restore, vm) {
+			forks = append(forks, vm)
+		}
+	}
+	return r.reclaimSnapshots(ctx, cs, forks)
 }

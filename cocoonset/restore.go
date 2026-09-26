@@ -3,6 +3,7 @@ package cocoonset
 import (
 	"context"
 	"fmt"
+	"slices"
 	"sync"
 
 	"github.com/projecteru2/core/log"
@@ -57,12 +58,15 @@ func (r *Reconciler) podsRestorableByCR(ctx context.Context, namespace string) (
 	})
 }
 
-func (r *Reconciler) markRestoreFromIntent(ctx context.Context, pod *corev1.Pod, intent restoreIntent) error {
-	restorable, err := intent()
-	if err != nil {
-		return err
+func (r *Reconciler) markRestoreFromIntent(ctx context.Context, cs *cocoonv1.CocoonSet, pod *corev1.Pod, intent restoreIntent) error {
+	want := slices.Contains(readHibernateReclaim(cs).Restore, meta.ParseVMSpec(pod).VMName)
+	if !want {
+		restorable, err := intent()
+		if err != nil {
+			return err
+		}
+		_, want = restorable[pod.Name]
 	}
-	_, want := restorable[pod.Name]
 	return r.markRestoreIfHibernated(ctx, pod, want)
 }
 
@@ -82,4 +86,29 @@ func (r *Reconciler) markRestoreIfHibernated(ctx context.Context, pod *corev1.Po
 		logger.Infof(ctx, "pod %s/%s will restore VM %s from :hibernate", pod.Namespace, pod.Name, vmName)
 	}
 	return nil
+}
+
+func (r *Reconciler) discardImageConflict(ctx context.Context, cs *cocoonv1.CocoonSet, pod *corev1.Pod) (bool, error) {
+	dropped, err := r.dropImageConflict(ctx, pod)
+	if err != nil || !dropped {
+		return false, err
+	}
+	return true, r.forgetReclaim(ctx, cs, []string{meta.ParseVMSpec(pod).VMName})
+}
+
+func (r *Reconciler) dropImageConflict(ctx context.Context, pod *corev1.Pod) (bool, error) {
+	logger := log.WithFunc("cocoonset.Reconciler.dropImageConflict")
+	spec := meta.ParseVMSpec(pod)
+	if !spec.Managed {
+		return false, nil
+	}
+	pushed, err := snapshot.HibernateSnapshotImage(ctx, r.Registry, spec.VMName)
+	if err != nil || pushed == "" || pushed == spec.Image {
+		return false, err
+	}
+	logger.Infof(ctx, "pod %s/%s: hibernate snapshot of %s was pushed from %s, dropping it to boot %s fresh", pod.Namespace, pod.Name, spec.VMName, pushed, spec.Image)
+	if err := r.Registry.DeleteManifest(ctx, spec.VMName, meta.HibernateSnapshotTag); err != nil {
+		return false, fmt.Errorf("drop hibernate snapshot %s: %w", spec.VMName, err)
+	}
+	return true, nil
 }
