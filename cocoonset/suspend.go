@@ -29,6 +29,8 @@ const (
 type hibernateReclaim struct {
 	Generation int64    `json:"generation"`
 	VMs        []string `json:"vms"`
+	Restore    []string `json:"restore,omitempty"`
+	Suspended  []string `json:"suspended,omitempty"`
 }
 
 // reconcileSuspend polls the registry and stays Suspending until every managed VM's snapshot lands.
@@ -39,7 +41,7 @@ func (r *Reconciler) reconcileSuspend(ctx context.Context, cs *cocoonv1.CocoonSe
 			return map[string]struct{}{agentPodName(cs.Name, 0): {}}, nil
 		})
 	}
-	if err := r.applySuspend(ctx, classified); err != nil {
+	if err := r.applySuspend(ctx, cs, classified); err != nil {
 		return ctrl.Result{}, err
 	}
 	allHibernated, err := r.allOwnedPodsHibernated(ctx, cs, classified)
@@ -123,7 +125,15 @@ func (r *Reconciler) allOwnedPodsHibernated(ctx context.Context, cs *cocoonv1.Co
 	return true, nil
 }
 
-func (r *Reconciler) applySuspend(ctx context.Context, classified classifiedPods) error {
+func (r *Reconciler) applySuspend(ctx context.Context, cs *cocoonv1.CocoonSet, classified classifiedPods) error {
+	owed := readHibernateReclaim(cs)
+	for _, name := range slices.Sorted(maps.Keys(classified.allByName)) {
+		owed.VMs = appendManagedVM(owed.VMs, classified.allByName[name])
+		owed.Suspended = appendManagedVM(owed.Suspended, classified.allByName[name])
+	}
+	if err := r.writeHibernateReclaim(ctx, cs, owed); err != nil {
+		return err
+	}
 	return classified.forEachSorted(ctx, func(pod *corev1.Pod) error {
 		if err := podpatch.HibernateState(ctx, r.Client, pod, true); err != nil {
 			return fmt.Errorf("patch hibernate annotation on %s/%s: %w", pod.Namespace, pod.Name, err)
@@ -140,27 +150,27 @@ func (r *Reconciler) applyUnsuspend(ctx context.Context, cs *cocoonv1.CocoonSet,
 			hibernated = append(hibernated, pod)
 		}
 	}
-	if len(hibernated) == 0 {
-		return nil
-	}
-
-	hibernatedByCR, err := r.podsHibernatedByCR(ctx, cs.Namespace)
-	if err != nil {
-		return err
-	}
-	hibernated = slices.DeleteFunc(hibernated, func(pod *corev1.Pod) bool {
-		_, ownedByCR := hibernatedByCR[pod.Name]
-		return ownedByCR
-	})
-	if len(hibernated) == 0 {
-		return nil
+	if len(hibernated) > 0 {
+		hibernatedByCR, err := r.podsHibernatedByCR(ctx, cs.Namespace)
+		if err != nil {
+			return err
+		}
+		hibernated = slices.DeleteFunc(hibernated, func(pod *corev1.Pod) bool {
+			_, ownedByCR := hibernatedByCR[pod.Name]
+			return ownedByCR
+		})
 	}
 	owed := readHibernateReclaim(cs)
+	if len(hibernated) == 0 && len(owed.Suspended) == 0 {
+		return nil
+	}
 	owed.Generation = cs.Generation
 	for _, pod := range hibernated {
-		if spec := meta.ParseVMSpec(pod); spec.Managed && spec.VMName != "" && !slices.Contains(owed.VMs, spec.VMName) {
-			owed.VMs = append(owed.VMs, spec.VMName)
-		}
+		owed.VMs = appendManagedVM(owed.VMs, pod)
+	}
+	owed.Restore = appendMissingVMs(owed.Restore, owed.Suspended, classified)
+	if len(hibernated) == 0 {
+		owed.Suspended = nil
 	}
 	if err := r.writeHibernateReclaim(ctx, cs, owed); err != nil {
 		return err
@@ -173,7 +183,8 @@ func (r *Reconciler) applyUnsuspend(ctx context.Context, cs *cocoonv1.CocoonSet,
 			return fmt.Errorf("clear hibernate annotation on %s/%s: %w", pod.Namespace, pod.Name, err)
 		}
 	}
-	return nil
+	owed.Suspended = nil
+	return r.writeHibernateReclaim(ctx, cs, owed)
 }
 
 func (r *Reconciler) reclaimWokenSnapshots(ctx context.Context, cs *cocoonv1.CocoonSet, classified classifiedPods) error {
@@ -181,29 +192,41 @@ func (r *Reconciler) reclaimWokenSnapshots(ctx context.Context, cs *cocoonv1.Coc
 	if len(owed.VMs) == 0 {
 		return nil
 	}
-	woken := map[string]bool{}
+	var woken []string
 	for _, pod := range classified.allByName {
 		if wokenAt(pod, owed.Generation) {
-			woken[meta.ParseVMSpec(pod).VMName] = true
+			woken = append(woken, meta.ParseVMSpec(pod).VMName)
 		}
 	}
-	var pending []string
+	return r.reclaimSnapshots(ctx, cs, woken)
+}
+
+func (r *Reconciler) reclaimSnapshots(ctx context.Context, cs *cocoonv1.CocoonSet, vms []string) error {
+	var reclaimed []string
 	var errs []error
-	for _, vm := range owed.VMs {
-		if woken[vm] {
-			err := snapshot.DeleteManifestIfPresent(ctx, r.Registry, vm, meta.HibernateSnapshotTag)
-			if err == nil {
-				continue
-			}
-			errs = append(errs, fmt.Errorf("reclaim %s:%s: %w", vm, meta.HibernateSnapshotTag, err))
+	for _, vm := range readHibernateReclaim(cs).VMs {
+		if !slices.Contains(vms, vm) {
+			continue
 		}
-		pending = append(pending, vm)
+		if err := snapshot.DeleteManifestIfPresent(ctx, r.Registry, vm, meta.HibernateSnapshotTag); err != nil {
+			errs = append(errs, fmt.Errorf("reclaim %s:%s: %w", vm, meta.HibernateSnapshotTag, err))
+			continue
+		}
+		reclaimed = append(reclaimed, vm)
 	}
-	if len(pending) < len(owed.VMs) {
-		owed.VMs = pending
-		errs = append(errs, r.writeHibernateReclaim(ctx, cs, owed))
+	return errors.Join(append(errs, r.forgetReclaim(ctx, cs, reclaimed))...)
+}
+
+func (r *Reconciler) forgetReclaim(ctx context.Context, cs *cocoonv1.CocoonSet, vms []string) error {
+	owed := readHibernateReclaim(cs)
+	forget := func(vm string) bool { return slices.Contains(vms, vm) }
+	if !slices.ContainsFunc(owed.VMs, forget) {
+		return nil
 	}
-	return errors.Join(errs...)
+	owed.VMs = slices.DeleteFunc(owed.VMs, forget)
+	owed.Restore = slices.DeleteFunc(owed.Restore, forget)
+	owed.Suspended = slices.DeleteFunc(owed.Suspended, forget)
+	return r.writeHibernateReclaim(ctx, cs, owed)
 }
 
 func (r *Reconciler) writeHibernateReclaim(ctx context.Context, cs *cocoonv1.CocoonSet, owed hibernateReclaim) error {
@@ -235,6 +258,26 @@ func readHibernateReclaim(cs *cocoonv1.CocoonSet) hibernateReclaim {
 		}
 	}
 	return owed
+}
+
+func appendManagedVM(vms []string, pod *corev1.Pod) []string {
+	if spec := meta.ParseVMSpec(pod); spec.Managed && spec.VMName != "" && !slices.Contains(vms, spec.VMName) {
+		return append(vms, spec.VMName)
+	}
+	return vms
+}
+
+func appendMissingVMs(restore, vms []string, classified classifiedPods) []string {
+	live := make(map[string]bool, len(classified.allByName))
+	for _, pod := range classified.allByName {
+		live[meta.ParseVMSpec(pod).VMName] = true
+	}
+	for _, vm := range vms {
+		if !live[vm] && !slices.Contains(restore, vm) {
+			restore = append(restore, vm)
+		}
+	}
+	return restore
 }
 
 func wokenAt(pod *corev1.Pod, generation int64) bool {

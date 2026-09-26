@@ -3,13 +3,17 @@ package snapshot
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
+	"github.com/cocoonstack/cocoon-common/manifest"
 	"github.com/cocoonstack/cocoon-common/meta"
+	commonsnapshot "github.com/cocoonstack/cocoon-common/snapshot"
 )
 
 // Registry is the subset of registry operations the reconcilers need; oci.OCIRegistry satisfies it.
 type Registry interface {
+	GetManifest(ctx context.Context, name, reference string) ([]byte, string, error)
 	HasManifest(ctx context.Context, name, reference string) (bool, error)
 	DeleteManifest(ctx context.Context, name, reference string) error
 }
@@ -33,4 +37,19 @@ func HasHibernateSnapshot(ctx context.Context, reg Registry, vmName string) (boo
 		return false, fmt.Errorf("probe hibernate snapshot %s: %w", vmName, err)
 	}
 	return present, nil
+}
+
+func HibernateSnapshotImage(ctx context.Context, reg Registry, vmName string) (string, error) {
+	raw, _, err := reg.GetManifest(ctx, vmName, meta.HibernateSnapshotTag)
+	switch {
+	case errors.Is(err, commonsnapshot.ErrManifestNotFound):
+		return "", nil
+	case err != nil:
+		return "", fmt.Errorf("get hibernate manifest %s: %w", vmName, err)
+	}
+	m, err := manifest.Parse(raw)
+	if err != nil {
+		return "", fmt.Errorf("parse hibernate manifest %s: %w", vmName, err)
+	}
+	return m.Annotations[manifest.AnnotationSnapshotBaseImage], nil
 }

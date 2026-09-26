@@ -38,7 +38,8 @@ func TestReconcileSteadyStateSkipsHibernationList(t *testing.T) {
 		WithStatusSubresource(&cocoonv1.CocoonSet{}).
 		WithInterceptorFuncs(countHibernationLists(&lists)).
 		Build()
-	r := &Reconciler{Client: cli, Scheme: scheme, Registry: &fakeRegistry{}}
+	reg := &fakeRegistry{}
+	r := &Reconciler{Client: cli, Scheme: scheme, Registry: reg}
 
 	if _, err := r.Reconcile(t.Context(), reqFor(cs)); err != nil {
 		t.Fatalf("Reconcile: %v", err)
@@ -50,6 +51,9 @@ func TestReconcileSteadyStateSkipsHibernationList(t *testing.T) {
 	}
 	if got := lists.Load(); got != 0 {
 		t.Errorf("steady reconcile listed CocoonHibernations %d times, want 0", got)
+	}
+	if len(reg.probed) != 0 {
+		t.Errorf("steady reconcile probed the registry for %v, want no probe", reg.probed)
 	}
 }
 

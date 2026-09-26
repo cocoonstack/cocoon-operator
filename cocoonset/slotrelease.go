@@ -32,7 +32,7 @@ func (r *Reconciler) reconcileSuspendRelease(ctx context.Context, cs *cocoonv1.C
 		return ctrl.Result{}, r.patchStatus(ctx, cs, buildStatus(cs, classified, cocoonv1.CocoonSetPhaseSuspended))
 	}
 
-	if err := r.applySuspend(ctx, classified); err != nil {
+	if err := r.applySuspend(ctx, cs, classified); err != nil {
 		return ctrl.Result{}, err
 	}
 	allHibernated, err := r.allOwnedPodsHibernated(ctx, cs, classified)
@@ -137,9 +137,16 @@ func (r *Reconciler) reconcileWake(ctx context.Context, cs *cocoonv1.CocoonSet, 
 	}
 }
 
-// startReleasedWake recreates main with restore intent; handled=false only when no snapshot exists.
+// startReleasedWake recreates main with restore intent; handled=false only when no restorable snapshot exists.
 func (r *Reconciler) startReleasedWake(ctx context.Context, cs *cocoonv1.CocoonSet, classified classifiedPods) (bool, ctrl.Result, error) {
 	logger := log.WithFunc("cocoonset.Reconciler.startReleasedWake")
+	pod, err := buildAgentPod(cs, 0, "", "", r.Scheme)
+	if err != nil {
+		return true, ctrl.Result{}, fmt.Errorf("wake: build main: %w", err)
+	}
+	if _, err := r.discardImageConflict(ctx, cs, pod); err != nil {
+		return true, ctrl.Result{}, fmt.Errorf("wake: %w", err)
+	}
 	vmName := meta.VMNameForDeployment(cs.Namespace, cs.Name, 0)
 	present, probeErr := snapshot.HasHibernateSnapshot(ctx, r.Registry, vmName)
 	if probeErr != nil {
@@ -147,16 +154,17 @@ func (r *Reconciler) startReleasedWake(ctx context.Context, cs *cocoonv1.CocoonS
 		return true, ctrl.Result{}, fmt.Errorf("wake: %w", probeErr)
 	}
 	if !present {
-		// No snapshot means suspended before first boot; the normal flow fresh-boots
+		// No snapshot means suspended before first boot or dropped for another image; the normal flow fresh-boots
+		if cs.Annotations[meta.AnnotationHibernatedOnNode] != "" {
+			if err := r.patchAnnotation(ctx, cs, meta.AnnotationHibernatedOnNode, ""); err != nil {
+				return true, ctrl.Result{}, err
+			}
+		}
 		return false, ctrl.Result{}, nil
 	}
 	// Persist Waking before the create so a crash between the two resumes here instead of fresh-booting
 	if err := r.patchStatus(ctx, cs, buildStatus(cs, classified, cocoonv1.CocoonSetPhaseWaking)); err != nil {
 		return true, ctrl.Result{}, err
-	}
-	pod, err := buildAgentPod(cs, 0, "", "", r.Scheme)
-	if err != nil {
-		return true, ctrl.Result{}, fmt.Errorf("wake: build main: %w", err)
 	}
 	meta.MarkRestoreFromHibernate(pod)
 	// Soft-prefer the hibernated-on seat; a spec.nodeName pin already set a required affinity and wins

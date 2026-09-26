@@ -4,6 +4,7 @@ import (
 	"cmp"
 	"context"
 	"fmt"
+	"slices"
 
 	"github.com/projecteru2/core/log"
 	corev1 "k8s.io/api/core/v1"
@@ -22,10 +23,17 @@ import (
 func (r *Reconciler) reconcileMigration(ctx context.Context, cs *cocoonv1.CocoonSet, classified classifiedPods) (bool, ctrl.Result, error) {
 	desired := cs.Spec.NodeName
 	migrating := cs.Status.Phase == cocoonv1.CocoonSetPhaseMigrating
+	main := classified.main
+	if main != nil && pinnedElsewhere(main, desired) {
+		log.WithFunc("cocoonset.Reconciler.reconcileMigration").Infof(ctx, "migrate %s/%s: main %s waits for a node it is no longer pinned to, recreating it for %s", cs.Namespace, cs.Name, main.Name, cmp.Or(desired, "any node"))
+		if err := r.Delete(ctx, main); err != nil && !apierrors.IsNotFound(err) {
+			return true, ctrl.Result{}, fmt.Errorf("migrate: delete stale-pinned main %s/%s: %w", main.Namespace, main.Name, err)
+		}
+		return true, ctrl.Result{RequeueAfter: requeueAfterWrite}, nil
+	}
 	if desired == "" && !migrating {
 		return false, ctrl.Result{}, nil
 	}
-	main := classified.main
 	// A non-quiesced main on its target or still unscheduled skips the probe; safe because Migrating persists before the first side effect
 	if !migrating && main != nil && !bool(meta.ReadHibernateState(main)) && (main.Spec.NodeName == "" || main.Spec.NodeName == desired) {
 		return false, ctrl.Result{}, nil
@@ -48,7 +56,7 @@ func (r *Reconciler) reconcileMigration(ctx context.Context, cs *cocoonv1.Cocoon
 	}
 
 	if !snap {
-		if desired == "" || main == nil || main.Spec.NodeName == "" || main.Spec.NodeName == desired {
+		if !mainOffTarget(cs, main) {
 			// Settled, aborted, or fresh create: the normal flow takes it from here
 			return false, ctrl.Result{}, nil
 		}
@@ -78,9 +86,12 @@ func (r *Reconciler) advanceMigration(ctx context.Context, cs *cocoonv1.CocoonSe
 	main := classified.main
 
 	switch {
-	case main != nil && desired != "" && main.Spec.NodeName != "" && main.Spec.NodeName != desired:
+	case mainOffTarget(cs, main):
 		// A tag this controller never quiesced is a leftover that would roll the VM back; drop it first
 		if !meta.ReadHibernateState(main) {
+			if !meta.VMLive(main) {
+				return false, ctrl.Result{}, nil
+			}
 			owned, err := r.podsTrackedByHibernationCR(ctx, cs.Namespace)
 			if err != nil {
 				return true, ctrl.Result{}, fmt.Errorf("migrate: %w", err)
@@ -110,6 +121,13 @@ func (r *Reconciler) advanceMigration(ctx context.Context, cs *cocoonv1.CocoonSe
 		if err != nil {
 			return true, ctrl.Result{}, fmt.Errorf("migrate: build main: %w", err)
 		}
+		discarded, err := r.discardImageConflict(ctx, cs, pod)
+		if err != nil {
+			return true, ctrl.Result{}, fmt.Errorf("migrate: %w", err)
+		}
+		if discarded {
+			return false, ctrl.Result{}, nil
+		}
 		meta.MarkRestoreFromHibernate(pod)
 		if err := r.Create(ctx, pod); err != nil {
 			if apierrors.IsAlreadyExists(err) {
@@ -122,7 +140,10 @@ func (r *Reconciler) advanceMigration(ctx context.Context, cs *cocoonv1.CocoonSe
 		return r.markMigrating(ctx, cs, classified)
 
 	case bool(meta.ReadHibernateState(main)) && (desired == "" || main.Spec.NodeName == desired):
-		// Quiesced on the target: a re-target back or an unsuspend racing the tag
+		// Quiesced on the target is a re-target back only mid-migration; otherwise applyUnsuspend owns the unsuspend
+		if cs.Status.Phase != cocoonv1.CocoonSetPhaseMigrating {
+			return false, ctrl.Result{}, nil
+		}
 		logger.Infof(ctx, "migrate %s/%s: waking %s in place", cs.Namespace, cs.Name, main.Name)
 		if err := podpatch.HibernateState(ctx, r.Client, main, false); err != nil {
 			return true, ctrl.Result{}, fmt.Errorf("migrate: clear hibernate on %s/%s: %w", main.Namespace, main.Name, err)
@@ -155,4 +176,20 @@ func (r *Reconciler) markMigrating(ctx context.Context, cs *cocoonv1.CocoonSet, 
 		return true, ctrl.Result{}, fmt.Errorf("migrate: patch migrating status %s/%s: %w", cs.Namespace, cs.Name, err)
 	}
 	return true, ctrl.Result{RequeueAfter: requeueMigratePoll}, nil
+}
+
+func mainOffTarget(cs *cocoonv1.CocoonSet, main *corev1.Pod) bool {
+	return main != nil && cs.Spec.NodeName != "" && main.Spec.NodeName != "" && main.Spec.NodeName != cs.Spec.NodeName
+}
+
+func pinnedElsewhere(pod *corev1.Pod, nodeName string) bool {
+	aff := pod.Spec.Affinity
+	if pod.Spec.NodeName != "" || aff == nil || aff.NodeAffinity == nil || aff.NodeAffinity.RequiredDuringSchedulingIgnoredDuringExecution == nil {
+		return false
+	}
+	return slices.ContainsFunc(aff.NodeAffinity.RequiredDuringSchedulingIgnoredDuringExecution.NodeSelectorTerms, func(term corev1.NodeSelectorTerm) bool {
+		return slices.ContainsFunc(term.MatchExpressions, func(req corev1.NodeSelectorRequirement) bool {
+			return req.Key == corev1.LabelHostname && !slices.Equal(req.Values, []string{nodeName})
+		})
+	})
 }

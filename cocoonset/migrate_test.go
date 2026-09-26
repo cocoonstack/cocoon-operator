@@ -11,6 +11,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/tools/record"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 	ctrlfake "sigs.k8s.io/controller-runtime/pkg/client/fake"
 
 	cocoonv1 "github.com/cocoonstack/cocoon-common/apis/v1"
@@ -112,6 +113,34 @@ func TestMigrationRecreatesOnTargetWithRestoreAnnotation(t *testing.T) {
 	}
 }
 
+func TestReconcileMigrationRecreatesTheMainFreshOverASnapshotFromAnotherImage(t *testing.T) {
+	cs := migCocoonSet("node-b")
+	cs.Finalizers = []string{finalizerName}
+	cs.Spec.Agent.Image = "ghcr.io/cocoonstack/cocoon/ubuntu:26.04"
+	cs.Status.Phase = cocoonv1.CocoonSetPhaseMigrating
+	tagKey := migVMName + ":" + meta.HibernateSnapshotTag
+	reg := &fakeRegistry{present: map[string]bool{tagKey: true}, images: map[string]string{tagKey: "ghcr.io/cocoonstack/cocoon/ubuntu:24.04"}}
+	cli := relClient(t, cs)
+	r := &Reconciler{Client: cli, Scheme: testScheme(t), Registry: reg}
+
+	if _, err := r.Reconcile(t.Context(), reqFor(cs)); err != nil {
+		t.Fatalf("Reconcile: %v", err)
+	}
+	var got corev1.Pod
+	if err := cli.Get(t.Context(), types.NamespacedName{Namespace: "ns", Name: "demo-0"}, &got); err != nil {
+		t.Fatalf("the main must be recreated: %v", err)
+	}
+	if meta.ReadRestoreFromHibernate(&got) {
+		t.Error("a main whose snapshot came from another image must boot fresh, since vk-cocoon refuses the restore")
+	}
+	if !slices.Contains(reg.deleted, tagKey) {
+		t.Errorf("the snapshot from another image must be dropped, deleted %v", reg.deleted)
+	}
+	if na := got.Spec.Affinity; na == nil || na.NodeAffinity.RequiredDuringSchedulingIgnoredDuringExecution.NodeSelectorTerms[0].MatchExpressions[0].Values[0] != "node-b" {
+		t.Errorf("the fresh main must still target node-b, got %+v", na)
+	}
+}
+
 func TestMigrationWaitsWhileRestoring(t *testing.T) {
 	cs := migCocoonSet("node-b")
 	cs.Status.Phase = cocoonv1.CocoonSetPhaseMigrating
@@ -195,6 +224,46 @@ func TestMigrationDropsStaleTagInsteadOfDeletingLivePod(t *testing.T) {
 	}
 	if !slices.Contains(reg.deleted, migVMName+":"+meta.HibernateSnapshotTag) {
 		t.Errorf("stale tag must be dropped before migrating, deleted=%v", reg.deleted)
+	}
+}
+
+func TestMigrationWaitsOutAWakeBeforeDroppingTheTagItReads(t *testing.T) {
+	cs := migCocoonSet("node-b")
+	main := migMainPod(t, cs, "node-a", "", false)
+	tagKey := migVMName + ":" + meta.HibernateSnapshotTag
+	reg := &fakeRegistry{present: map[string]bool{tagKey: true}}
+	cli := ctrlfake.NewClientBuilder().WithScheme(testScheme(t)).
+		WithObjects(cs, main).WithStatusSubresource(&cocoonv1.CocoonSet{}).Build()
+	r := &Reconciler{Client: cli, Scheme: testScheme(t), Registry: reg}
+
+	handled, _, err := r.reconcileMigration(t.Context(), cs, classifiedPods{main: main})
+	if err != nil {
+		t.Fatalf("reconcileMigration while waking: %v", err)
+	}
+	if handled {
+		t.Error("a main whose wake is in flight must be left to the normal flow")
+	}
+	if slices.Contains(reg.deleted, tagKey) {
+		t.Fatalf("the in-flight wake still reads %s, deleted=%v", tagKey, reg.deleted)
+	}
+
+	meta.VMRuntime{VMID: "vmid-woken"}.Apply(main)
+	main.Status.ContainerStatuses = []corev1.ContainerStatus{{State: corev1.ContainerState{Running: &corev1.ContainerStateRunning{}}}}
+	if handled, _, err = r.reconcileMigration(t.Context(), cs, classifiedPods{main: main}); err != nil || !handled {
+		t.Fatalf("woken main: handled=%v err=%v", handled, err)
+	}
+	if !slices.Contains(reg.deleted, tagKey) {
+		t.Fatalf("once the main runs, the leftover %s must be dropped, deleted=%v", tagKey, reg.deleted)
+	}
+	if handled, _, err = r.reconcileMigration(t.Context(), cs, classifiedPods{main: main}); err != nil || !handled {
+		t.Fatalf("migration start: handled=%v err=%v", handled, err)
+	}
+	var got corev1.Pod
+	if err := cli.Get(t.Context(), types.NamespacedName{Namespace: "ns", Name: "demo-0"}, &got); err != nil {
+		t.Fatalf("get main: %v", err)
+	}
+	if !meta.ReadHibernateState(&got) {
+		t.Error("with the tag gone the migration must quiesce the main")
 	}
 }
 
@@ -295,6 +364,7 @@ func TestMigrationWaitsWhileAHibernationSpecIsUnobserved(t *testing.T) {
 
 func TestMigrationWakesInPlaceOnRetargetBack(t *testing.T) {
 	cs := migCocoonSet("node-b")
+	cs.Status.Phase = cocoonv1.CocoonSetPhaseMigrating
 	main := migMainPod(t, cs, "node-b", "", false)
 	meta.HibernateState(true).Apply(main)
 	reg := &fakeRegistry{present: map[string]bool{migVMName + ":" + meta.HibernateSnapshotTag: true}}
@@ -315,6 +385,140 @@ func TestMigrationWakesInPlaceOnRetargetBack(t *testing.T) {
 	}
 	if len(reg.deleted) != 0 {
 		t.Errorf("tag must survive until the VM runs again: %v", reg.deleted)
+	}
+}
+
+func TestReconcilePlainUnsuspendOfAPinnedSetRestoresASubAgentDeletedWhileSuspended(t *testing.T) {
+	vm1 := slotNames([]int32{1}, "")[0]
+	cs := migCocoonSet("node-b")
+	cs.Finalizers = []string{finalizerName}
+	cs.Generation = 2
+	cs.Spec.Agent.Replicas = 1
+	cs.Status.Phase = cocoonv1.CocoonSetPhaseSuspended
+	cs.Annotations = map[string]string{annotationHibernateReclaim: encodeReclaim(t, hibernateReclaim{VMs: slotNames([]int32{0, 1}, ""), Suspended: slotNames([]int32{0, 1}, "")})}
+	main := rehibernated(migMainPod(t, cs, "node-b", "", false))
+	reg := &fakeRegistry{present: map[string]bool{
+		migVMName + ":" + meta.HibernateSnapshotTag: true,
+		vm1 + ":" + meta.HibernateSnapshotTag:       true,
+	}}
+	cli := relClient(t, cs, main)
+	r := &Reconciler{Client: cli, Scheme: testScheme(t), Registry: reg}
+
+	if _, err := r.Reconcile(t.Context(), reqFor(cs)); err != nil {
+		t.Fatalf("unsuspend pass: %v", err)
+	}
+	gotCS := mustGetCS(t, cli)
+	if owed := readHibernateReclaim(&gotCS); !slices.Contains(owed.Restore, vm1) {
+		t.Fatalf("the unsuspend must record the deleted sub-agent as owed a restore, record %+v", owed)
+	}
+	if gotCS.Status.Phase == cocoonv1.CocoonSetPhaseMigrating {
+		t.Error("a plain unsuspend of a pinned set is not a migration")
+	}
+
+	markWoken(t, cli, main.Name, "node-b", 2)
+	if _, err := r.Reconcile(t.Context(), reqFor(cs)); err != nil {
+		t.Fatalf("scale pass: %v", err)
+	}
+	var sub corev1.Pod
+	if err := cli.Get(t.Context(), types.NamespacedName{Namespace: "ns", Name: "demo-1"}, &sub); err != nil {
+		t.Fatalf("the deleted sub-agent must be recreated: %v", err)
+	}
+	if !meta.ReadRestoreFromHibernate(&sub) {
+		t.Error("the recreated sub-agent must restore its snapshot, since vk-cocoon refuses a fork-from pod while the tag exists")
+	}
+}
+
+func TestReconcileUnsuspendIntoANewPinRestoresASubAgentDeletedWhileSuspended(t *testing.T) {
+	cs := newCocoonSet("demo", func(cs *cocoonv1.CocoonSet) {
+		cs.Finalizers = []string{finalizerName}
+		cs.Generation = 3
+		cs.Spec.Suspend = true
+		cs.Spec.Agent.Replicas = 1
+	})
+	main, sub := agentPair(t, cs)
+	tags := slotNames([]int32{0, 1}, ":"+meta.HibernateSnapshotTag)
+	reg := &fakeRegistry{present: map[string]bool{tags[0]: true, tags[1]: true}}
+	cli := relClient(t, cs, lifecycleHibernated(main), lifecycleHibernated(sub))
+	r := &Reconciler{Client: cli, APIReader: cli, Scheme: testScheme(t), Registry: reg}
+
+	if _, err := r.Reconcile(t.Context(), reqFor(cs)); err != nil {
+		t.Fatalf("suspend pass: %v", err)
+	}
+	if err := cli.Delete(t.Context(), sub); err != nil {
+		t.Fatalf("delete sub-agent: %v", err)
+	}
+	unsuspend(t, cli, func(cs *cocoonv1.CocoonSet) { cs.Spec.NodeName = "node-b" })
+	for i := range 2 {
+		if _, err := r.Reconcile(t.Context(), reqFor(cs)); err != nil {
+			t.Fatalf("migration pass %d: %v", i+1, err)
+		}
+	}
+	var moved corev1.Pod
+	if err := cli.Get(t.Context(), client.ObjectKeyFromObject(main), &moved); err != nil || !meta.ReadRestoreFromHibernate(&moved) {
+		t.Fatalf("the migration must recreate the main restore-marked on the target, err=%v", err)
+	}
+	markWoken(t, cli, main.Name, "node-b", 4)
+	for i := range 3 {
+		if _, err := r.Reconcile(t.Context(), reqFor(cs)); err != nil {
+			t.Fatalf("pass %d: %v", i+3, err)
+		}
+	}
+	var got corev1.Pod
+	if err := cli.Get(t.Context(), client.ObjectKeyFromObject(sub), &got); err != nil {
+		t.Fatalf("the sub-agent must be recreated: %v", err)
+	}
+	if !meta.ReadRestoreFromHibernate(&got) {
+		t.Error("the sub-agent must restore its snapshot, since vk-cocoon refuses a fork-from pod while the tag exists")
+	}
+	if !reg.present[tags[1]] {
+		t.Errorf("the snapshot the sub-agent restores from must be kept, deleted %v", reg.deleted)
+	}
+}
+
+func TestReconcileRepinRecreatesAMainPendingUnderTheOldPin(t *testing.T) {
+	for _, tc := range []struct {
+		name        string
+		phase       cocoonv1.CocoonSetPhase
+		restoring   bool
+		wantRestore bool
+	}{
+		{name: "main pending its first boot"},
+		{name: "migration restore pending on a full node", phase: cocoonv1.CocoonSetPhaseMigrating, restoring: true, wantRestore: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			cs := migCocoonSet("node-a")
+			cs.Finalizers = []string{finalizerName}
+			cs.Generation = 4
+			cs.Status.Phase = tc.phase
+			pending := mustBuildAgentPod(t, cs, 0, "", "", testScheme(t))
+			if tc.restoring {
+				meta.MarkRestoreFromHibernate(pending)
+			}
+			pending.Status.Conditions = []corev1.PodCondition{{
+				Type: corev1.PodScheduled, Status: corev1.ConditionFalse, Reason: corev1.PodReasonUnschedulable, Message: "0/2 nodes are available: Insufficient memory.",
+			}}
+			cs.Spec.NodeName = "node-b"
+			cs.Generation = 5
+			reg := &fakeRegistry{present: map[string]bool{migVMName + ":" + meta.HibernateSnapshotTag: tc.restoring}}
+			cli := relClient(t, cs, pending)
+			r := &Reconciler{Client: cli, APIReader: cli, Scheme: testScheme(t), Registry: reg}
+
+			for i := range 2 {
+				if _, err := r.Reconcile(t.Context(), reqFor(cs)); err != nil {
+					t.Fatalf("pass %d: %v", i+1, err)
+				}
+			}
+			var got corev1.Pod
+			if err := cli.Get(t.Context(), client.ObjectKeyFromObject(pending), &got); err != nil {
+				t.Fatalf("the main must be recreated: %v", err)
+			}
+			if na := got.Spec.Affinity; na == nil || na.NodeAffinity.RequiredDuringSchedulingIgnoredDuringExecution.NodeSelectorTerms[0].MatchExpressions[0].Values[0] != "node-b" {
+				t.Errorf("the main must be recreated under the new pin node-b, got %+v", na)
+			}
+			if restores := meta.ReadRestoreFromHibernate(&got); restores != tc.wantRestore {
+				t.Errorf("recreated main restores from :hibernate = %v, want %v", restores, tc.wantRestore)
+			}
+		})
 	}
 }
 

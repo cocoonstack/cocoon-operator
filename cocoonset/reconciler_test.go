@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json/v2"
 	"errors"
+	"fmt"
 	"slices"
 	"strings"
 	"sync"
@@ -22,7 +23,9 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 
 	cocoonv1 "github.com/cocoonstack/cocoon-common/apis/v1"
+	"github.com/cocoonstack/cocoon-common/manifest"
 	"github.com/cocoonstack/cocoon-common/meta"
+	commonsnapshot "github.com/cocoonstack/cocoon-common/snapshot"
 )
 
 func TestApplyUnsuspendClearsHibernateAnnotation(t *testing.T) {
@@ -152,6 +155,40 @@ func TestApplyUnsuspendRecordsTheReclaimBeforeItClears(t *testing.T) {
 	}
 }
 
+func TestApplySuspendRecordsEveryVMBeforeItHibernates(t *testing.T) {
+	tb := cocoonv1.ToolboxSpec{Name: "tb", Image: "ghcr.io/cocoonstack/cocoon/toolbox:1", Mode: cocoonv1.ToolboxModeRun}
+	cs := newCocoonSet("demo", func(cs *cocoonv1.CocoonSet) {
+		cs.Generation = 2
+		cs.Spec.Suspend = true
+		cs.Spec.Agent.Replicas = 1
+		cs.Spec.Toolboxes = []cocoonv1.ToolboxSpec{tb}
+		cs.Annotations = map[string]string{annotationHibernateReclaim: `{"generation":1,"vms":["vk-ns-old"]}`}
+	})
+	pods := []corev1.Pod{
+		*mustBuildAgentPod(t, cs, 0, "", "", testScheme(t)),
+		*mustBuildAgentPod(t, cs, 1, relVMName, "", testScheme(t)),
+		*mustBuildToolboxPod(t, cs, tb, testScheme(t)),
+	}
+	cli := relInterceptedClient(t, interceptor.Funcs{
+		Patch: func(ctx context.Context, c client.WithWatch, obj client.Object, patch client.Patch, opts ...client.PatchOption) error {
+			if _, isPod := obj.(*corev1.Pod); isPod {
+				return errors.New("pod patch refused")
+			}
+			return c.Patch(ctx, obj, patch, opts...)
+		},
+	}, cs, &pods[0], &pods[1], &pods[2])
+	r := &Reconciler{Client: cli, Scheme: testScheme(t)}
+
+	if err := r.applySuspend(t.Context(), cs, classifyPods(pods)); err == nil {
+		t.Fatal("applySuspend must surface the refused pod patch")
+	}
+	got := readHibernateReclaim(new(mustGetCS(t, cli)))
+	want := slices.Concat([]string{"vk-ns-old"}, slotNames([]int32{0, 1}, ""), []string{meta.VMNameForPod("ns", meta.ToolboxPodName("demo", tb.Name))})
+	if !slices.Equal(got.VMs, want) || !slices.Equal(got.Suspended, want[1:]) {
+		t.Errorf("record %+v, want %v owed and %v marked suspended before any hibernate annotation", got, want, want[1:])
+	}
+}
+
 func TestReclaimWokenSnapshotsReclaimsEachVMOnceItWakes(t *testing.T) {
 	for _, tc := range []struct {
 		name        string
@@ -205,6 +242,111 @@ func TestReclaimWokenSnapshotsReclaimsEachVMOnceItWakes(t *testing.T) {
 	}
 }
 
+func TestApplyUnsuspendRecordsARestoreForASubAgentMissingAtUnsuspend(t *testing.T) {
+	vm1 := slotNames([]int32{1}, "")[0]
+	for _, tc := range []struct {
+		name        string
+		subPresent  bool
+		recorded    []int32
+		suspended   []int32
+		wantRestore bool
+	}{
+		{name: "missing slot the suspend recorded", recorded: []int32{0, 1}, suspended: []int32{0, 1}, wantRestore: true},
+		{name: "missing slot the suspend never saw", recorded: []int32{0}, suspended: []int32{0}},
+		{name: "missing slot an earlier cycle left owed a reclaim", recorded: []int32{0, 1}, suspended: []int32{0}},
+		{name: "every slot present", subPresent: true, recorded: []int32{0, 1}, suspended: []int32{0, 1}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			cs := newCocoonSet("demo", func(cs *cocoonv1.CocoonSet) {
+				cs.Generation = 2
+				cs.Spec.Agent.Replicas = 1
+				cs.Annotations = map[string]string{annotationHibernateReclaim: encodeReclaim(t, hibernateReclaim{VMs: slotNames(tc.recorded, ""), Suspended: slotNames(tc.suspended, "")})}
+			})
+			pods := []corev1.Pod{*rehibernated(mustBuildAgentPod(t, cs, 0, "", "", testScheme(t)))}
+			if tc.subPresent {
+				pods = append(pods, *rehibernated(mustBuildAgentPod(t, cs, 1, relVMName, "", testScheme(t))))
+			}
+			objs := []client.Object{cs}
+			for i := range pods {
+				objs = append(objs, &pods[i])
+			}
+			reg := &fakeRegistry{present: map[string]bool{vm1 + ":" + meta.HibernateSnapshotTag: true}}
+			cli := relClient(t, objs...)
+			r := &Reconciler{Client: cli, Scheme: testScheme(t), Registry: reg}
+
+			if err := r.applyUnsuspend(t.Context(), cs, classifyPods(pods)); err != nil {
+				t.Fatalf("applyUnsuspend: %v", err)
+			}
+			owed := readHibernateReclaim(new(mustGetCS(t, cli)))
+			if restores := slices.Contains(owed.Restore, vm1) && slices.Contains(owed.VMs, vm1); restores != tc.wantRestore {
+				t.Errorf("record %+v owes a restore of %s = %v, want %v", owed, vm1, restores, tc.wantRestore)
+			}
+			if len(owed.Suspended) > 0 || owed.Generation != 2 {
+				t.Errorf("record %+v, want generation 2 and the suspend marker cleared", owed)
+			}
+			if len(reg.probed) != 0 {
+				t.Errorf("the unsuspend must not probe the registry, probed %v", reg.probed)
+			}
+		})
+	}
+}
+
+func TestUnsuspendReclaimsTheSnapshotOfAToolboxDeletedWhileSuspended(t *testing.T) {
+	tb := cocoonv1.ToolboxSpec{Name: "tb", Image: "ghcr.io/cocoonstack/cocoon/toolbox:1", Mode: cocoonv1.ToolboxModeRun}
+	tbVM := meta.VMNameForPod("ns", meta.ToolboxPodName("demo", tb.Name))
+	tbTag := tbVM + ":" + meta.HibernateSnapshotTag
+	cs := newCocoonSet("demo", func(cs *cocoonv1.CocoonSet) {
+		cs.Generation = 2
+		cs.Spec.Toolboxes = []cocoonv1.ToolboxSpec{tb}
+		cs.Annotations = map[string]string{annotationHibernateReclaim: encodeReclaim(t, hibernateReclaim{VMs: []string{relVMName, tbVM}, Suspended: []string{relVMName, tbVM}})}
+	})
+	main := rehibernated(mustBuildAgentPod(t, cs, 0, "", "", testScheme(t)))
+	reg := &fakeRegistry{present: map[string]bool{tbTag: true}, images: map[string]string{tbTag: tb.Image}}
+	cli := relClient(t, cs, main)
+	r := &Reconciler{Client: cli, Scheme: testScheme(t), Registry: reg}
+
+	if err := r.applyUnsuspend(t.Context(), cs, singlePod(main)); err != nil {
+		t.Fatalf("applyUnsuspend: %v", err)
+	}
+	if owed := readHibernateReclaim(new(mustGetCS(t, cli))); !slices.Contains(owed.VMs, tbVM) || !slices.Contains(owed.Restore, tbVM) {
+		t.Fatalf("record %+v, want %s owed a restore and a reclaim", owed, tbVM)
+	}
+
+	if _, _, err := r.ensureToolboxes(t.Context(), cs, singlePod(main), r.newRestoreIntent(t.Context(), cs.Namespace)); err != nil {
+		t.Fatalf("ensureToolboxes: %v", err)
+	}
+	var woken corev1.Pod
+	if err := cli.Get(t.Context(), types.NamespacedName{Namespace: "ns", Name: meta.ToolboxPodName("demo", tb.Name)}, &woken); err != nil {
+		t.Fatalf("the toolbox must be recreated: %v", err)
+	}
+	if !meta.ReadRestoreFromHibernate(&woken) || slices.Contains(reg.deleted, tbTag) {
+		t.Fatalf("the toolbox must be created restore-marked over its own snapshot, deleted %v", reg.deleted)
+	}
+	meta.LifecycleStatus{State: meta.LifecycleStateReady, ObservedGeneration: 2}.Apply(&woken)
+	meta.VMRuntime{VMID: "vm-woken"}.Apply(&woken)
+	woken.Status.ContainerStatuses = []corev1.ContainerStatus{{State: corev1.ContainerState{Running: &corev1.ContainerStateRunning{}}}}
+	if err := r.reclaimWokenSnapshots(t.Context(), cs, classifyPods([]corev1.Pod{woken})); err != nil {
+		t.Fatalf("reclaimWokenSnapshots: %v", err)
+	}
+	if !slices.Contains(reg.deleted, tbTag) {
+		t.Errorf("the woken toolbox's %s must be reclaimed, deleted %v", tbTag, reg.deleted)
+	}
+}
+
+func TestReclaimWokenSnapshotsDropsAWokenRestoreFromTheRecord(t *testing.T) {
+	cs := reclaimOwedSet(t, 0, 1)
+	cs.Annotations[annotationHibernateReclaim] = encodeReclaim(t, hibernateReclaim{Generation: 2, VMs: slotNames([]int32{0, 1}, ""), Restore: slotNames([]int32{1}, "")})
+	woken := wokenPod(t, 1, 2)
+	r := &Reconciler{Client: relClient(t, cs, woken), Scheme: testScheme(t), Registry: &fakeRegistry{}}
+
+	if err := r.reclaimWokenSnapshots(t.Context(), cs, classifyPods([]corev1.Pod{*woken})); err != nil {
+		t.Fatalf("reclaimWokenSnapshots: %v", err)
+	}
+	if got := readHibernateReclaim(new(mustGetCS(t, r.Client))); !slices.Equal(got.VMs, slotNames([]int32{0}, "")) || len(got.Restore) != 0 {
+		t.Errorf("record %+v, want only slot 0 owed and no restore left", got)
+	}
+}
+
 func TestReconcileReclaimsTheTagAPlainUnsuspendWoke(t *testing.T) {
 	cs := reclaimOwedSet(t, 0)
 	cs.Finalizers = []string{finalizerName}
@@ -231,75 +373,321 @@ func TestReconcileReclaimsTheTagAPlainUnsuspendWoke(t *testing.T) {
 	}
 }
 
-func TestEnsureToolboxesCollisionReturnsError(t *testing.T) {
-	scheme := testScheme(t)
+func TestReconcileUnsuspendWithEveryPodGoneRestoresASubAgentFromItsSnapshot(t *testing.T) {
 	cs := newCocoonSet("demo", func(cs *cocoonv1.CocoonSet) {
-		cs.Spec.Toolboxes = []cocoonv1.ToolboxSpec{
-			{Name: "0", Image: "ghcr.io/cocoonstack/cocoon/toolbox:latest"},
-		}
+		cs.Finalizers = []string{finalizerName}
+		cs.Generation = 3
+		cs.Spec.Suspend = true
+		cs.Spec.Agent.Replicas = 1
 	})
+	main, sub := agentPair(t, cs)
+	tags := slotNames([]int32{0, 1}, ":"+meta.HibernateSnapshotTag)
+	reg := &fakeRegistry{present: map[string]bool{tags[0]: true, tags[1]: true}}
+	cli := relClient(t, cs, lifecycleHibernated(main), lifecycleHibernated(sub))
+	r := &Reconciler{Client: cli, APIReader: cli, Scheme: testScheme(t), Registry: reg}
 
-	agentPod := mustBuildAgentPod(t, cs, 0, "", "", scheme)
-	cli := ctrlfake.NewClientBuilder().
-		WithScheme(scheme).
-		WithObjects(agentPod).
-		Build()
-	r := &Reconciler{Client: cli, Scheme: scheme}
-	classified := classifiedPods{
-		main:      agentPod,
-		sub:       map[int32]*corev1.Pod{},
-		toolbox:   map[string]*corev1.Pod{},
-		allByName: map[string]*corev1.Pod{agentPod.Name: agentPod},
+	if _, err := r.Reconcile(t.Context(), reqFor(cs)); err != nil {
+		t.Fatalf("suspend pass: %v", err)
 	}
-
-	_, _, err := r.ensureToolboxes(t.Context(), cs, classified, r.newRestoreIntent(t.Context(), cs.Namespace))
-	if err == nil {
-		t.Fatal("ensureToolboxes should return error on name collision with agent pod")
+	if phase := mustGetCS(t, cli).Status.Phase; phase != cocoonv1.CocoonSetPhaseSuspended {
+		t.Fatalf("phase = %q, want Suspended", phase)
+	}
+	for _, pod := range []*corev1.Pod{main, sub} {
+		if err := cli.Delete(t.Context(), pod); err != nil {
+			t.Fatalf("delete %s: %v", pod.Name, err)
+		}
+	}
+	unsuspend(t, cli, nil)
+	if _, err := r.Reconcile(t.Context(), reqFor(cs)); err != nil {
+		t.Fatalf("wake pass: %v", err)
+	}
+	markWoken(t, cli, "demo-0", "node-a", 4)
+	for i := range 3 {
+		if _, err := r.Reconcile(t.Context(), reqFor(cs)); err != nil {
+			t.Fatalf("pass %d: %v", i+2, err)
+		}
+	}
+	var got corev1.Pod
+	if err := cli.Get(t.Context(), types.NamespacedName{Namespace: "ns", Name: "demo-1"}, &got); err != nil {
+		t.Fatalf("the sub-agent must be recreated: %v", err)
+	}
+	if !meta.ReadRestoreFromHibernate(&got) {
+		t.Error("the sub-agent must restore its snapshot, since vk-cocoon refuses a fork-from pod while the tag exists")
+	}
+	if !reg.present[tags[1]] {
+		t.Errorf("the snapshot the sub-agent restores from must be kept, deleted %v", reg.deleted)
 	}
 }
 
-func TestEnsureToolboxesRejectsIntegerName(t *testing.T) {
-	scheme := testScheme(t)
-	cs := newCocoonSet("demo", func(cs *cocoonv1.CocoonSet) {
-		cs.Spec.Toolboxes = []cocoonv1.ToolboxSpec{
-			{Name: "1", Image: "ghcr.io/cocoonstack/cocoon/toolbox:latest"},
-		}
-	})
+func TestReconcileUnsuspendRestoresAMainDeletedBeforeTheSuspendSettled(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		timedOut  bool
+		wantPhase cocoonv1.CocoonSetPhase
+	}{
+		{name: "suspending", wantPhase: cocoonv1.CocoonSetPhaseSuspending},
+		{name: "suspend timed out", timedOut: true, wantPhase: cocoonv1.CocoonSetPhaseFailed},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			cs := newCocoonSet("demo", func(cs *cocoonv1.CocoonSet) {
+				cs.Finalizers = []string{finalizerName}
+				cs.Generation = 3
+				cs.Spec.Suspend = true
+				cs.Spec.Agent.Replicas = 1
+				if tc.timedOut {
+					cs.Annotations = map[string]string{annotationSuspendingSince: time.Now().Add(-suspendTimeout - time.Minute).UTC().Format(time.RFC3339)}
+					cs.Status.Phase = cocoonv1.CocoonSetPhaseSuspending
+				}
+			})
+			main, sub := agentPair(t, cs)
+			tags := slotNames([]int32{0, 1}, ":"+meta.HibernateSnapshotTag)
+			reg := &fakeRegistry{present: map[string]bool{tags[0]: true, tags[1]: true}}
+			cli := relClient(t, cs, main, sub)
+			r := &Reconciler{Client: cli, APIReader: cli, Scheme: testScheme(t), Registry: reg}
 
-	cli := ctrlfake.NewClientBuilder().WithScheme(scheme).Build()
-	r := &Reconciler{Client: cli, Scheme: scheme}
-	classified := classifiedPods{
-		sub:       map[int32]*corev1.Pod{},
-		toolbox:   map[string]*corev1.Pod{},
-		allByName: map[string]*corev1.Pod{},
-	}
+			if _, err := r.Reconcile(t.Context(), reqFor(cs)); err != nil {
+				t.Fatalf("suspend pass: %v", err)
+			}
+			if phase := mustGetCS(t, cli).Status.Phase; phase != tc.wantPhase {
+				t.Fatalf("phase = %q, want %q", phase, tc.wantPhase)
+			}
+			if err := cli.Delete(t.Context(), main); err != nil {
+				t.Fatalf("delete main: %v", err)
+			}
+			unsuspend(t, cli, nil)
+			if _, err := r.Reconcile(t.Context(), reqFor(cs)); err != nil {
+				t.Fatalf("unsuspend pass: %v", err)
+			}
+			var got corev1.Pod
+			if err := cli.Get(t.Context(), client.ObjectKeyFromObject(main), &got); err != nil {
+				t.Fatalf("the main must be recreated: %v", err)
+			}
+			if !meta.ReadRestoreFromHibernate(&got) {
+				t.Error("the recreated main must restore its suspend snapshot")
+			}
+			if owed := readHibernateReclaim(new(mustGetCS(t, cli))); !slices.Contains(owed.VMs, relVMName) {
+				t.Fatalf("record %+v, want the main VM owed a reclaim", owed)
+			}
 
-	_, _, err := r.ensureToolboxes(t.Context(), cs, classified, r.newRestoreIntent(t.Context(), cs.Namespace))
-	if err == nil {
-		t.Fatal("ensureToolboxes must reject a toolbox name that collides with agent slot pod naming")
+			markWoken(t, cli, "demo-0", "node-a", 4)
+			if _, err := r.Reconcile(t.Context(), reqFor(cs)); err != nil {
+				t.Fatalf("woken pass: %v", err)
+			}
+			if !slices.Contains(reg.deleted, tags[0]) {
+				t.Errorf("the woken main's %s must be reclaimed so a later recreate boots fresh, deleted %v", tags[0], reg.deleted)
+			}
+		})
 	}
 }
 
-func TestEnsureToolboxesRejectsDuplicateNames(t *testing.T) {
-	scheme := testScheme(t)
-	cs := newCocoonSet("demo", func(cs *cocoonv1.CocoonSet) {
-		cs.Spec.Toolboxes = []cocoonv1.ToolboxSpec{
-			{Name: "tb", Image: "ghcr.io/cocoonstack/cocoon/toolbox:latest"},
-			{Name: "tb", Image: "ghcr.io/cocoonstack/cocoon/toolbox:other"},
-		}
-	})
+func TestReconcileRebuildOfAnOwedMainDropsTheSnapshotOnlyAcrossAnImageChange(t *testing.T) {
+	for _, tc := range []struct {
+		name        string
+		edit        func(*cocoonv1.CocoonSet)
+		wantDropped bool
+	}{
+		{name: "image edit", edit: func(cs *cocoonv1.CocoonSet) { cs.Spec.Agent.Image = "ghcr.io/cocoonstack/cocoon/ubuntu:26.04" }, wantDropped: true},
+		{name: "service account edit", edit: func(cs *cocoonv1.CocoonSet) { cs.Spec.Agent.ServiceAccountName = "agent" }},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			cs := newCocoonSet("demo", tc.edit, func(cs *cocoonv1.CocoonSet) {
+				cs.Finalizers = []string{finalizerName}
+				cs.Generation = 2
+				cs.Status.Phase = cocoonv1.CocoonSetPhaseSuspended
+			})
+			main := rehibernated(lifecycleHibernated(mustBuildAgentPod(t, newCocoonSet("demo"), 0, "", "", testScheme(t))))
+			reg := &fakeRegistry{present: map[string]bool{relHibernateTagKey: true}, images: map[string]string{relHibernateTagKey: meta.ParseVMSpec(main).Image}}
+			cli := relClient(t, cs, main)
+			r := &Reconciler{Client: cli, APIReader: cli, Scheme: testScheme(t), Registry: reg}
 
-	cli := ctrlfake.NewClientBuilder().WithScheme(scheme).Build()
-	r := &Reconciler{Client: cli, Scheme: scheme}
-	classified := classifiedPods{
-		sub:       map[int32]*corev1.Pod{},
-		toolbox:   map[string]*corev1.Pod{},
-		allByName: map[string]*corev1.Pod{},
+			if _, err := r.Reconcile(t.Context(), reqFor(cs)); err != nil {
+				t.Fatalf("unsuspend pass: %v", err)
+			}
+			if err := cli.Get(t.Context(), client.ObjectKeyFromObject(main), &corev1.Pod{}); !apierrors.IsNotFound(err) {
+				t.Fatalf("the drifted main must be deleted for rebuild, got err=%v", err)
+			}
+
+			if _, err := r.Reconcile(t.Context(), reqFor(cs)); err != nil {
+				t.Fatalf("recreate pass: %v", err)
+			}
+			var fresh corev1.Pod
+			if err := cli.Get(t.Context(), client.ObjectKeyFromObject(main), &fresh); err != nil {
+				t.Fatalf("the main must be recreated: %v", err)
+			}
+			if restores := meta.ReadRestoreFromHibernate(&fresh); restores == tc.wantDropped {
+				t.Errorf("recreated main restores from :hibernate = %v, want %v", restores, !tc.wantDropped)
+			}
+			if dropped := slices.Contains(reg.deleted, relHibernateTagKey); dropped != tc.wantDropped {
+				t.Errorf("%s dropped = %v, want %v", relHibernateTagKey, dropped, tc.wantDropped)
+			}
+			if _, owed := mustGetCS(t, cli).Annotations[annotationHibernateReclaim]; owed == tc.wantDropped {
+				t.Errorf("reclaim record kept = %v, want %v", owed, !tc.wantDropped)
+			}
+		})
 	}
+}
 
-	_, _, err := r.ensureToolboxes(t.Context(), cs, classified, r.newRestoreIntent(t.Context(), cs.Namespace))
-	if err == nil {
-		t.Fatal("ensureToolboxes must reject a spec with duplicate toolbox names")
+func TestReconcileRecreatesAnImageDriftedMainOnlyOnceItsSnapshotIsDropped(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		probeErr  error
+		deleteErr error
+	}{
+		{name: "registry down", probeErr: errors.New("registry down")},
+		{name: "delete refused", deleteErr: errors.New("delete refused")},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			cs := reclaimOwedSet(t, 0)
+			cs.Finalizers = []string{finalizerName}
+			cs.Spec.Agent.Image = "ghcr.io/cocoonstack/cocoon/ubuntu:26.04"
+			reg := &fakeRegistry{
+				present:   map[string]bool{relHibernateTagKey: true},
+				images:    map[string]string{relHibernateTagKey: "ghcr.io/cocoonstack/cocoon/ubuntu:24.04"},
+				probeErr:  tc.probeErr,
+				deleteErr: tc.deleteErr,
+			}
+			cli := relClient(t, cs)
+			r := &Reconciler{Client: cli, APIReader: cli, Scheme: testScheme(t), Registry: reg}
+
+			if _, err := r.Reconcile(t.Context(), reqFor(cs)); err == nil {
+				t.Fatal("a refused snapshot drop must fail the pass so it retries with backoff")
+			}
+			if err := cli.Get(t.Context(), types.NamespacedName{Namespace: "ns", Name: "demo-0"}, &corev1.Pod{}); !apierrors.IsNotFound(err) {
+				t.Errorf("no main may be created over a snapshot it cannot restore, got err=%v", err)
+			}
+			if got := readHibernateReclaim(new(mustGetCS(t, cli))).VMs; !slices.Equal(got, slotNames([]int32{0}, "")) {
+				t.Errorf("still owed %v, want the main kept recorded", got)
+			}
+
+			reg.probeErr, reg.deleteErr = nil, nil
+			if _, err := r.Reconcile(t.Context(), reqFor(cs)); err != nil {
+				t.Fatalf("retry: %v", err)
+			}
+			var fresh corev1.Pod
+			if err := cli.Get(t.Context(), types.NamespacedName{Namespace: "ns", Name: "demo-0"}, &fresh); err != nil || meta.ReadRestoreFromHibernate(&fresh) {
+				t.Errorf("the retry must boot the main fresh, err=%v restore=%v", err, meta.ReadRestoreFromHibernate(&fresh))
+			}
+			if _, owed := mustGetCS(t, cli).Annotations[annotationHibernateReclaim]; owed {
+				t.Error("the dropped VM must leave the reclaim record")
+			}
+		})
+	}
+}
+
+func TestReconcileSuspendRecreatesAMissingMainFreshOverASnapshotFromAnotherImage(t *testing.T) {
+	cs := newCocoonSet("demo", func(cs *cocoonv1.CocoonSet) {
+		cs.Finalizers = []string{finalizerName}
+		cs.Generation = 2
+		cs.Spec.Suspend = true
+		cs.Spec.Agent.Image = "ghcr.io/cocoonstack/cocoon/ubuntu:26.04"
+		cs.Status.Phase = cocoonv1.CocoonSetPhaseSuspended
+	})
+	reg := &fakeRegistry{
+		present: map[string]bool{relHibernateTagKey: true},
+		images:  map[string]string{relHibernateTagKey: "ghcr.io/cocoonstack/cocoon/ubuntu:24.04"},
+	}
+	cli := relClient(t, cs)
+	r := &Reconciler{Client: cli, Scheme: testScheme(t), Registry: reg}
+
+	if _, err := r.Reconcile(t.Context(), reqFor(cs)); err != nil {
+		t.Fatalf("Reconcile: %v", err)
+	}
+	var got corev1.Pod
+	if err := cli.Get(t.Context(), types.NamespacedName{Namespace: "ns", Name: "demo-0"}, &got); err != nil {
+		t.Fatalf("the missing main must be recreated: %v", err)
+	}
+	if meta.ReadRestoreFromHibernate(&got) {
+		t.Error("a main whose snapshot came from another image must boot fresh, since vk-cocoon refuses the restore")
+	}
+	if !slices.Contains(reg.deleted, relHibernateTagKey) {
+		t.Errorf("the snapshot from another image must be dropped, deleted %v", reg.deleted)
+	}
+}
+
+func TestEnsureToolboxesCreatesAToolboxFreshOverASnapshotFromAnotherImage(t *testing.T) {
+	pushed := cocoonv1.ToolboxSpec{Name: "tb", Image: "ghcr.io/cocoonstack/cocoon/toolbox:1", Mode: cocoonv1.ToolboxModeRun}
+	vm := meta.VMNameForPod("ns", meta.ToolboxPodName("demo", pushed.Name))
+	tagKey := vm + ":" + meta.HibernateSnapshotTag
+	for _, tc := range []struct {
+		name        string
+		image       string
+		rebuilt     bool
+		owed        bool
+		wantDropped bool
+	}{
+		{name: "rebuilt for an image edit while owed a reclaim", image: "ghcr.io/cocoonstack/cocoon/toolbox:2", rebuilt: true, owed: true, wantDropped: true},
+		{name: "missing after an image edit", image: "ghcr.io/cocoonstack/cocoon/toolbox:2", wantDropped: true},
+		{name: "missing with a snapshot of its own image", image: pushed.Image},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			tb := pushed
+			tb.Image = tc.image
+			cs := newCocoonSet("demo", func(cs *cocoonv1.CocoonSet) {
+				cs.Generation = 2
+				cs.Spec.Toolboxes = []cocoonv1.ToolboxSpec{tb}
+				if tc.owed {
+					cs.Annotations = map[string]string{annotationHibernateReclaim: encodeReclaim(t, hibernateReclaim{Generation: 2, VMs: []string{vm}})}
+				}
+			})
+			var pods []corev1.Pod
+			objs := []client.Object{cs}
+			if tc.rebuilt {
+				pods = append(pods, *mustBuildToolboxPod(t, newCocoonSet("demo"), pushed, testScheme(t)))
+				objs = append(objs, &pods[0])
+			}
+			reg := &fakeRegistry{present: map[string]bool{tagKey: true}, images: map[string]string{tagKey: pushed.Image}}
+			cli := relClient(t, objs...)
+			r := &Reconciler{Client: cli, Scheme: testScheme(t), Registry: reg}
+
+			if _, _, err := r.ensureToolboxes(t.Context(), cs, classifyPods(pods), r.newRestoreIntent(t.Context(), cs.Namespace)); err != nil {
+				t.Fatalf("ensureToolboxes: %v", err)
+			}
+			if _, _, err := r.ensureToolboxes(t.Context(), cs, classifyPods(nil), r.newRestoreIntent(t.Context(), cs.Namespace)); err != nil {
+				t.Fatalf("ensureToolboxes recreate: %v", err)
+			}
+			var got corev1.Pod
+			if err := cli.Get(t.Context(), types.NamespacedName{Namespace: "ns", Name: meta.ToolboxPodName("demo", tb.Name)}, &got); err != nil {
+				t.Fatalf("the toolbox must be created: %v", err)
+			}
+			if dropped := slices.Contains(reg.deleted, tagKey); dropped != tc.wantDropped {
+				t.Errorf("%s dropped = %v, want %v", tagKey, dropped, tc.wantDropped)
+			}
+			if _, owed := mustGetCS(t, cli).Annotations[annotationHibernateReclaim]; tc.owed && owed == tc.wantDropped {
+				t.Errorf("reclaim record kept = %v, want %v", owed, !tc.wantDropped)
+			}
+		})
+	}
+}
+
+func TestEnsureToolboxesRejectsAnInvalidSpec(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		toolboxes []cocoonv1.ToolboxSpec
+		squatter  bool
+		want      string
+	}{
+		{name: "name taken by a pod that is not the toolbox", toolboxes: []cocoonv1.ToolboxSpec{{Name: "tb"}}, squatter: true, want: "name collision"},
+		{name: "integer name", toolboxes: []cocoonv1.ToolboxSpec{{Name: "1"}}, want: "must not be an integer"},
+		{name: "duplicate names", toolboxes: []cocoonv1.ToolboxSpec{{Name: "tb"}, {Name: "tb", Image: "ghcr.io/cocoonstack/cocoon/toolbox:other"}}, want: "duplicate toolbox name"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			scheme := testScheme(t)
+			cs := newCocoonSet("demo", func(cs *cocoonv1.CocoonSet) { cs.Spec.Toolboxes = tc.toolboxes })
+			classified := classifiedPods{sub: map[int32]*corev1.Pod{}, toolbox: map[string]*corev1.Pod{}, allByName: map[string]*corev1.Pod{}}
+			builder := ctrlfake.NewClientBuilder().WithScheme(scheme)
+			if tc.squatter {
+				pod := mustBuildAgentPod(t, cs, 0, "", "", scheme)
+				pod.Name = meta.ToolboxPodName(cs.Name, "tb")
+				classified.allByName[pod.Name] = pod
+				builder = builder.WithObjects(pod)
+			}
+			r := &Reconciler{Client: builder.Build(), Scheme: scheme}
+
+			_, _, err := r.ensureToolboxes(t.Context(), cs, classified, r.newRestoreIntent(t.Context(), cs.Namespace))
+			if err == nil || !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("ensureToolboxes err = %v, want one containing %q", err, tc.want)
+			}
+		})
 	}
 }
 
@@ -316,7 +704,7 @@ func TestEnsureToolboxesIdempotentOnExistingToolbox(t *testing.T) {
 		WithScheme(scheme).
 		WithObjects(tbPod).
 		Build()
-	r := &Reconciler{Client: cli, Scheme: scheme}
+	r := &Reconciler{Client: cli, Scheme: scheme, Registry: &fakeRegistry{}}
 	classified := classifiedPods{
 		sub:       map[int32]*corev1.Pod{},
 		toolbox:   map[string]*corev1.Pod{},
@@ -563,6 +951,173 @@ func TestEnsureSubAgentsDeadLetterStaysUntilSpecEdit(t *testing.T) {
 	}
 }
 
+func TestEnsureSubAgentsDropsTheOwedSnapshotOfASlotItRecreates(t *testing.T) {
+	vm1 := slotNames([]int32{1}, "")[0]
+	vm1Tag := vm1 + ":" + meta.HibernateSnapshotTag
+	for _, tc := range []struct {
+		name         string
+		restoredByCR bool
+		probeErr     error
+		wantDropped  bool
+		wantErr      bool
+	}{
+		{name: "rebuilt slot", wantDropped: true},
+		{name: "slot a CocoonHibernation restores", restoredByCR: true},
+		{name: "registry refuses", probeErr: errors.New("registry down"), wantErr: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			cs := reclaimOwedSet(t, 1)
+			cs.Spec.Agent.Replicas = 1
+			objs := []client.Object{cs}
+			if tc.restoredByCR {
+				objs = append(objs, &cocoonv1.CocoonHibernation{
+					ObjectMeta: metav1.ObjectMeta{Name: "demo-1", Namespace: "ns"},
+					Spec: cocoonv1.CocoonHibernationSpec{
+						Desire: cocoonv1.HibernationDesireHibernate,
+						PodRef: cocoonv1.HibernationPodRef{Name: "demo-1"},
+					},
+					Status: cocoonv1.CocoonHibernationStatus{Phase: cocoonv1.CocoonHibernationPhaseHibernated},
+				})
+			}
+			reg := &fakeRegistry{probeErr: tc.probeErr, present: map[string]bool{vm1Tag: true}}
+			cli := relClient(t, objs...)
+			r := &Reconciler{Client: cli, Scheme: testScheme(t), Registry: reg}
+
+			_, _, err := r.ensureSubAgents(t.Context(), cs, classifyPods(nil), relVMName, "", r.newRestoreIntent(t.Context(), cs.Namespace))
+			if (err != nil) != tc.wantErr {
+				t.Fatalf("ensureSubAgents error %v, want error %v", err, tc.wantErr)
+			}
+			if dropped := slices.Contains(reg.deleted, vm1Tag); dropped != tc.wantDropped {
+				t.Errorf("%s dropped = %v, want %v", vm1Tag, dropped, tc.wantDropped)
+			}
+			if owed := slices.Contains(readHibernateReclaim(new(mustGetCS(t, cli))).VMs, vm1); owed == tc.wantDropped {
+				t.Errorf("%s still owed = %v, want %v", vm1, owed, !tc.wantDropped)
+			}
+			var sub corev1.Pod
+			getErr := cli.Get(t.Context(), types.NamespacedName{Namespace: "ns", Name: "demo-1"}, &sub)
+			if created := getErr == nil; created == tc.wantErr {
+				t.Fatalf("sub-agent created = %v, want %v", created, !tc.wantErr)
+			}
+			if restores := meta.ReadRestoreFromHibernate(&sub); !tc.wantErr && restores != tc.restoredByCR {
+				t.Errorf("sub-agent restores from :hibernate = %v, want %v", restores, tc.restoredByCR)
+			}
+		})
+	}
+}
+
+func TestEnsureSubAgentsDropsTheOwedSnapshotOfASlotThatReturnsAfterAScaleDown(t *testing.T) {
+	vm2Tag := slotNames([]int32{2}, ":"+meta.HibernateSnapshotTag)[0]
+	cs := reclaimOwedSet(t, 2)
+	cs.Spec.Agent.Replicas = 2
+	sub1 := mustBuildAgentPod(t, cs, 1, relVMName, "", testScheme(t))
+	sub2 := mustBuildAgentPod(t, cs, 2, relVMName, "", testScheme(t))
+	cs.Spec.Agent.Replicas = 1
+	reg := &fakeRegistry{present: map[string]bool{vm2Tag: true}}
+	cli := relClient(t, cs, sub1, sub2)
+	r := &Reconciler{Client: cli, Scheme: testScheme(t), Registry: reg}
+
+	if _, _, err := r.ensureSubAgents(t.Context(), cs, classifyPods([]corev1.Pod{*sub1, *sub2}), relVMName, "", r.newRestoreIntent(t.Context(), cs.Namespace)); err != nil {
+		t.Fatalf("scale-down: %v", err)
+	}
+	if err := cli.Get(t.Context(), client.ObjectKeyFromObject(sub2), &corev1.Pod{}); !apierrors.IsNotFound(err) {
+		t.Fatalf("the extra slot must be deleted, got err=%v", err)
+	}
+
+	scaledUp := mustGetCS(t, cli)
+	scaledUp.Spec.Agent.Replicas = 2
+	if _, _, err := r.ensureSubAgents(t.Context(), &scaledUp, classifyPods([]corev1.Pod{*sub1}), relVMName, "", r.newRestoreIntent(t.Context(), cs.Namespace)); err != nil {
+		t.Fatalf("scale-up: %v", err)
+	}
+	if !slices.Contains(reg.deleted, vm2Tag) {
+		t.Errorf("the returning slot's owed %s must be dropped before its create, deleted %v", vm2Tag, reg.deleted)
+	}
+	if err := cli.Get(t.Context(), client.ObjectKeyFromObject(sub2), &corev1.Pod{}); err != nil {
+		t.Errorf("the returning slot must be recreated: %v", err)
+	}
+	if _, owed := mustGetCS(t, cli).Annotations[annotationHibernateReclaim]; owed {
+		t.Errorf("the dropped VM must leave the reclaim record")
+	}
+}
+
+func TestEnsureSubAgentsRestoresASlotOwedARestore(t *testing.T) {
+	vm1 := slotNames([]int32{1}, "")[0]
+	vm1Tag := vm1 + ":" + meta.HibernateSnapshotTag
+	cs := reclaimOwedSet(t, 1)
+	cs.Spec.Agent.Replicas = 1
+	cs.Annotations[annotationHibernateReclaim] = encodeReclaim(t, hibernateReclaim{Generation: 2, VMs: []string{vm1}, Restore: []string{vm1}})
+	reg := &fakeRegistry{present: map[string]bool{vm1Tag: true}}
+	cli := relClient(t, cs)
+	r := &Reconciler{Client: cli, Scheme: testScheme(t), Registry: reg}
+
+	if _, _, err := r.ensureSubAgents(t.Context(), cs, classifyPods(nil), relVMName, "node-a", r.newRestoreIntent(t.Context(), cs.Namespace)); err != nil {
+		t.Fatalf("ensureSubAgents: %v", err)
+	}
+	var sub corev1.Pod
+	if err := cli.Get(t.Context(), types.NamespacedName{Namespace: "ns", Name: "demo-1"}, &sub); err != nil {
+		t.Fatalf("the slot must be created: %v", err)
+	}
+	if !meta.ReadRestoreFromHibernate(&sub) {
+		t.Error("a slot hibernated at suspend must restore its snapshot, not fork fresh")
+	}
+	if slices.Contains(reg.deleted, vm1Tag) {
+		t.Errorf("the snapshot the slot restores from must be kept, deleted %v", reg.deleted)
+	}
+	if owed := readHibernateReclaim(new(mustGetCS(t, cli))); !slices.Contains(owed.VMs, vm1) {
+		t.Errorf("the restored VM must stay owed until it wakes, record %+v", owed)
+	}
+}
+
+func TestEnsureSubAgentsForksAMissingSlotFreshOverASnapshotFromAnotherImage(t *testing.T) {
+	const oldImage, newImage = "ghcr.io/cocoonstack/cocoon/ubuntu:24.04", "ghcr.io/cocoonstack/cocoon/ubuntu:26.04"
+	vm1 := slotNames([]int32{1}, "")[0]
+	vm1Tag := vm1 + ":" + meta.HibernateSnapshotTag
+	for _, tc := range []struct {
+		name        string
+		mainImage   string
+		subImage    string
+		wantRestore bool
+	}{
+		{name: "image edited at unsuspend", mainImage: oldImage, subImage: oldImage},
+		{name: "sub-agent hibernated on the old image beside a new-image main", mainImage: newImage, subImage: oldImage},
+		{name: "snapshot of the spec image", mainImage: newImage, subImage: newImage, wantRestore: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			cs := newCocoonSet("demo", func(cs *cocoonv1.CocoonSet) {
+				cs.Generation = 2
+				cs.Spec.Agent.Replicas = 1
+				cs.Spec.Agent.Image = tc.mainImage
+				cs.Annotations = map[string]string{annotationHibernateReclaim: encodeReclaim(t, hibernateReclaim{VMs: slotNames([]int32{0, 1}, ""), Suspended: slotNames([]int32{0, 1}, "")})}
+			})
+			main := rehibernated(mustBuildAgentPod(t, cs, 0, "", "", testScheme(t)))
+			cs.Spec.Agent.Image = newImage
+			reg := &fakeRegistry{present: map[string]bool{vm1Tag: true}, images: map[string]string{vm1Tag: tc.subImage}}
+			cli := relClient(t, cs, main)
+			r := &Reconciler{Client: cli, Scheme: testScheme(t), Registry: reg}
+
+			if err := r.applyUnsuspend(t.Context(), cs, singlePod(main)); err != nil {
+				t.Fatalf("applyUnsuspend: %v", err)
+			}
+			if _, _, err := r.ensureSubAgents(t.Context(), cs, singlePod(main), relVMName, "", r.newRestoreIntent(t.Context(), cs.Namespace)); err != nil {
+				t.Fatalf("ensureSubAgents: %v", err)
+			}
+			var sub corev1.Pod
+			if err := cli.Get(t.Context(), types.NamespacedName{Namespace: "ns", Name: "demo-1"}, &sub); err != nil {
+				t.Fatalf("the slot must be created: %v", err)
+			}
+			if restores := meta.ReadRestoreFromHibernate(&sub); restores != tc.wantRestore {
+				t.Errorf("sub-agent restores from :hibernate = %v, want %v", restores, tc.wantRestore)
+			}
+			if dropped := slices.Contains(reg.deleted, vm1Tag); dropped == tc.wantRestore {
+				t.Errorf("%s dropped = %v, want %v", vm1Tag, dropped, !tc.wantRestore)
+			}
+			owed := readHibernateReclaim(new(mustGetCS(t, cli)))
+			if slices.Contains(owed.VMs, vm1) != tc.wantRestore || slices.Contains(owed.Restore, vm1) != tc.wantRestore {
+				t.Errorf("record %+v, want %s owed a restore = %v", owed, vm1, tc.wantRestore)
+			}
+		})
+	}
+}
+
 func TestMainPodFailedReason(t *testing.T) {
 	annot := func(state meta.LifecycleState) map[string]string {
 		return map[string]string{meta.AnnotationLifecycleState: string(state)}
@@ -617,6 +1172,85 @@ func TestReconcileMainLifecycleFailedHonorsSuspend(t *testing.T) {
 	}
 	if !meta.ReadHibernateState(&pod) {
 		t.Error("failed main must receive the hibernate intent; its VM may still be live")
+	}
+}
+
+func TestReconcileUnsuspendClearsTheHibernateIntentOfAFailedMain(t *testing.T) {
+	scheme := testScheme(t)
+	cs := newCocoonSet("demo", func(cs *cocoonv1.CocoonSet) {
+		cs.Finalizers = []string{finalizerName}
+		cs.Generation = 2
+		cs.Spec.Agent.OS = cocoonv1.OSMacos
+		cs.Status.Phase = cocoonv1.CocoonSetPhaseFailed
+	})
+	main := rehibernated(mustBuildAgentPod(t, cs, 0, "", "", scheme))
+	main.Status.Phase = corev1.PodRunning
+	meta.LifecycleStatus{State: meta.LifecycleStateFailed, ObservedGeneration: 2, Message: "macOS guest does not support hibernate"}.Apply(main)
+	cli := relClient(t, cs, main)
+	rec := record.NewFakeRecorder(8)
+	r := &Reconciler{Client: cli, Scheme: scheme, Registry: &fakeRegistry{}, Recorder: rec}
+
+	if _, err := r.Reconcile(t.Context(), reqFor(cs)); err != nil {
+		t.Fatalf("unsuspend pass: %v", err)
+	}
+	var got corev1.Pod
+	if err := cli.Get(t.Context(), client.ObjectKeyFromObject(main), &got); err != nil {
+		t.Fatalf("get main: %v", err)
+	}
+	if meta.ReadHibernateState(&got) {
+		t.Fatal("an unsuspend must clear the hibernate intent of a failed main so its next update carries hibernate=false")
+	}
+	if phase := mustGetCS(t, cli).Status.Phase; phase != cocoonv1.CocoonSetPhaseFailed {
+		t.Errorf("phase = %q, want Failed until vk-cocoon reports the main ready", phase)
+	}
+
+	meta.LifecycleStatus{State: meta.LifecycleStateReady, ObservedGeneration: 2}.Apply(&got)
+	meta.VMRuntime{VMID: "vm-macos"}.Apply(&got)
+	if err := cli.Update(t.Context(), &got); err != nil {
+		t.Fatalf("mark main ready: %v", err)
+	}
+	got.Status.ContainerStatuses = []corev1.ContainerStatus{{State: corev1.ContainerState{Running: &corev1.ContainerStateRunning{}}}}
+	if err := cli.Status().Update(t.Context(), readyPod(&got)); err != nil {
+		t.Fatalf("mark main running: %v", err)
+	}
+	if _, err := r.Reconcile(t.Context(), reqFor(cs)); err != nil {
+		t.Fatalf("recovery pass: %v", err)
+	}
+	if phase := mustGetCS(t, cli).Status.Phase; phase != cocoonv1.CocoonSetPhaseRunning {
+		t.Errorf("phase = %q, want Running once the main is ready again", phase)
+	}
+	if events := strings.Join(drainEvents(rec), "\n"); !strings.Contains(events, "RecoveredFromFailure") {
+		t.Errorf("events = %q, want RecoveredFromFailure", events)
+	}
+}
+
+func TestReconcileFailedMainKeepsTheQuiesceOfAPendingMigration(t *testing.T) {
+	cs := migCocoonSet("node-b")
+	cs.Finalizers = []string{finalizerName}
+	cs.Generation = 2
+	cs.Spec.Agent.OS = cocoonv1.OSMacos
+	cs.Status.Phase = cocoonv1.CocoonSetPhaseMigrating
+	main := rehibernated(migMainPod(t, cs, "node-a", "vm-macos", true))
+	meta.LifecycleStatus{State: meta.LifecycleStateFailed, ObservedGeneration: 2, Message: "macOS guest does not support hibernate"}.Apply(main)
+	cli := relClient(t, cs, main)
+	r := &Reconciler{Client: cli, Scheme: testScheme(t), Registry: &fakeRegistry{}}
+
+	if _, err := r.Reconcile(t.Context(), reqFor(cs)); err != nil {
+		t.Fatalf("Reconcile: %v", err)
+	}
+	var got corev1.Pod
+	if err := cli.Get(t.Context(), client.ObjectKeyFromObject(main), &got); err != nil {
+		t.Fatalf("get main: %v", err)
+	}
+	if !meta.ReadHibernateState(&got) {
+		t.Fatal("the failed path must keep the migration's quiesce, or vk-cocoon lifts the failure and the migration restarts forever")
+	}
+	gotCS := mustGetCS(t, cli)
+	if gotCS.Status.Phase != cocoonv1.CocoonSetPhaseFailed {
+		t.Errorf("phase = %q, want Failed", gotCS.Status.Phase)
+	}
+	if _, owed := gotCS.Annotations[annotationHibernateReclaim]; owed {
+		t.Error("a migration's quiesce owes no unsuspend reclaim")
 	}
 }
 
@@ -1020,6 +1654,45 @@ func TestReconcileDeleteCleansTagsAfterPodsGone(t *testing.T) {
 	}
 }
 
+func TestReconcileDeleteReclaimsTheSnapshotOfAPodDeletedWhileSuspended(t *testing.T) {
+	cs := newCocoonSet("demo", func(cs *cocoonv1.CocoonSet) {
+		cs.Finalizers = []string{finalizerName}
+		cs.Generation = 3
+		cs.Spec.Suspend = true
+		cs.Spec.Agent.Replicas = 1
+	})
+	main, sub := agentPair(t, cs)
+	tags := slotNames([]int32{0, 1}, ":"+meta.HibernateSnapshotTag)
+	reg := &fakeRegistry{present: map[string]bool{tags[0]: true, tags[1]: true}}
+	cli := relClient(t, cs, lifecycleHibernated(main), lifecycleHibernated(sub))
+	r := &Reconciler{Client: cli, APIReader: cli, Scheme: testScheme(t), Registry: reg}
+
+	if _, err := r.Reconcile(t.Context(), reqFor(cs)); err != nil {
+		t.Fatalf("suspend pass: %v", err)
+	}
+	if err := cli.Delete(t.Context(), sub); err != nil {
+		t.Fatalf("delete sub-agent: %v", err)
+	}
+	if _, err := r.Reconcile(t.Context(), reqFor(cs)); err != nil {
+		t.Fatalf("suspended pass: %v", err)
+	}
+	live := mustGetCS(t, cli)
+	if len(live.Status.Agents) != 1 {
+		t.Fatalf("status agents %+v, want only the main once the sub-agent pod is gone", live.Status.Agents)
+	}
+	if err := cli.Delete(t.Context(), &live); err != nil {
+		t.Fatalf("delete set: %v", err)
+	}
+	for i := range 2 {
+		if _, err := r.Reconcile(t.Context(), reqFor(cs)); err != nil {
+			t.Fatalf("delete pass %d: %v", i+1, err)
+		}
+	}
+	if !slices.Contains(reg.deleted, tags[1]) {
+		t.Errorf("teardown must reclaim %s of the sub-agent deleted while suspended, deleted %v", tags[1], reg.deleted)
+	}
+}
+
 func TestApplyUnsuspendSkipsPodHibernatedByCR(t *testing.T) {
 	scheme := testScheme(t)
 
@@ -1175,6 +1848,56 @@ func TestEnsureToolboxesStashesRemovedToolboxVMName(t *testing.T) {
 	}
 }
 
+func drainEvents(rec *record.FakeRecorder) []string {
+	var out []string
+	for {
+		select {
+		case ev := <-rec.Events:
+			out = append(out, ev)
+		default:
+			return out
+		}
+	}
+}
+
+func agentPair(t *testing.T, cs *cocoonv1.CocoonSet) (*corev1.Pod, *corev1.Pod) {
+	t.Helper()
+	main := mustBuildAgentPod(t, cs, 0, "", "", testScheme(t))
+	main.Spec.NodeName = "node-a"
+	return main, mustBuildAgentPod(t, cs, 1, relVMName, "node-a", testScheme(t))
+}
+
+func unsuspend(t *testing.T, cli client.Client, edit func(*cocoonv1.CocoonSet)) {
+	t.Helper()
+	cs := mustGetCS(t, cli)
+	cs.Spec.Suspend = false
+	cs.Generation++
+	if edit != nil {
+		edit(&cs)
+	}
+	if err := cli.Update(t.Context(), &cs); err != nil {
+		t.Fatalf("unsuspend: %v", err)
+	}
+}
+
+func markWoken(t *testing.T, cli client.Client, name, node string, generation int64) {
+	t.Helper()
+	var pod corev1.Pod
+	if err := cli.Get(t.Context(), types.NamespacedName{Namespace: "ns", Name: name}, &pod); err != nil {
+		t.Fatalf("get %s: %v", name, err)
+	}
+	meta.LifecycleStatus{State: meta.LifecycleStateReady, ObservedGeneration: generation}.Apply(&pod)
+	meta.VMRuntime{VMID: "vm-" + name}.Apply(&pod)
+	pod.Spec.NodeName = node
+	if err := cli.Update(t.Context(), &pod); err != nil {
+		t.Fatalf("mark %s woken: %v", name, err)
+	}
+	pod.Status.ContainerStatuses = []corev1.ContainerStatus{{State: corev1.ContainerState{Running: &corev1.ContainerStateRunning{}}}}
+	if err := cli.Status().Update(t.Context(), readyPod(&pod)); err != nil {
+		t.Fatalf("mark %s ready: %v", name, err)
+	}
+}
+
 func stashedVMNames(t *testing.T, cli client.Client) []string {
 	t.Helper()
 	return parseVMNamesAnnotation(mustGetCS(t, cli).Annotations[annotationDeleteVMNames])
@@ -1208,14 +1931,20 @@ func lifecycleHibernated(p *corev1.Pod) *corev1.Pod {
 
 func reclaimOwedSet(t *testing.T, slots ...int32) *cocoonv1.CocoonSet {
 	t.Helper()
-	raw, err := json.Marshal(hibernateReclaim{Generation: 2, VMs: slotNames(slots, "")})
+	raw := encodeReclaim(t, hibernateReclaim{Generation: 2, VMs: slotNames(slots, "")})
+	return newCocoonSet("demo", func(cs *cocoonv1.CocoonSet) {
+		cs.Generation = 2
+		cs.Annotations = map[string]string{annotationHibernateReclaim: raw}
+	})
+}
+
+func encodeReclaim(t *testing.T, owed hibernateReclaim) string {
+	t.Helper()
+	raw, err := json.Marshal(owed)
 	if err != nil {
 		t.Fatalf("encode owed reclaim: %v", err)
 	}
-	return newCocoonSet("demo", func(cs *cocoonv1.CocoonSet) {
-		cs.Generation = 2
-		cs.Annotations = map[string]string{annotationHibernateReclaim: string(raw)}
-	})
+	return string(raw)
 }
 
 func readyAt(t *testing.T, slot int32, generation int64) *corev1.Pod {
@@ -1255,7 +1984,9 @@ func slotNames(slots []int32, suffix string) []string {
 
 type fakeRegistry struct {
 	present   map[string]bool
+	images    map[string]string
 	probeErr  error
+	deleteErr error
 	delay     time.Duration
 	block     map[string]chan struct{}
 	entered   chan string
@@ -1263,6 +1994,21 @@ type fakeRegistry struct {
 	probed    []string
 	deletedMu sync.Mutex
 	deleted   []string
+}
+
+func (f *fakeRegistry) GetManifest(ctx context.Context, name, tag string) ([]byte, string, error) {
+	present, err := f.HasManifest(ctx, name, tag)
+	switch {
+	case err != nil:
+		return nil, "", err
+	case !present:
+		return nil, "", fmt.Errorf("get manifest %s:%s: %w", name, tag, commonsnapshot.ErrManifestNotFound)
+	}
+	f.deletedMu.Lock()
+	image := f.images[name+":"+tag]
+	f.deletedMu.Unlock()
+	raw, err := json.Marshal(manifest.OCIManifest{Annotations: map[string]string{manifest.AnnotationSnapshotBaseImage: image}})
+	return raw, manifest.MediaTypeOCIManifest, err
 }
 
 func (f *fakeRegistry) HasManifest(_ context.Context, name, tag string) (bool, error) {
@@ -1279,12 +2025,18 @@ func (f *fakeRegistry) HasManifest(_ context.Context, name, tag string) (bool, e
 		<-ch
 	}
 	time.Sleep(f.delay)
+	f.deletedMu.Lock()
+	defer f.deletedMu.Unlock()
 	return f.present[name+":"+tag], nil
 }
 
 func (f *fakeRegistry) DeleteManifest(_ context.Context, name, tag string) error {
 	f.deletedMu.Lock()
 	defer f.deletedMu.Unlock()
+	if f.deleteErr != nil {
+		return f.deleteErr
+	}
 	f.deleted = append(f.deleted, name+":"+tag)
+	delete(f.present, name+":"+tag)
 	return nil
 }
