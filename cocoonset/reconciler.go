@@ -16,7 +16,6 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
-	"sigs.k8s.io/controller-runtime/pkg/predicate"
 
 	cocoonv1 "github.com/cocoonstack/cocoon-common/apis/v1"
 	commonk8s "github.com/cocoonstack/cocoon-common/k8s"
@@ -50,7 +49,7 @@ func (r *Reconciler) SetupWithManager(_ context.Context, mgr ctrl.Manager) error
 		return fmt.Errorf("cocoonset concurrency must be at least 1, got %d", r.Concurrency)
 	}
 	return ctrl.NewControllerManagedBy(mgr).
-		For(&cocoonv1.CocoonSet{}, builder.WithPredicates(predicate.GenerationChangedPredicate{})).
+		For(&cocoonv1.CocoonSet{}, builder.WithPredicates(setRelevantChange{})).
 		Owns(&corev1.Pod{}, builder.WithPredicates(podRelevantChange{})).
 		WithOptions(controller.Options{MaxConcurrentReconciles: r.Concurrency}).
 		Complete(r)
