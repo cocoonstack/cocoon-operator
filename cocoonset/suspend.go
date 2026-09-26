@@ -202,25 +202,19 @@ func (r *Reconciler) reclaimWokenSnapshots(ctx context.Context, cs *cocoonv1.Coc
 }
 
 func (r *Reconciler) reclaimSnapshots(ctx context.Context, cs *cocoonv1.CocoonSet, vms []string) error {
-	owed := readHibernateReclaim(cs)
-	var pending []string
+	var reclaimed []string
 	var errs []error
-	for _, vm := range owed.VMs {
-		if slices.Contains(vms, vm) {
-			err := snapshot.DeleteManifestIfPresent(ctx, r.Registry, vm, meta.HibernateSnapshotTag)
-			if err == nil {
-				continue
-			}
-			errs = append(errs, fmt.Errorf("reclaim %s:%s: %w", vm, meta.HibernateSnapshotTag, err))
+	for _, vm := range readHibernateReclaim(cs).VMs {
+		if !slices.Contains(vms, vm) {
+			continue
 		}
-		pending = append(pending, vm)
+		if err := snapshot.DeleteManifestIfPresent(ctx, r.Registry, vm, meta.HibernateSnapshotTag); err != nil {
+			errs = append(errs, fmt.Errorf("reclaim %s:%s: %w", vm, meta.HibernateSnapshotTag, err))
+			continue
+		}
+		reclaimed = append(reclaimed, vm)
 	}
-	if len(pending) < len(owed.VMs) {
-		owed.Restore = slices.DeleteFunc(owed.Restore, func(vm string) bool { return !slices.Contains(pending, vm) })
-		owed.VMs = pending
-		errs = append(errs, r.writeHibernateReclaim(ctx, cs, owed))
-	}
-	return errors.Join(errs...)
+	return errors.Join(append(errs, r.forgetReclaim(ctx, cs, reclaimed))...)
 }
 
 func (r *Reconciler) forgetReclaim(ctx context.Context, cs *cocoonv1.CocoonSet, vms []string) error {
