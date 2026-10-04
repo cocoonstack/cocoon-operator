@@ -53,7 +53,7 @@ func (r *Reconciler) reconcileDelete(ctx context.Context, cs *cocoonv1.CocoonSet
 	// :hibernate is always orphaned at teardown; :latest is kept when vk-cocoon pushed it for retag
 	for _, name := range parseVMNamesAnnotation(cs.Annotations[annotationDeleteVMNames]) {
 		if err := snapshot.DeleteManifestIfPresent(ctx, r.Registry, name, meta.HibernateSnapshotTag); err != nil {
-			logger.Errorf(ctx, err, "delete snapshot %s:%s", name, meta.HibernateSnapshotTag)
+			return ctrl.Result{}, fmt.Errorf("delete snapshot %s:%s: %w", name, meta.HibernateSnapshotTag, err)
 		}
 		if shouldKeepLatestTag(cs, name) {
 			continue
